@@ -1,8 +1,17 @@
-# Reactor Cookbook
+<div align="center">
 
-Practical, runnable examples for building with the Reactor platform — short,
-self-contained code you copy, run, and adapt, not reference documentation.
-For API references and guides, see the platform docs.
+<img src="assets/banner.png" alt="Reactor Cookbook" width="100%" />
+
+**Practical, runnable examples for building with the Reactor platform.**
+
+[🌐 Reactor](https://reactor.inc) · [🛰️ reactor-webrtc](https://github.com/reactor-team/reactor-webrtc) · [⚙️ reactor-runtime](https://github.com/reactor-team/reactor-runtime)
+
+</div>
+
+---
+
+Short, self-contained code you copy, run, and adapt — not reference
+documentation. For API references and guides, see the platform docs.
 
 ## Structure
 
