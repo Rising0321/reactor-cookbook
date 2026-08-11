@@ -1,0 +1,13 @@
+runtime:
+  import: diamond:Diamond
+  config: diamond.yaml
+
+recording:
+  enabled: true
+  chunk_seconds: 4
+  clip_max_seconds: 300
+  video_track: main_video
+  video:
+    codec: h264
+    preset: veryfast
+    crf: 23
