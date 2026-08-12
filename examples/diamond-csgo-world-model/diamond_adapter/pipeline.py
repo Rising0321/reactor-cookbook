@@ -8,110 +8,56 @@ for every world-model step.
 
 from __future__ import annotations
 
-import importlib
-import math
-import os
-import sys
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from io import BytesIO
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 
 from reactor_runtime import (
     InputField,
-    InputState,
-    MessageField,
-    ModelMessage,
-    Output,
     ReactorPipeline,
     UploadedFile,
-    Video,
     event,
+    session_ended,
+    session_started,
 )
 from reactor_runtime.log import get_logger
 
+from .support import (
+    decode_spawn_image,
+    load_adapter_dependencies,
+    load_upstream_modules,
+    read_config,
+    resolve_upstream_eval,
+    select_device,
+    to_video_frame,
+    upstream_root,
+)
+from .types import (
+    CONTROLLERS,
+    DELTA_X_MAX,
+    DELTA_X_MIN,
+    DELTA_Y_MAX,
+    DELTA_Y_MIN,
+    KEYS,
+    MOUSE_BUTTONS,
+    ActionChanged,
+    DiamondOutput,
+    DiamondState,
+    PreparedScene,
+    SceneChanged,
+)
+
 logger = get_logger(__name__)
 
-_ROOT = Path(__file__).resolve().parent
-_UPSTREAM_ENV = "DIAMOND_PATH"
-_KEYS = ["w", "a", "s", "d", "space", "ctrl", "shift", "1", "2", "3", "r"]
-_MOUSE_BUTTONS = ["left", "right"]
-_CONTROLLERS = ["human", "replay"]
-_DELTA_X_MIN = -1000.0
-_DELTA_X_MAX = 1000.0
-_DELTA_Y_MIN = -200.0
-_DELTA_Y_MAX = 200.0
-
-
-@dataclass(frozen=True)
-class _Config:
-    """Hold the adapter settings read from ``diamond.yaml``."""
-
-    repo_id: str
-    revision: str
-    device: str
-    profile: str
-    seed: int
-
-
-@dataclass(frozen=True)
-class _PreparedScene:
-    """Hold one device-ready initial condition for the next reset."""
-
-    obs: Any
-    obs_full_res: Any
-    act: Any
-    next_act: Any | None
-
-
-class DiamondOutput(Output):
-    """Carry the generated Counter-Strike frame."""
-
-    main_video: Video
-
-
-class ActionChanged(ModelMessage):
-    """Describe the latest native control input received from a client."""
-
-    controller: str = MessageField(description="Controller that produced the action.")
-    pressed_keys: list[str] = MessageField(description="Native keys held for this action.")
-    pressed_mouse_buttons: list[str] = MessageField(
-        description="Native mouse buttons held for this action."
-    )
-    delta_x: float = MessageField(description="Horizontal mouse delta received.")
-    delta_y: float = MessageField(description="Vertical mouse delta received.")
-
-
-class SceneChanged(ModelMessage):
-    """Describe the scene selected for the next world-model reset."""
-
-    source: str = MessageField(description="Scene source: upload or dataset.")
-    scene: str = MessageField(description="Uploaded filename or dataset scene identifier.")
-
-
-class DiamondState(InputState):
-    """Hold the client-controlled generation state."""
-
-    controller: str = InputField(
-        default="human",
-        choices=_CONTROLLERS,
-        description="Use client actions or replay the spawn's recorded action trajectory.",
-    )
-    paused: bool = InputField(default=False, description="Pause world-model inference.")
-    _pressed_keys: frozenset[str] = frozenset()
-    _pressed_mouse_buttons: frozenset[str] = frozenset()
-    _delta_x: float = 0.0
-    _delta_y: float = 0.0
-    _step_requested: bool = False
-    _replay_step: int = 0
+_SPAWN_IMAGE_FIELD = InputField(
+    description="Uploaded image used as DIAMOND's repeated conditioning frame."
+)
 
 
 class Diamond(ReactorPipeline):
-    """Run DIAMOND CSGO inference from Reactor's interactive state."""
+    """Run one session-wide DIAMOND CSGO world from Reactor commands."""
 
     state: DiamondState
     output: DiamondOutput
@@ -125,12 +71,17 @@ class Diamond(ReactorPipeline):
         self._encode_action: Callable[..., Any] | None = None
         self._key_codes: dict[str, int] = {}
         self._spawn_dirs: tuple[Path, ...] = ()
-        self._rng = np.random.default_rng()
+        self._seed = 0
+        self._rng = np.random.default_rng(self._seed)
         self._sequence_length = 0
         self._full_resolution = (150, 280)
         self._low_resolution = (30, 56)
-        self._pending_scene: _PreparedScene | None = None
+        self._pending_scene: PreparedScene | None = None
+        self._initial_observation: Any | None = None
         self._reset_requested = True
+        self._controller = "human"
+        self._paused = False
+        self._replay_step = 0
 
     def load(self, config_path: Path | None) -> None:
         """Load the upstream DIAMOND model and its CSGO spawn states.
@@ -138,25 +89,25 @@ class Diamond(ReactorPipeline):
         Args:
             config_path: Path to the adapter YAML named by ``reactor.yaml``.
         """
-        config = _read_config(config_path)
-        dependencies = _load_adapter_dependencies()
+        config = read_config(config_path)
+        dependencies = load_adapter_dependencies()
         torch = dependencies["torch"]
         snapshot_download = dependencies["snapshot_download"]
         compose = dependencies["compose"]
         initialize_config_dir = dependencies["initialize_config_dir"]
         instantiate = dependencies["instantiate"]
         omega_conf = dependencies["omega_conf"]
-        upstream_root = _upstream_root()
-        modules = _load_upstream_modules(upstream_root)
+        upstream = upstream_root()
+        modules = load_upstream_modules(upstream)
         agent_type = modules["agent"].Agent
         world_type = modules["world"].WorldModelEnv
         action_module = modules["action"]
         pygame = modules["pygame"]
 
-        omega_conf.register_new_resolver("eval", _resolve_upstream_eval, replace=True)
+        omega_conf.register_new_resolver("eval", resolve_upstream_eval, replace=True)
         with initialize_config_dir(
             version_base="1.3",
-            config_dir=str(upstream_root / "config"),
+            config_dir=str(upstream / "config"),
         ):
             cfg = compose(
                 config_name="trainer",
@@ -173,7 +124,7 @@ class Diamond(ReactorPipeline):
         cfg.agent = omega_conf.load(snapshot / "csgo/config/agent/csgo.yaml")
         cfg.env = omega_conf.load(snapshot / "csgo/config/env/csgo.yaml")
 
-        device = _select_device(config.device, torch)
+        device = select_device(config.device, torch)
         torch.manual_seed(config.seed)
         self._agent = agent_type(instantiate(cfg.agent, num_actions=cfg.env.num_actions))
         self._agent = self._agent.to(device).eval()
@@ -202,7 +153,8 @@ class Diamond(ReactorPipeline):
         self._encode_action = action_module.encode_csgo_action
         self._torch = torch
         self._spawn_dirs = tuple(sorted(path for path in spawn_root.iterdir() if path.is_dir()))
-        self._rng = np.random.default_rng(config.seed)
+        self._seed = config.seed
+        self._rng = np.random.default_rng(self._seed)
         self._sequence_length = int(sequence_length)
         height, width = (int(value) for value in cfg.env.train.size)
         self._full_resolution = (height, width)
@@ -228,16 +180,43 @@ class Diamond(ReactorPipeline):
             revision=config.revision,
         )
 
-    @event(name="reset", description="Reset the world model to another CSGO spawn state.")
+    @session_started
+    def _start_session(self) -> None:
+        """Initialize the world shared by every client in a new session."""
+        self._pending_scene = None
+        self._initial_observation = None
+        self._controller = "human"
+        self._paused = False
+        self._replay_step = 0
+        self._rng = np.random.default_rng(self._seed)
+        self._reset_requested = True
+        self._reset_world()
+
+    @session_ended
+    def _end_session(self) -> None:
+        """Release session state while retaining loaded model resources."""
+        self._pending_scene = None
+        self._initial_observation = None
+        self._reset_requested = False
+        self._controller = "human"
+        self._paused = False
+        self._replay_step = 0
+        self._clear_controls()
+
+    @event(
+        name="reset",
+        description="Queue a fresh dataset spawn and release all human controls.",
+    )
     def reset(self) -> ActionChanged:
         """Request a reset and return the released native input state."""
         self._pending_scene = None
-        self._reset_requested = True
-        self._clear_controls()
-        self.state._step_requested = False
+        self._queue_scene_reset()
         return self._action_changed()
 
-    @event(name="random_scene", description="Start from a random DIAMOND dataset scene.")
+    @event(
+        name="random_scene",
+        description="Queue a random dataset scene for the next reset boundary.",
+    )
     def random_scene(self) -> SceneChanged:
         """Queue a random official spawn and return its identifier."""
         if not self._spawn_dirs:
@@ -249,9 +228,17 @@ class Diamond(ReactorPipeline):
         logger.info("dataset scene selected", scene=scene_dir.name)
         return SceneChanged(source="dataset", scene=scene_dir.name)
 
-    @event(name="set_spawn_image", description="Start from an uploaded CSGO image.")
-    def set_spawn_image(self, image: UploadedFile) -> SceneChanged:
-        """Queue an uploaded image as a four-frame neutral initial condition.
+    @event(
+        name="set_spawn_image",
+        description=(
+            "Queue an uploaded CSGO frame, switch to human control, and release controls."
+        ),
+    )
+    def set_spawn_image(
+        self,
+        image: UploadedFile = _SPAWN_IMAGE_FIELD,
+    ) -> SceneChanged:
+        """Queue an uploaded image as a repeated neutral initial condition.
 
         Args:
             image: Uploaded CSGO image fetched by Reactor Runtime.
@@ -261,59 +248,81 @@ class Diamond(ReactorPipeline):
         """
         if not image.mime_type.startswith("image/"):
             raise ValueError(f"expected an image upload, got {image.mime_type!r}")
-        full_res, low_res = _decode_spawn_image(
+        full_res, low_res = decode_spawn_image(
             image.data,
             full_resolution=self._full_resolution,
             low_resolution=self._low_resolution,
         )
         self._pending_scene = self._prepare_uploaded_scene(full_res, low_res)
-        self.state.controller = "human"
+        self._controller = "human"
+        self.state.controller = self._controller
         self._queue_scene_reset()
         logger.info("uploaded scene selected", name=image.name, size=len(image.data))
         return SceneChanged(source="upload", scene=image.name)
 
-    @event(name="set_controller", description="Choose client control or recorded action replay.")
+    @event(
+        name="set_controller",
+        description="Select human input or replay and restart from a compatible spawn.",
+    )
     def set_controller(
         self,
-        controller: str = InputField(default="human", choices=_CONTROLLERS),
+        controller: str = InputField(
+            default="human",
+            choices=CONTROLLERS,
+            description="Action source: human commands or the spawn's recorded replay.",
+        ),
     ) -> ActionChanged:
         """Switch controller and return the resulting native input state."""
-        if self.state.controller != controller:
+        if self._controller != controller:
             if (
                 controller == "replay"
                 and self._pending_scene is not None
                 and self._pending_scene.next_act is None
             ):
                 self._pending_scene = None
+            self._controller = controller
             self.state.controller = controller
             self.state._step_requested = False
             self._reset_requested = True
             self._clear_controls()
         return self._action_changed()
 
-    @event(name="set_paused", description="Pause or resume world-model inference.")
+    @event(
+        name="set_paused",
+        description="Pause or resume expensive model steps and release human controls.",
+    )
     def set_paused(
         self,
-        paused: bool = InputField(default=False, description="Pause world-model inference."),
+        paused: bool = InputField(
+            default=False,
+            description="True to stop model steps; false to resume continuous inference.",
+        ),
     ) -> ActionChanged:
         """Pause or resume and return the released native input state."""
+        self._paused = paused
         self.state.paused = paused
         self.state._step_requested = False
         self._clear_controls()
         return self._action_changed()
 
-    @event(name="step", description="Run one world-model step while paused.")
+    @event(
+        name="step",
+        description="Request exactly one model step while the shared world is paused.",
+    )
     def step(self) -> None:
         """Request one inference step without leaving paused mode."""
-        if self.state is not None and self.state.paused:
+        if self.state is not None and self._paused:
             self.state._step_requested = True
 
-    @event(name="set_key_state", description="Press or release a native CSGO input key.")
+    @event(
+        name="set_key_state",
+        description="Hold or release a native key for human control; replay ignores it.",
+    )
     def set_key_state(
         self,
         key: str = InputField(
             default="w",
-            choices=_KEYS,
+            choices=KEYS,
             description="Native DIAMOND key name.",
         ),
         pressed: bool = InputField(
@@ -322,7 +331,7 @@ class Diamond(ReactorPipeline):
         ),
     ) -> ActionChanged:
         """Update one held keyboard key and return the resulting input state."""
-        if self.state.controller == "human":
+        if self._controller == "human":
             if pressed:
                 self.state._pressed_keys = self.state._pressed_keys.union((key,))
             else:
@@ -331,13 +340,13 @@ class Diamond(ReactorPipeline):
 
     @event(
         name="set_mouse_button_state",
-        description="Press or release a native CSGO mouse button.",
+        description="Hold or release a native mouse button; replay ignores it.",
     )
     def set_mouse_button_state(
         self,
         button: str = InputField(
             default="left",
-            choices=_MOUSE_BUTTONS,
+            choices=MOUSE_BUTTONS,
             description="Native mouse button: left fires and right scopes.",
         ),
         pressed: bool = InputField(
@@ -346,7 +355,7 @@ class Diamond(ReactorPipeline):
         ),
     ) -> ActionChanged:
         """Update one held mouse button and return the resulting input state."""
-        if self.state.controller == "human":
+        if self._controller == "human":
             if pressed:
                 self.state._pressed_mouse_buttons = self.state._pressed_mouse_buttons.union(
                     (button,)
@@ -357,44 +366,50 @@ class Diamond(ReactorPipeline):
                 )
         return self._action_changed()
 
-    @event(name="mouse_move", description="Apply raw mouse movement to the next model step.")
+    @event(
+        name="mouse_move",
+        description="Set relative mouse movement for the next human step; replay ignores it.",
+    )
     def mouse_move(
         self,
         delta_x: float = InputField(
             default=0.0,
-            ge=_DELTA_X_MIN,
-            le=_DELTA_X_MAX,
+            ge=DELTA_X_MIN,
+            le=DELTA_X_MAX,
             description="Horizontal mouse delta in DIAMOND's native range.",
         ),
         delta_y: float = InputField(
             default=0.0,
-            ge=_DELTA_Y_MIN,
-            le=_DELTA_Y_MAX,
+            ge=DELTA_Y_MIN,
+            le=DELTA_Y_MAX,
             description="Vertical mouse delta in DIAMOND's native range.",
         ),
     ) -> ActionChanged:
         """Store one raw mouse delta and return the resulting input state."""
-        if self.state.controller == "human":
+        if self._controller == "human":
             self.state._delta_x = delta_x
             self.state._delta_y = delta_y
             return self._action_changed(delta_x=delta_x, delta_y=delta_y)
         return self._action_changed()
 
-    def inference(self) -> Iterator[DiamondOutput | None]:
+    def inference(self) -> Generator[DiamondOutput | None, None, None]:
         """Generate CSGO frames while applying the latest client controls."""
         if self._world is None or self._agent is None or self._encode_action is None:
             raise RuntimeError("DIAMOND model was not loaded")
 
-        self._reset_requested = True
-        self._clear_controls()
+        self.state.controller = self._controller
+        self.state.paused = self._paused
         while True:
             if self._reset_requested:
-                self._world.reset()
-                self._apply_pending_scene()
-                self.state._replay_step = 0
-                self._reset_requested = False
+                self._reset_world()
 
-            if self.state.paused and not self.state._step_requested:
+            if self._initial_observation is not None:
+                observation = self._initial_observation
+                self._initial_observation = None
+                yield DiamondOutput(main_video=to_video_frame(observation))
+                continue
+
+            if self._paused and not self.state._step_requested:
                 yield None
                 continue
             self.state._step_requested = False
@@ -404,14 +419,33 @@ class Diamond(ReactorPipeline):
             if bool(ended.item()) or bool(truncated.item()) or self._replay_trajectory_finished():
                 self._reset_requested = True
                 self._clear_controls()
-            yield DiamondOutput(main_video=_to_video_frame(observation))
+            yield DiamondOutput(main_video=to_video_frame(observation))
+
+    def _reset_world(self) -> None:
+        """Reset the shared world and retain its initial frame for emission."""
+        if self._world is None:
+            raise RuntimeError("DIAMOND model was not loaded")
+        observation, _info = self._world.reset()
+        if self._apply_pending_scene():
+            observation = self._current_observation()
+        self._initial_observation = observation
+        self._replay_step = 0
+        self._reset_requested = False
+        self._clear_controls()
+
+    def _current_observation(self) -> Any:
+        """Return the latest full-resolution observation in the shared world."""
+        buffer = self._world.obs_full_res_buffer
+        if buffer is None:
+            buffer = self._world.obs_buffer
+        return buffer[:, -1]
 
     def _prepare_uploaded_scene(
         self,
         full_res: np.ndarray,
         low_res: np.ndarray,
-    ) -> _PreparedScene:
-        """Build a device-ready four-frame condition from one uploaded image."""
+    ) -> PreparedScene:
+        """Build a device-ready repeated condition from one uploaded image."""
         if self._encode_action is None or self._agent is None:
             raise RuntimeError("DIAMOND model was not loaded")
         full_frames = np.repeat(full_res[None], self._sequence_length, axis=0)
@@ -421,19 +455,19 @@ class Diamond(ReactorPipeline):
             device=self._agent.device,
         )
         actions = neutral.reshape(1, 1, -1).repeat(1, self._sequence_length, 1)
-        return _PreparedScene(
+        return PreparedScene(
             obs=self._observation_tensor(low_frames),
             obs_full_res=self._observation_tensor(full_frames),
             act=actions,
             next_act=None,
         )
 
-    def _prepare_dataset_scene(self, scene_dir: Path) -> _PreparedScene:
+    def _prepare_dataset_scene(self, scene_dir: Path) -> PreparedScene:
         """Load one official spawn with its full recorded action trajectory."""
         if self._torch is None or self._agent is None:
             raise RuntimeError("DIAMOND model was not loaded")
         device = self._agent.device
-        return _PreparedScene(
+        return PreparedScene(
             obs=self._observation_tensor(np.load(scene_dir / "low_res.npy")),
             obs_full_res=self._observation_tensor(np.load(scene_dir / "full_res.npy")),
             act=self._torch.tensor(
@@ -464,35 +498,35 @@ class Diamond(ReactorPipeline):
         """Reset controls and request application of the queued scene."""
         self._reset_requested = True
         self.state._step_requested = False
-        self.state._replay_step = 0
+        self._replay_step = 0
         self._clear_controls()
 
-    def _apply_pending_scene(self) -> None:
-        """Replace the freshly reset upstream buffers with one queued scene."""
+    def _apply_pending_scene(self) -> bool:
+        """Replace freshly reset buffers with a queued scene when present."""
         scene = self._pending_scene
         if scene is None:
-            return
+            return False
         self._world.obs_buffer = scene.obs
         self._world.obs_full_res_buffer = scene.obs_full_res
         self._world.act_buffer = scene.act
         if scene.next_act is not None:
             self._world.next_act = scene.next_act
         self._pending_scene = None
+        return True
 
     def _next_action(self) -> Any:
-        """Return the next client action or recorded replay action."""
-        if self.state.controller == "replay":
+        """Return the next human or recorded replay action."""
+        if self._controller == "replay":
             self._clear_controls()
-            replay_step = self.state._replay_step
-            if replay_step == 0:
+            if self._replay_step == 0:
                 action = self._world.act_buffer[0, -1].clone()
             else:
-                action = self._world.next_act[replay_step - 1].clone()
-            self.state._replay_step += 1
+                action = self._world.next_act[self._replay_step - 1].clone()
+            self._replay_step += 1
             return action
 
         assert self._encode_action is not None
-        keys = [self._key_codes[key] for key in _KEYS if key in self.state._pressed_keys]
+        keys = [self._key_codes[key] for key in KEYS if key in self.state._pressed_keys]
         delta_x = self.state._delta_x
         delta_y = self.state._delta_y
         self.state._delta_x = 0.0
@@ -509,10 +543,10 @@ class Diamond(ReactorPipeline):
     def _action_changed(self, *, delta_x: float = 0.0, delta_y: float = 0.0) -> ActionChanged:
         """Describe the current native input state for an event response."""
         return ActionChanged(
-            controller=self.state.controller,
-            pressed_keys=[key for key in _KEYS if key in self.state._pressed_keys],
+            controller=self._controller,
+            pressed_keys=[key for key in KEYS if key in self.state._pressed_keys],
             pressed_mouse_buttons=[
-                button for button in _MOUSE_BUTTONS if button in self.state._pressed_mouse_buttons
+                button for button in MOUSE_BUTTONS if button in self.state._pressed_mouse_buttons
             ],
             delta_x=delta_x,
             delta_y=delta_y,
@@ -520,7 +554,7 @@ class Diamond(ReactorPipeline):
 
     def _replay_trajectory_finished(self) -> bool:
         """Return whether the recorded spawn actions were all consumed."""
-        return self.state.controller == "replay" and self.state._replay_step > int(
+        return self._controller == "replay" and self._replay_step > int(
             self._world.next_act.size(0)
         )
 
@@ -532,152 +566,3 @@ class Diamond(ReactorPipeline):
         self.state._pressed_mouse_buttons = frozenset()
         self.state._delta_x = 0.0
         self.state._delta_y = 0.0
-
-
-def _decode_spawn_image(
-    data: bytes,
-    *,
-    full_resolution: tuple[int, int],
-    low_resolution: tuple[int, int],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Decode and center-crop one upload into DIAMOND's CHW frame sizes.
-
-    Args:
-        data: Encoded image bytes.
-        full_resolution: Target ``(height, width)`` for the upsampler.
-        low_resolution: Target ``(height, width)`` for the world model.
-
-    Returns:
-        Full-resolution and low-resolution contiguous uint8 RGB arrays.
-
-    Raises:
-        ValueError: If Pillow cannot decode the upload.
-    """
-    image_module = importlib.import_module("PIL.Image")
-    image_ops = importlib.import_module("PIL.ImageOps")
-    full_height, full_width = full_resolution
-    low_height, low_width = low_resolution
-    try:
-        with image_module.open(BytesIO(data)) as uploaded:
-            rgb = image_ops.exif_transpose(uploaded).convert("RGB")
-            fitted = image_ops.fit(
-                rgb,
-                (full_width, full_height),
-                method=image_module.Resampling.LANCZOS,
-            )
-            low = fitted.resize(
-                (low_width, low_height),
-                resample=image_module.Resampling.LANCZOS,
-            )
-            full_array = np.asarray(fitted, dtype=np.uint8).transpose(2, 0, 1)
-            low_array = np.asarray(low, dtype=np.uint8).transpose(2, 0, 1)
-    except (OSError, ValueError) as error:
-        raise ValueError("could not decode uploaded spawn image") from error
-    return np.ascontiguousarray(full_array), np.ascontiguousarray(low_array)
-
-
-def _read_config(config_path: Path | None) -> _Config:
-    """Read and validate the adapter's model configuration."""
-    if config_path is None:
-        raise ValueError("DIAMOND requires runtime.config in reactor.yaml")
-    document = yaml.safe_load(config_path.read_text())
-    if not isinstance(document, dict):
-        raise ValueError(f"{config_path}: expected a YAML mapping")
-
-    profile = str(document.get("profile", "fast"))
-    if profile not in {"fast", "higher_quality"}:
-        raise ValueError("profile must be 'fast' or 'higher_quality'")
-    device = str(document.get("device", "auto"))
-    if device not in {"auto", "cpu", "mps", "cuda"}:
-        raise ValueError("device must be auto, cpu, mps, or cuda")
-    return _Config(
-        repo_id=str(document.get("repo_id", "eloialonso/diamond")),
-        revision=str(document["revision"]),
-        device=device,
-        profile=profile,
-        seed=int(document.get("seed", 0)),
-    )
-
-
-def _upstream_root() -> Path:
-    """Return the external DIAMOND checkout configured for this process.
-
-    Raises:
-        RuntimeError: If ``DIAMOND_PATH`` is unset or does not identify a CSGO checkout.
-    """
-    configured = os.environ.get(_UPSTREAM_ENV)
-    if not configured:
-        raise RuntimeError(
-            f"Set {_UPSTREAM_ENV} to the DIAMOND repository checkout before starting Reactor"
-        )
-
-    root = Path(configured).expanduser().resolve()
-    required = (
-        root / "config/trainer.yaml",
-        root / "src/agent.py",
-        root / "src/csgo/action_processing.py",
-    )
-    missing = [str(path.relative_to(root)) for path in required if not path.is_file()]
-    if missing:
-        joined = ", ".join(missing)
-        raise RuntimeError(
-            f"{_UPSTREAM_ENV}={root} is not a DIAMOND CSGO checkout; missing: {joined}"
-        )
-    return root
-
-
-def _load_upstream_modules(upstream_root: Path) -> dict[str, Any]:
-    """Import DIAMOND from an external, unmodified ``src`` tree."""
-    source = str(upstream_root / "src")
-    if source not in sys.path:
-        sys.path.insert(0, source)
-    return {
-        "agent": importlib.import_module("agent"),
-        "world": importlib.import_module("envs"),
-        "action": importlib.import_module("csgo.action_processing"),
-        "pygame": importlib.import_module("pygame"),
-    }
-
-
-def _load_adapter_dependencies() -> dict[str, Any]:
-    """Import DIAMOND's optional runtime dependencies only when loading weights."""
-    hydra = importlib.import_module("hydra")
-    return {
-        "torch": importlib.import_module("torch"),
-        "snapshot_download": importlib.import_module("huggingface_hub").snapshot_download,
-        "compose": hydra.compose,
-        "initialize_config_dir": hydra.initialize_config_dir,
-        "instantiate": importlib.import_module("hydra.utils").instantiate,
-        "omega_conf": importlib.import_module("omegaconf").OmegaConf,
-    }
-
-
-def _select_device(requested: str, torch_module: Any) -> Any:
-    """Return the requested accelerator, preferring MPS on Apple Silicon."""
-    if requested == "auto":
-        if torch_module.cuda.is_available():
-            requested = "cuda"
-        elif torch_module.backends.mps.is_available():
-            requested = "mps"
-        else:
-            requested = "cpu"
-    if requested == "cuda" and not torch_module.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is unavailable")
-    if requested == "mps" and not torch_module.backends.mps.is_available():
-        raise RuntimeError("MPS was requested but is unavailable")
-    return torch_module.device(requested)
-
-
-def _resolve_upstream_eval(expression: str) -> float:
-    """Resolve the one trusted expression used by DIAMOND's sampler config."""
-    if expression != 'float("inf")':
-        raise ValueError(f"unsupported DIAMOND config expression: {expression!r}")
-    return math.inf
-
-
-def _to_video_frame(observation: Any) -> np.ndarray:
-    """Convert one DIAMOND NCHW observation into contiguous uint8 RGB."""
-    frame = (
-        observation[0].detach().clamp(-1, 1).add(1).mul(127.5).byte().permute(1, 2, 0).cpu().numpy()
-    )
-    return np.ascontiguousarray(frame)

@@ -1,5 +1,5 @@
 runtime:
-  import: diamond:Diamond
+  import: diamond_adapter:Diamond
   config: diamond.yaml
 
 recording:
