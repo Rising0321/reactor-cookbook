@@ -1,4 +1,4 @@
-# AlayaWorld example
+# Play AlayaWorld through Reactor Runtime
 
 Serve the public AlayaWorld distilled autoregressive world model through
 Reactor Runtime. The adapter calls AlayaWorld's `FlashAlayaPipeline` directly;
@@ -15,70 +15,62 @@ image with `set_image`, or invoke `random_image` to select one of the public
 AlayaWorld examples. Either command initializes the autoregressive cache and
 starts generation.
 
+The adapter and upstream implementation remain separate. This directory owns
+only the Reactor integration; `source.path` in `alayaworld.yaml` points to an
+unmodified AlayaWorld checkout.
+
 ## Prerequisites
 
-Use Python 3.12, `uv`, Git, and an NVIDIA GPU supported by the CUDA 12.8 PyTorch
-wheels. Accept the gated Gemma license on Hugging Face before the first run.
-`ffmpeg` is optional unless recording is needed.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git.
+- An NVIDIA GPU supported by the CUDA 12.8 PyTorch wheels.
+- Access to the gated Gemma text encoder on Hugging Face.
+- `ffmpeg` when recording is needed.
+
+## Clone AlayaWorld
+
+From the cookbook repository, enter this example directory and clone the
+upstream source at the revision tested by the adapter:
+
+```sh
+cd examples/alayaworld
+git clone https://github.com/AlayaLab/AlayaWorld.git
+git -C AlayaWorld checkout 1abbe2e196603ef9f8eeedfddd427b4d37d57bc1
+```
+
+The default `source.path: AlayaWorld` now resolves to that checkout. To keep it
+elsewhere, change only `source.path` in `alayaworld.yaml`; checkpoints, the
+inference configuration, and playground inputs are all resolved from that root.
 
 ## Install
 
-The model has a large CUDA dependency set, so run it from an example-local
-environment:
+Create an isolated environment from the example directory:
 
 ```sh
-uv venv --python 3.12 examples/alayaworld/.venv
+uv venv --python 3.12
+source .venv/bin/activate
 
-uv pip install --python examples/alayaworld/.venv/bin/python \
-  torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
+uv pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
   --index-url https://download.pytorch.org/whl/cu128 \
   --extra-index-url https://pypi.org/simple
 
-uv pip install --python examples/alayaworld/.venv/bin/python \
-  -r examples/alayaworld/requirements.txt
+uv pip install -r requirements.txt
+hf auth login
 ```
 
-The example targets NVIDIA Blackwell GPUs. PyTorch 2.7 introduced Blackwell
-support through CUDA 12.8 wheels; this example uses a mutually compatible
-PyTorch 2.9.1 stack. The adapter's NumPy 2 requirement follows Reactor Runtime,
-while AlayaWorld's inference code remains unchanged.
+Accept the Gemma license on Hugging Face before running `hf auth login`. The
+example uses a PyTorch 2.9.1 CUDA 12.8 stack validated on NVIDIA Blackwell. The
+adapter's NumPy 2 requirement follows Reactor Runtime, while AlayaWorld's
+inference code remains unchanged.
 
 The model YAML selects AlayaWorld's existing PyTorch attention callable. Stable
 xFormers wheels do not provide SM100 kernels for B200, so xFormers is not part
 of this environment.
 
-## Prepare the public source and assets
-
-Runtime prepares missing public resources during model loading. The first start
-clones the pinned AlayaWorld and Depth-Anything-3 revisions, downloads the
-merged checkpoint and text encoder, and populates the pinned DA3 model cache.
-Later starts reuse those local resources. The playground cases used by
-`random_image` are tracked by AlayaWorld and arrive with its source checkout;
-there is no separate sample dataset to download.
-
-`source.path` is the single root for the checkout. Every other relative path in
-`alayaworld.yaml`, including checkpoints, the inference configuration, and
-playground image templates, resolves from that root. To keep the checkout
-elsewhere, set only this field; absolute paths remain available for individual
-asset overrides:
-
-```yaml
-source:
-  path: /absolute/path/to/AlayaWorld
-```
-
-Gemma is gated. Accept its license on Hugging Face and authenticate once before
-the first start:
-
-```sh
-hf auth login
-```
-
-Model loading reports download progress in the server log. A download failure
-keeps the Runtime health state unavailable and names the affected public
-repository; gated-repository failures also point to `hf auth login`. Existing
-source checkouts must match the configured revision, so startup never changes a
-developer's checkout implicitly.
+On the first start, the adapter downloads the pinned merged checkpoint and
+Gemma text encoder, clones the pinned Depth-Anything-3 source, and populates its
+model cache. Later starts reuse those local resources. Model loading reports
+download progress in the server log, and failures name the affected public
+repository.
 
 The adapter points DA3 directly at the pinned checkout's `src` directory. Its
 full application package is not installed because that optional dependency set
@@ -91,21 +83,19 @@ example does not redistribute any source or checkpoint.
 
 ## Run
 
-Select one GPU and start Runtime from the adapter directory:
+Select one GPU and start Runtime from the example directory:
 
 ```sh
-cd examples/alayaworld
 CUDA_VISIBLE_DEVICES=0 PYTORCH_ALLOC_CONF=expandable_segments:True \
-  .venv/bin/python -m reactor_runtime.serve
+  python -m reactor_runtime.serve
 ```
 
-The service listens on `0.0.0.0:8080`. Check it with:
+The backend listens on `0.0.0.0:8080`. Open the
+[Reactor Sandbox](https://reactor-sandbox.vercel.app), enter
+`http://localhost:8080`, and start a session. You can also check it directly:
 
 ```sh
-curl -s localhost:8080/health
-curl -s localhost:8080/schema
-curl -s -X POST localhost:8080/start_session \
-  -H 'content-type: application/json' -d '{}'
+curl http://localhost:8080/health
 ```
 
 ## Controls
