@@ -1,0 +1,36 @@
+# Public Runtime API version validated by this example.
+reactor-runtime==3.1.2
+
+# B200-compatible replacement for AlayaWorld's upstream PyTorch 2.6/cu124
+# stack. Install these three packages from the cu128 index before installing the
+# rest of this file; the README gives the exact commands.
+torch==2.9.1
+torchvision==0.24.1
+torchaudio==2.9.1
+
+# Reactor Runtime requires NumPy 2.x. AlayaWorld's inference path and the pinned
+# DA3 checkout are validated against this shared version by this example.
+numpy>=2.1,<3
+scipy>=1.14
+safetensors>=0.4
+einops>=0.7
+diffusers==0.39.0
+transformers==5.13.1
+peft>=0.17
+bitsandbytes>=0.45
+opencv-python-headless>=4.10
+pillow>=10.1
+pyyaml>=6.0.3
+tqdm
+easydict
+huggingface-hub
+
+# Minimal Depth-Anything-3 inference imports. AlayaWorld adds local stubs for
+# DA3's optional export-only packages, so its full application dependency set
+# (including the upstream numpy<2 pin) is intentionally not installed.
+addict
+imageio
+matplotlib
+moviepy==1.0.3
+omegaconf
+plyfile
