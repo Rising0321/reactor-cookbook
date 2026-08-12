@@ -1,0 +1,25 @@
+source:
+  path: ../Matrix-Game-3.5
+  revision: fa6d2b628ac9b0f1657dc24689536d74bfeb51da
+
+assets:
+  checkpoint:
+    repo_id: RiemannDynamics/Matrix-Game-3.5-Distilled
+    revision: 0b38ca0b0dda2bb994c570e183ad36d1acd53be2
+  wan:
+    repo_id: Wan-AI/Wan2.2-TI2V-5B
+    revision: 921dbaf3f1674a56f47e83fb80a34bac8a8f203e
+  depth:
+    repo_id: depth-anything/DA3NESTED-GIANT-LARGE-1.1
+    revision: b2359bdf726fb44ef62acca04d629dcf158053e7
+
+inference:
+  seed: 3407
+
+stream:
+  # 512 chunks provide 6.4 minutes at 16 FPS while bounding camera metadata.
+  max_chunks: 512
+
+motion:
+  translation_meters_per_second: 1.5
+  rotation_degrees_per_second: 45.0

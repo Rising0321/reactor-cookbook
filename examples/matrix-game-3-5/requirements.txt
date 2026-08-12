@@ -1,0 +1,4 @@
+# Public Runtime API version validated by this example. Matrix model packages
+# live in the checkout-local Python 3.10 worker environment documented in the
+# README, keeping this serving environment small and independent.
+reactor-runtime==3.1.2
