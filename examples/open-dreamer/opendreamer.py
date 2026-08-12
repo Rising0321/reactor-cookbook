@@ -154,7 +154,7 @@ class OpenDreamer(ReactorPipeline):
         bundle_type = dependencies["bundle_type"]
         build_parallel = dependencies["build_parallel"]
 
-        checkpoint_cache = get_weights_path() / "huggingface"
+        checkpoint_cache = get_weights_path() / "open-dreamer" / "huggingface"
         checkpoint_cache.mkdir(parents=True, exist_ok=True)
         checkpoint_path = snapshot_download(
             repo_id=config.checkpoint_repo_id,
