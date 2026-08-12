@@ -6,8 +6,11 @@ import importlib
 import math
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import numpy as np
@@ -16,6 +19,22 @@ import yaml
 from .types import AdapterConfig
 
 UPSTREAM_ENV = "DIAMOND_PATH"
+_INFERENCE_IMPORT_STUBS = ("ale_py", "wandb")
+
+
+@contextmanager
+def _inference_import_scope() -> Iterator[None]:
+    """Provide placeholders for upstream dependencies unused during inference."""
+    inserted: list[str] = []
+    for module_name in _INFERENCE_IMPORT_STUBS:
+        if module_name not in sys.modules:
+            sys.modules[module_name] = ModuleType(module_name)
+            inserted.append(module_name)
+    try:
+        yield
+    finally:
+        for module_name in inserted:
+            sys.modules.pop(module_name, None)
 
 
 def decode_spawn_image(
@@ -135,12 +154,13 @@ def load_upstream_modules(upstream_root: Path) -> dict[str, Any]:
     source = str(upstream_root / "src")
     if source not in sys.path:
         sys.path.insert(0, source)
-    return {
-        "agent": importlib.import_module("agent"),
-        "world": importlib.import_module("envs"),
-        "action": importlib.import_module("csgo.action_processing"),
-        "pygame": importlib.import_module("pygame"),
-    }
+    with _inference_import_scope():
+        return {
+            "agent": importlib.import_module("agent"),
+            "world": importlib.import_module("envs"),
+            "action": importlib.import_module("csgo.action_processing"),
+            "pygame": importlib.import_module("pygame"),
+        }
 
 
 def load_adapter_dependencies() -> dict[str, Any]:

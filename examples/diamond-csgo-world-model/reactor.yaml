@@ -1,6 +1,18 @@
+apiVersion: v1beta
+kind: VideoModel
+
+model:
+  name: diamond-csgo-world-model
+  version: v0.0.1
+  description: |
+    Play DIAMOND's Counter-Strike world model with native keyboard and mouse input.
+
 runtime:
   import: diamond_adapter:Diamond
   config: diamond.yaml
+
+build:
+  runtime_version: "3.1.2"
 
 recording:
   enabled: true

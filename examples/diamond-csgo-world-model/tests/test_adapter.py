@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-
 from reactor_runtime.interface.model.contract import ModelContract
 from reactor_runtime.manifest import load_config
 
@@ -20,6 +19,7 @@ sys.path.insert(0, str(EXAMPLE_DIR))
 
 adapter = importlib.import_module("diamond_adapter")
 pipeline_module = importlib.import_module("diamond_adapter.pipeline")
+support_module = importlib.import_module("diamond_adapter.support")
 types_module = importlib.import_module("diamond_adapter.types")
 Diamond = adapter.Diamond
 DiamondOutput = types_module.DiamondOutput
@@ -196,3 +196,27 @@ def test_manifest_and_runtime_pin_match_the_package_entrypoint() -> None:
 
     assert config.model_ref == "diamond_adapter:Diamond"
     assert "reactor-runtime==3.1.2" in (EXAMPLE_DIR / "requirements.txt").read_text()
+
+
+def test_model_download_uses_the_runtime_weights_mount(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Persist Hugging Face assets under Reactor's mounted weights root."""
+    monkeypatch.setenv("REACTOR_WEIGHTS_PATH", str(tmp_path))
+
+    assert pipeline_module.get_weights_path() / "huggingface" == tmp_path / "huggingface"
+
+
+def test_inference_import_scope_stubs_training_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid serving-only conflicts from DIAMOND's eager training imports."""
+    names = support_module._INFERENCE_IMPORT_STUBS
+    for name in names:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    with support_module._inference_import_scope():
+        assert all(sys.modules[name].__name__ == name for name in names)
+
+    assert all(name not in sys.modules for name in names)

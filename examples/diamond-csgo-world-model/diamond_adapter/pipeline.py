@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from reactor_runtime import (
     InputField,
     ReactorPipeline,
     UploadedFile,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
@@ -60,7 +60,6 @@ class Diamond(ReactorPipeline):
     """Run one session-wide DIAMOND CSGO world from Reactor commands."""
 
     state: DiamondState
-    output: DiamondOutput
 
     def __init__(self) -> None:
         super().__init__()
@@ -119,6 +118,7 @@ class Diamond(ReactorPipeline):
                 repo_id=config.repo_id,
                 revision=config.revision,
                 allow_patterns="csgo/*",
+                cache_dir=get_weights_path() / "huggingface",
             )
         )
         cfg.agent = omega_conf.load(snapshot / "csgo/config/agent/csgo.yaml")

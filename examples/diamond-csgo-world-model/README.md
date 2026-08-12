@@ -6,49 +6,65 @@ from an official spawn or an uploaded CSGO frame, apply native keyboard and
 mouse actions, stream generated video, and record the session.
 
 The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; `DIAMOND_PATH` points to an unmodified DIAMOND
-checkout.
+the Reactor integration; the Docker build fetches a pinned, unmodified DIAMOND
+source snapshot into the model image.
 
 ## Prerequisites
 
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git.
-- An Apple Silicon Mac with MPS, an NVIDIA GPU with CUDA, or a CPU. CPU inference
-  is supported but slow.
+- The [Reactor CLI](https://deploy-docs.reactor.inc/platform/installation) and a
+  running Docker daemon. On macOS:
+
+  ```sh
+  brew install reactor-team/tools/reactor-cli
+  brew install --cask docker
+  ```
+
+- An NVIDIA GPU with the NVIDIA Container Toolkit for real-time local play, or
+  a CPU for functional but slow inference.
 - About 1.4 GB of free cache space for the pinned checkpoint and spawn bundle.
 
-Clone the upstream source and pin the revision this adapter was tested against:
-
-```sh
-git clone https://github.com/eloialonso/diamond.git /path/to/diamond
-git -C /path/to/diamond checkout 851cefb497733d27f1b85c804104638765860fca
-export DIAMOND_PATH=/path/to/diamond
-```
-
-`DIAMOND_PATH` must resolve to the repository root. The adapter validates its
-CSGO source and configuration files. It automatically downloads the model
-checkpoint, model configuration, and official spawn data from Hugging Face on
-the first run, then reuses the local cache.
+The Dockerfile pins DIAMOND source revision
+`851cefb497733d27f1b85c804104638765860fca` and sets `DIAMOND_PATH` inside the
+image. On the first run, the adapter downloads the pinned checkpoint,
+configuration, and official spawn data into Reactor's mounted weights cache;
+later containers reuse those files.
 
 ## Run
 
-From this example directory:
+This directory is a Reactor workspace: `reactor.yaml` describes the model,
+`Dockerfile` builds the image, and `requirements.txt` pins Runtime 3.1.2 with
+DIAMOND's dependencies.
 
 ```sh
 cd examples/diamond-csgo-world-model
-PYTORCH_ENABLE_MPS_FALLBACK=1 uv run --python 3.12 \
-  --with-requirements requirements.txt \
-  python -m reactor_runtime.serve
+reactor validate
+reactor build
+reactor run
 ```
 
-`uv` installs Python 3.12, Reactor Runtime 3.1.2, and the model dependencies in
-an isolated environment. `PYTORCH_ENABLE_MPS_FALLBACK=1` is required on Apple
-Silicon and may be omitted on CUDA or CPU machines. The backend listens on
-`0.0.0.0:8080`.
+`reactor run` reuses the image from `reactor build`, mounts the persistent model
+cache, and serves WebRTC signaling at `http://localhost:8080`. Rebuild after
+changing source, configuration, or dependencies:
+
+```sh
+reactor build && reactor run
+```
+
+On an NVIDIA host, expose the GPU with `reactor run --gpus all`. On Apple
+Silicon, build the native Linux image before running:
+
+```sh
+reactor build --platform linux/arm64
+reactor run
+```
+
+Docker containers cannot access Metal/MPS, so Apple Silicon inference is
+CPU-only and substantially slower than host-native MPS.
 
 This is a backend service rather than a bundled web application. Open the
-[Reactor Sandbox](https://reactor-sandbox.vercel.app), enter
-`http://localhost:8080`, and start a session. You can also verify readiness
-directly:
+[Reactor Sandbox](https://reactor-sandbox.vercel.app), choose **Local
+(Direct)**, enter `http://localhost:8080`, and start a session. You can also
+verify readiness directly:
 
 ```sh
 curl http://localhost:8080/health
@@ -105,16 +121,6 @@ source and filename or dataset scene identifier.
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
 clips up to five minutes.
-
-## Test the adapter contract
-
-The focused tests use a fake world, so they verify lifecycle, first-frame, and
-schema behavior without downloading the checkpoint:
-
-```sh
-uv run --python 3.12 --with 'reactor-runtime==3.1.2' \
-  --with pytest --with numpy pytest -q tests
-```
 
 ## Notes
 
