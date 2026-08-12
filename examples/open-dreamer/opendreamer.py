@@ -47,6 +47,7 @@ from reactor_runtime import (
 )
 from reactor_runtime.interface.pipeline.idle import _IdleType
 from reactor_runtime.log import get_logger
+from reactor_runtime.paths import get_weights_path
 
 logger = get_logger(__name__)
 
@@ -153,9 +154,12 @@ class OpenDreamer(ReactorPipeline):
         bundle_type = dependencies["bundle_type"]
         build_parallel = dependencies["build_parallel"]
 
+        checkpoint_cache = get_weights_path() / "huggingface"
+        checkpoint_cache.mkdir(parents=True, exist_ok=True)
         checkpoint_path = snapshot_download(
             repo_id=config.checkpoint_repo_id,
             revision=config.checkpoint_revision,
+            cache_dir=checkpoint_cache,
         )
         if jax.default_backend() == "cpu":
             raise RuntimeError("OpenDreamer requires a CUDA accelerator")

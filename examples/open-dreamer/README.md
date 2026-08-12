@@ -6,95 +6,82 @@ needs to start from a dataset demo or uploaded Minecraft frame, apply native
 keyboard and mouse actions, stream generated video, and record the session.
 
 The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; `OPENDREAMER_PATH` points to an OpenDreamer
-checkout at any filesystem location. The adapter never edits tracked upstream
-source files.
+only the Reactor integration; its Dockerfile fetches the exact tested
+OpenDreamer revision into the model image and never edits its tracked files.
 
 ## Prerequisites
 
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git.
-- An NVIDIA GPU with CUDA. CPU inference is intentionally unsupported.
-- About 8 GB of cache space for the checkpoint and 184 MB for the public VPT
-  sample.
-
-Clone the upstream source, pin the revision tested by this adapter, and export
-its absolute path:
-
-```sh
-git clone https://github.com/next-state/open-dreamer.git /path/to/open-dreamer
-git -C /path/to/open-dreamer checkout 797e41f052b5996740938fd2fe8161f1866de3a2
-export OPENDREAMER_PATH=/path/to/open-dreamer
-```
-
-`OPENDREAMER_PATH` must resolve to the repository root containing `dreamer/`.
-The adapter validates the required source files and exact Git revision before
-importing OpenDreamer.
+- The [`reactor` CLI](https://deploy-docs.reactor.inc/development/quickstart)
+  and Docker.
+- An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
+  intentionally unsupported.
+- About 8 GB in Reactor's weights cache for the checkpoint, plus Docker image
+  space for CUDA dependencies and the 184 MB public VPT sample.
 
 ## Run
 
-From this example directory, select one CUDA device and start the backend:
+This directory is a `reactor` workspace: `reactor.yaml` names the model, the
+`Dockerfile` builds its CUDA-capable image, and `requirements.txt` pins the
+runtime and inference dependencies. Build it, then expose one GPU to the
+container:
 
 ```sh
 cd examples/open-dreamer
-CUDA_VISIBLE_DEVICES=0 uv run --python 3.12 \
-  --with-requirements requirements.txt \
-  python -m reactor_runtime.serve
+reactor build
+reactor run --gpus device=0
 ```
 
-`uv` installs Python 3.12, Reactor Runtime 3.1.1, and the model dependencies in
-an isolated environment. The first run automatically downloads the pinned
-`reactor-team/open-dreamer` checkpoint and missing demo assets, then compiles
-the JAX generation and conditioning paths. The backend listens on
-`0.0.0.0:8080`.
+`reactor build` installs Reactor Runtime 3.1.2 and the model dependencies,
+then fetches the pinned OpenDreamer source and public demo. `reactor run`
+reuses that image and downloads the pinned `reactor-team/open-dreamer`
+checkpoint into the CLI-mounted weights cache on first use. Later runs reuse
+the cached checkpoint. The model then compiles its JAX generation and
+conditioning paths before reporting ready on `http://localhost:8080`.
 
-This is a backend service rather than a bundled web application. Open the
-[Reactor Sandbox](https://reactor-sandbox.vercel.app), enter
-`http://localhost:8080`, and start a session. You can also verify readiness
-directly:
+Rebuild after editing anything baked into the image:
 
 ```sh
-curl http://localhost:8080/health
+reactor build && reactor run --gpus device=0
+```
+
+Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
+**Local (Direct)** and `http://localhost:8080`. A quick liveness check:
+
+```sh
+curl -s localhost:8080/health
 ```
 
 ## Controls
 
-- `set_key_state(key, pressed)` holds or releases `w`, `a`, `s`, `d`, `space`,
-  `shift`, `ctrl`, `e`, `q`, `escape`, `f`, `1`-`9`, or `f3`.
-- `set_mouse_button_state(button, pressed)` holds or releases `left`, `right`,
-  or `middle`.
-- `mouse_move(delta_x, delta_y)` supplies native relative camera movement for
-  one generated frame.
-- `mouse_wheel(delta)` supplies a `-1`, `0`, or `1` scroll event for one frame.
+- `set_key_state(key, pressed)` holds or releases `w`, `a`, `s`, `d`,
+  `space`, `shift`, `ctrl`, `e`, `q`, `escape`, `f`, `1`-`9`, or
+  `f3`.
+- `set_mouse_button_state(button, pressed)` holds or releases `left`,
+  `right`, or `middle`.
+- `mouse_move(delta_x, delta_y)` supplies relative camera movement for one
+  generated frame.
+- `mouse_wheel(delta)` supplies a `-1`, `0`, or `1` hotbar scroll for one
+  frame.
 - `set_demo(demo)` starts from one reproducible dataset window.
 - `random_demo` starts from a randomly selected dataset window.
 - `set_conditioning_image(image)` starts from one uploaded Minecraft frame.
-- `set_paused(paused)` stops model inference.
+- `set_paused(paused)` stops or resumes model inference.
 - `reset(seed)` clears the incremental caches and optionally changes the seed.
 
 Keyboard keys and mouse buttons remain held until released. Mouse movement and
 wheel input are consumed after one successful generation step. Pausing and
-disconnecting release all controls.
+ending the session release all controls.
 
 ## Start from a dataset demo
 
-The first connection selects one of three dataset demos at random. Each demo is
-a 16-frame window with frame-aligned VPT actions from one public OpenAI
-recording. `set_demo` selects `demo_1`, `demo_2`, or `demo_3`; `random_demo`
+Each session selects one of three dataset demos at random. Each demo is a
+16-frame window with frame-aligned VPT actions from one public OpenAI recording.
+`set_demo` selects `demo_1`, `demo_2`, or `demo_3`; `random_demo`
 chooses another window randomly. Both reset the model's incremental KV caches.
 
-Missing demo data downloads automatically into
-`$OPENDREAMER_PATH/samples/vpt`. Existing files are reused. To populate the
-external checkout before starting the backend, run the same downloader
-explicitly:
-
-```sh
-cd examples/open-dreamer
-uv run --python 3.12 --with-requirements requirements.txt \
-  python download_demo.py
-```
-
-The automatic and explicit paths share one atomic downloader. The paired MP4
-and JSONL are internal dataset conditioning assets; clients do not upload them.
+The Docker build downloads the paired MP4 and JSONL into the isolated upstream
+checkout. They are internal dataset conditioning assets; clients do not upload
+them.
 
 ## Start from an image
 
@@ -123,7 +110,7 @@ Every control command returns a typed, command-correlated message for the
 client timeline:
 
 - `ActionChanged` contains the originating control, pause state, held keys and
-  mouse buttons, and the mouse or wheel delta received.
+  mouse buttons, and the mouse or wheel movement received.
 - `ConditioningChanged` contains the selected demo or uploaded image filename.
 - `RolloutReset` contains the selected seed and retained conditioning source.
 
@@ -131,17 +118,18 @@ Message delivery stays outside the synchronous inference loop.
 
 ## Recording
 
-`reactor.yaml` records `main_video` by default in four-second chunks and allows
-clips up to five minutes. Recording requires `ffmpeg` on `PATH`. OpenDreamer
+`reactor.yaml` records `main_video` by default in four-second chunks and
+allows clips up to five minutes. The model image includes FFmpeg. OpenDreamer
 does not emit audio.
 
 ## Notes
 
 - `opendreamer.yaml` pins the upstream source, checkpoint, sampling schedule,
-  and demo offsets. It contains no machine-specific source path.
+  and demo offsets. The Dockerfile installs the same source revision under
+  `/opt/open-dreamer` and sets `OPENDREAMER_PATH` inside the image.
 - The adapter follows the upstream CUDA 12 dependency lock and keeps
   training-only packages out of the runtime environment.
 - Selecting the same demo and reset seed reproduces the same rollout. The
-  automatic demo selected on a new connection is intentionally random.
-- Disconnecting releases client controls but keeps the loaded model available
-  for the next connection. Stop the backend process to release its GPU memory.
+  automatic demo selected for a new session is intentionally random.
+- Ending a session releases its controls and uploaded conditioning. Stop
+  `reactor run` to remove the container and release its GPU memory.

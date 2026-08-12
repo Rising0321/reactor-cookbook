@@ -1,5 +1,5 @@
-# Match the public OpenDreamer source lock while keeping training-only packages
-# out of the Reactor Runtime environment.
+# Python dependencies installed into the model image in one pass, so conflicts
+# fail during `reactor build` rather than during model loading.
 reactor-runtime==3.1.2
 jax[cuda12]==0.10.1
 flax==0.12.7
