@@ -147,6 +147,10 @@ its returned URL, and sends the resulting upload reference with the command.
 This lets a schema-driven frontend render a real file picker instead of putting
 binary data inside a command message.
 
+Ready-to-upload examples are included in [`example_images`](./example_images/).
+They are copies of the two public AlayaWorld playground images, with their
+upstream license and attribution kept beside them.
+
 Uploads are limited to 25 MiB and 100 million decoded pixels. EXIF orientation
 is applied before the image is resized and center-cropped to 960x544. The
 configured `inputs.upload_template` supplies camera calibration and a trajectory
