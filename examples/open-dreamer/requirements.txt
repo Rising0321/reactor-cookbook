@@ -1,6 +1,6 @@
 # Match the public OpenDreamer source lock while keeping training-only packages
 # out of the Reactor Runtime environment.
-reactor-runtime==3.1.1
+reactor-runtime==3.1.2
 jax[cuda12]==0.10.1
 flax==0.12.7
 orbax-checkpoint==0.11.40
