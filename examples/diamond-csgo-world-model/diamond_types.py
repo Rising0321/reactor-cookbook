@@ -1,4 +1,4 @@
-"""Define the typed configuration and Reactor contract for the DIAMOND adapter."""
+"""Define configuration types and the Reactor contract for the DIAMOND adapter."""
 
 from __future__ import annotations
 
@@ -129,7 +129,9 @@ class StateUpdate(ModelMessage):
             paused=state.paused,
             pressed_keys=[key for key in KEYS if key in state._pressed_keys],
             pressed_mouse_buttons=[
-                button for button in MOUSE_BUTTONS if button in state._pressed_mouse_buttons
+                button
+                for button in MOUSE_BUTTONS
+                if button in state._pressed_mouse_buttons
             ],
         )
 

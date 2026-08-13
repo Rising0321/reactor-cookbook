@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from .types import AdapterConfig
+from diamond_types import AdapterConfig
 
 UPSTREAM_ENV = "DIAMOND_PATH"
 _INFERENCE_IMPORT_STUBS = ("ale_py", "wandb")
@@ -89,13 +89,14 @@ def read_config(config_path: Path | None) -> AdapterConfig:
         The validated adapter configuration.
 
     Raises:
+        TypeError: If the YAML document is not a mapping.
         ValueError: If the path or a supported option is invalid.
     """
     if config_path is None:
         raise ValueError("DIAMOND requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text())
     if not isinstance(document, dict):
-        raise ValueError(f"{config_path}: expected a YAML mapping")
+        raise TypeError(f"{config_path}: expected a YAML mapping")
 
     profile = str(document.get("profile", "fast"))
     if profile not in {"fast", "higher_quality"}:
@@ -172,7 +173,9 @@ def load_adapter_dependencies() -> dict[str, Any]:
     hydra = importlib.import_module("hydra")
     return {
         "torch": importlib.import_module("torch"),
-        "snapshot_download": importlib.import_module("huggingface_hub").snapshot_download,
+        "snapshot_download": importlib.import_module(
+            "huggingface_hub"
+        ).snapshot_download,
         "compose": hydra.compose,
         "initialize_config_dir": hydra.initialize_config_dir,
         "instantiate": importlib.import_module("hydra.utils").instantiate,
@@ -234,6 +237,14 @@ def to_video_frame(observation: Any) -> np.ndarray:
         A contiguous HWC uint8 RGB frame.
     """
     frame = (
-        observation[0].detach().clamp(-1, 1).add(1).mul(127.5).byte().permute(1, 2, 0).cpu().numpy()
+        observation[0]
+        .detach()
+        .clamp(-1, 1)
+        .add(1)
+        .mul(127.5)
+        .byte()
+        .permute(1, 2, 0)
+        .cpu()
+        .numpy()
     )
     return np.ascontiguousarray(frame)

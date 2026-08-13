@@ -8,7 +8,7 @@ model:
     Play DIAMOND's Counter-Strike world model with native keyboard and mouse input.
 
 runtime:
-  import: diamond_adapter:Diamond
+  import: diamond:Diamond
   config: diamond.yaml
 
 build:

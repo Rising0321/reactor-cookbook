@@ -18,11 +18,10 @@ from reactor_runtime.manifest import load_config
 EXAMPLE_DIR = Path(__file__).parents[1]
 sys.path.insert(0, str(EXAMPLE_DIR))
 
-adapter = importlib.import_module("diamond_adapter")
-pipeline_module = importlib.import_module("diamond_adapter.pipeline")
-support_module = importlib.import_module("diamond_adapter.support")
-types_module = importlib.import_module("diamond_adapter.types")
-Diamond = adapter.Diamond
+pipeline_module = importlib.import_module("diamond")
+support_module = importlib.import_module("diamond_support")
+types_module = importlib.import_module("diamond_types")
+Diamond = pipeline_module.Diamond
 DiamondOutput = types_module.DiamondOutput
 DiamondState = types_module.DiamondState
 PreparedScene = types_module.PreparedScene
@@ -85,7 +84,9 @@ def _ready_model() -> Any:
     model._world = _World()
     model._action_type = _Action
     model._encode_action = lambda action, *, device: action
-    model._key_codes = {key: index for index, key in enumerate(types_module.KEYS, start=1)}
+    model._key_codes = {
+        key: index for index, key in enumerate(types_module.KEYS, start=1)
+    }
     return model
 
 
@@ -112,13 +113,19 @@ def test_contract_uses_session_hooks_and_documents_side_effects() -> None:
         for field in command.command.__command_fields__.values()
     )
 
-    controller = contract.commands["set_controller"].command.__command_fields__["controller"]
+    controller = contract.commands["set_controller"].command.__command_fields__[
+        "controller"
+    ]
     image = contract.commands["set_spawn_image"].command.__command_fields__["image"]
     assert "next model step" in controller.info.description
     assert "next model-step boundary" in image.info.description
 
     document = contract.render_schema().to_openapi()
-    assert set(document["webhooks"]) == {"action_changed", "scene_changed", "state_update"}
+    assert set(document["webhooks"]) == {
+        "action_changed",
+        "scene_changed",
+        "state_update",
+    }
     assert all(
         webhook["post"]["summary"].startswith("Emitted ")
         for webhook in document["webhooks"].values()
@@ -263,7 +270,7 @@ def test_manifest_and_runtime_pin_match_the_package_entrypoint() -> None:
     """Keep the manifest entrypoint and public Runtime pin reproducible."""
     config = load_config(EXAMPLE_DIR / "reactor.yaml")
 
-    assert config.model_ref == "diamond_adapter:Diamond"
+    assert config.model_ref == "diamond:Diamond"
     assert "reactor-runtime==3.1.2" in (EXAMPLE_DIR / "requirements.txt").read_text()
 
 
@@ -274,7 +281,9 @@ def test_model_download_uses_the_runtime_weights_mount(
     """Persist Hugging Face assets under Reactor's mounted weights root."""
     monkeypatch.setenv("REACTOR_WEIGHTS_PATH", str(tmp_path))
 
-    assert pipeline_module.get_weights_path() / "huggingface" == tmp_path / "huggingface"
+    assert (
+        pipeline_module.get_weights_path() / "huggingface" == tmp_path / "huggingface"
+    )
 
 
 def test_inference_import_scope_stubs_training_dependencies(

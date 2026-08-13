@@ -26,7 +26,7 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
-from .support import (
+from diamond_support import (
     decode_spawn_image,
     load_adapter_dependencies,
     load_upstream_modules,
@@ -36,7 +36,7 @@ from .support import (
     to_video_frame,
     upstream_root,
 )
-from .types import (
+from diamond_types import (
     CONTROLLERS,
     DELTA_X_MAX,
     DELTA_X_MIN,
@@ -135,7 +135,9 @@ class Diamond(ReactorPipeline):
 
         device = select_device(config.device, torch)
         torch.manual_seed(config.seed)
-        self._agent = agent_type(instantiate(cfg.agent, num_actions=cfg.env.num_actions))
+        self._agent = agent_type(
+            instantiate(cfg.agent, num_actions=cfg.env.num_actions)
+        )
         self._agent = self._agent.to(device).eval()
         self._agent.load(snapshot / "csgo/model/csgo.pt")
 
@@ -161,7 +163,9 @@ class Diamond(ReactorPipeline):
         self._action_type = action_module.CSGOAction
         self._encode_action = action_module.encode_csgo_action
         self._torch = torch
-        self._spawn_dirs = tuple(sorted(path for path in spawn_root.iterdir() if path.is_dir()))
+        self._spawn_dirs = tuple(
+            sorted(path for path in spawn_root.iterdir() if path.is_dir())
+        )
         self._seed = config.seed
         self._rng = np.random.default_rng(self._seed)
         self._sequence_length = int(sequence_length)
@@ -439,12 +443,12 @@ class Diamond(ReactorPipeline):
         """Update one held mouse button and return the resulting input state."""
         if self._controller == "human":
             if pressed:
-                self.state._pressed_mouse_buttons = self.state._pressed_mouse_buttons.union(
-                    (button,)
+                self.state._pressed_mouse_buttons = (
+                    self.state._pressed_mouse_buttons.union((button,))
                 )
             else:
-                self.state._pressed_mouse_buttons = self.state._pressed_mouse_buttons.difference(
-                    (button,)
+                self.state._pressed_mouse_buttons = (
+                    self.state._pressed_mouse_buttons.difference((button,))
                 )
         message = self._action_changed()
         if self._controller == "human":
@@ -511,7 +515,11 @@ class Diamond(ReactorPipeline):
 
             action = self._next_action()
             observation, _reward, ended, truncated, _info = self._world.step(action)
-            if bool(ended.item()) or bool(truncated.item()) or self._replay_trajectory_finished():
+            if (
+                bool(ended.item())
+                or bool(truncated.item())
+                or self._replay_trajectory_finished()
+            ):
                 self._reset_requested = True
                 self._clear_controls()
             yield DiamondOutput(main_video=to_video_frame(observation))
@@ -635,13 +643,17 @@ class Diamond(ReactorPipeline):
         )
         return self._encode_action(action, device=self._agent.device)
 
-    def _action_changed(self, *, delta_x: float = 0.0, delta_y: float = 0.0) -> ActionChanged:
+    def _action_changed(
+        self, *, delta_x: float = 0.0, delta_y: float = 0.0
+    ) -> ActionChanged:
         """Describe the current native input state for an event response."""
         return ActionChanged(
             controller=self._controller,
             pressed_keys=[key for key in KEYS if key in self.state._pressed_keys],
             pressed_mouse_buttons=[
-                button for button in MOUSE_BUTTONS if button in self.state._pressed_mouse_buttons
+                button
+                for button in MOUSE_BUTTONS
+                if button in self.state._pressed_mouse_buttons
             ],
             delta_x=delta_x,
             delta_y=delta_y,

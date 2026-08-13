@@ -77,10 +77,10 @@ curl -s localhost:8080/health
 
 ## Adapter layout
 
-`diamond_adapter/pipeline.py` owns model loading, lifecycle hooks, commands, and
-inference. `diamond_adapter/types.py` defines the Reactor contract, while
-`diamond_adapter/support.py` contains configuration, import, image, and tensor
-helpers. The package remains independent from the upstream checkout.
+`diamond.py` is the complete model entrypoint: it owns model loading, lifecycle
+hooks, commands, and inference. `diamond_types.py` defines the Reactor contract,
+while `diamond_support.py` contains configuration, import, image, and tensor
+helpers. These files remain independent from the upstream checkout.
 
 ## Controls
 
