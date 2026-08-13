@@ -22,8 +22,9 @@ OpenDreamer revision into the model image and never edits its tracked files.
 
 This directory is a `reactor` workspace: `reactor.yaml` names the model, the
 `Dockerfile` builds its CUDA-capable image, and `requirements.txt` pins the
-runtime and inference dependencies. Build it, then expose one GPU to the
-container:
+runtime and inference dependencies. The CLI installs everything inside the
+model image; the host only needs the CLI, Docker, and the NVIDIA prerequisites
+listed above. Build the image, then expose one GPU to the container:
 
 ```sh
 cd examples/open-dreamer
@@ -33,10 +34,11 @@ reactor run --gpus device=0
 
 `reactor build` installs Reactor Runtime 3.1.2 and the model dependencies,
 then fetches the pinned OpenDreamer source and public demo. `reactor run`
-reuses that image and downloads the pinned `reactor-team/open-dreamer`
-checkpoint into the CLI-mounted weights cache on first use. Later runs reuse
-the cached checkpoint. The model then compiles its JAX generation and
-conditioning paths before reporting ready on `http://localhost:8080`.
+reuses that image, building it automatically if none exists, and downloads the
+pinned `reactor-team/open-dreamer` checkpoint into the CLI-mounted weights
+cache on first use. Later runs reuse the cached checkpoint. The model then
+compiles its JAX generation and conditioning paths before reporting ready on
+`http://localhost:8080`.
 
 Rebuild after editing anything baked into the image:
 
@@ -45,7 +47,9 @@ reactor build && reactor run --gpus device=0
 ```
 
 Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
-**Local (Direct)** and `http://localhost:8080`. A quick liveness check:
+**Local (Direct)** and `http://localhost:8080`, or point the
+[JS SDK](https://docs.reactor.inc) at it with `local: true`. A quick liveness
+check:
 
 ```sh
 curl -s localhost:8080/health
