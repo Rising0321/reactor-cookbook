@@ -31,20 +31,22 @@ later containers reuse those files.
 
 ## Run
 
-This directory is a Reactor workspace: `reactor.yaml` describes the model,
-`Dockerfile` builds the image, and `requirements.txt` pins Runtime 3.1.2 with
-DIAMOND's dependencies.
+This directory is a `reactor` workspace: `reactor.yaml` names the model, the
+`Dockerfile` builds the image, and `requirements.txt` pins Runtime 3.1.2
+alongside DIAMOND's serving dependencies. The CLI builds the image with the
+runtime inside and runs it — nothing to install on your host but the CLI and
+Docker.
 
 ```sh
 cd examples/diamond-csgo-world-model
-reactor validate
 reactor build
 reactor run
 ```
 
-`reactor run` reuses the image from `reactor build`, mounts the persistent model
-cache, and serves WebRTC signaling at `http://localhost:8080`. Rebuild after
-changing source, configuration, or dependencies:
+`reactor run` reuses the image `reactor build` produced (it builds one on first
+run if none exists), mounts the persistent model cache, and serves WebRTC
+signaling on `http://localhost:8080`. Rebuild after editing anything baked into
+the image:
 
 ```sh
 reactor build && reactor run
@@ -61,13 +63,12 @@ reactor run
 Docker containers cannot access Metal/MPS, so Apple Silicon inference is
 CPU-only and substantially slower than host-native MPS.
 
-This is a backend service rather than a bundled web application. Open the
-[Reactor Sandbox](https://reactor-sandbox.vercel.app), choose **Local
-(Direct)**, enter `http://localhost:8080`, and start a session. You can also
-verify readiness directly:
+Connect a client from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/)
+(pick **Local (Direct)**), or point the [JS SDK](https://docs.reactor.inc) at it
+with `local: true`. A quick liveness check:
 
 ```sh
-curl http://localhost:8080/health
+curl -s localhost:8080/health
 ```
 
 ## Adapter layout
