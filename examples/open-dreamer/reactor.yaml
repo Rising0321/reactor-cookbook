@@ -5,7 +5,9 @@ model:
   name: open-dreamer
   version: v0.0.1
   description: |
-    Generate a playable Minecraft video stream from a demo or uploaded image.
+    Stream an interactive Minecraft rollout initialized from a configured
+    dataset demo or an uploaded screenshot and controlled with keyboard and
+    mouse commands.
 
 runtime:
   import: opendreamer:OpenDreamer

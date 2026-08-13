@@ -22,6 +22,7 @@ from opendreamer_types import (
     OpenDreamerState,
     RolloutConditioning,
     RolloutReset,
+    StateUpdate,
 )
 from opendreamer_utils import (
     decode_conditioning_image,
@@ -36,11 +37,13 @@ from opendreamer_utils import (
     verify_source_revision,
 )
 from reactor_runtime import (
+    ClientInfo,
     CommandError,
     Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
+    connected,
     event,
     session_ended,
     session_started,
@@ -108,7 +111,7 @@ _CAMERA_DELTA_MAX = 200.0
 
 
 class OpenDreamer(ReactorPipeline):
-    """Generate a playable Minecraft video stream from a demo or uploaded image."""
+    """Stream an interactive Minecraft rollout from a dataset demo or uploaded image."""
 
     state: OpenDreamerState
     output: OpenDreamerOutput
@@ -365,6 +368,11 @@ class OpenDreamer(ReactorPipeline):
         self._uploaded_conditioning = None
         self._clear_controls()
 
+    @connected
+    async def on_connected(self, client: ClientInfo) -> None:
+        """Send the current shared world state to one joining viewer."""
+        await self._send_state_update(client)
+
     @session_ended
     def on_session_ended(self) -> None:
         """Release controls and uploaded conditioning owned by the completed world."""
@@ -374,16 +382,30 @@ class OpenDreamer(ReactorPipeline):
 
     @event(
         name="set_key_state",
-        description="Hold or release a Minecraft keyboard key for subsequent frames.",
+        description=(
+            "Hold or release one Minecraft keyboard key for subsequent frames. Valid while the "
+            "session is active; while `paused` is true, the request is acknowledged without "
+            "changing held controls. Emits `action_changed`; accepted control changes also emit "
+            "`state_update`. Unsupported values are rejected before state changes."
+        ),
     )
-    def set_key_state(
+    async def set_key_state(
         self,
         key: str = InputField(
-            default="w", choices=_KEYS, description="Keyboard key to update."
+            default="w",
+            choices=_KEYS,
+            description=(
+                "Minecraft keyboard key to hold or release. When accepted, the key state starts "
+                "with the next generated frame and persists until another `set_key_state` "
+                "changes it or controls are cleared."
+            ),
         ),
         pressed: bool = InputField(
             default=True,
-            description="Set true to hold the key or false to release it.",
+            description=(
+                "Set true to hold `key` on subsequent generated frames or false to release it. "
+                "Ignored while `paused` is true."
+            ),
         ),
     ) -> ActionChanged:
         """Update one held keyboard key and report the controls now in effect."""
@@ -392,22 +414,35 @@ class OpenDreamer(ReactorPipeline):
                 self.state._pressed_keys = self.state._pressed_keys.union((key,))
             else:
                 self.state._pressed_keys = self.state._pressed_keys.difference((key,))
+            await self._send_state_update()
         return self._action_changed(control="set_key_state")
 
     @event(
         name="set_mouse_button_state",
-        description="Hold or release a Minecraft mouse button for subsequent frames.",
+        description=(
+            "Hold or release one Minecraft mouse button for subsequent frames. Valid while the "
+            "session is active; while `paused` is true, the request is acknowledged without "
+            "changing held controls. Emits `action_changed`; accepted control changes also emit "
+            "`state_update`. Unsupported values are rejected before state changes."
+        ),
     )
-    def set_mouse_button_state(
+    async def set_mouse_button_state(
         self,
         button: str = InputField(
             default="left",
             choices=_MOUSE_BUTTONS,
-            description="Mouse button to update.",
+            description=(
+                "Minecraft mouse button to hold or release. When accepted, the button state "
+                "starts with the next generated frame and persists until another "
+                "`set_mouse_button_state` changes it or controls are cleared."
+            ),
         ),
         pressed: bool = InputField(
             default=True,
-            description="Set true to hold the button or false to release it.",
+            description=(
+                "Set true to hold `button` on subsequent generated frames or false to release "
+                "it. Ignored while `paused` is true."
+            ),
         ),
     ) -> ActionChanged:
         """Update one held mouse button and report the controls now in effect."""
@@ -420,24 +455,41 @@ class OpenDreamer(ReactorPipeline):
                 self.state._pressed_mouse_buttons = (
                     self.state._pressed_mouse_buttons.difference((button,))
                 )
+            await self._send_state_update()
         return self._action_changed(control="set_mouse_button_state")
 
     @event(
-        name="mouse_move", description="Move the camera on the next generated frame."
+        name="mouse_move",
+        description=(
+            "Queue relative camera movement for the next generated frame. Valid while the "
+            "session is active; calls before that frame accumulate within [-200, 200] on each "
+            "axis, and movement is consumed after one frame. While `paused` is true, the request "
+            "is acknowledged without changing queued movement. Emits `action_changed`; accepted "
+            "movement also emits `state_update`. Out-of-range values are rejected before state "
+            "changes."
+        ),
     )
-    def mouse_move(
+    async def mouse_move(
         self,
         delta_x: float = InputField(
             default=0.0,
             ge=_CAMERA_DELTA_MIN,
             le=_CAMERA_DELTA_MAX,
-            description="Horizontal mouse movement to apply to the next frame.",
+            description=(
+                "Relative horizontal mouse movement in [-200, 200] to add to the next generated "
+                "frame. Multiple accepted calls accumulate and clamp to that range; the value "
+                "is ignored while `paused` is true."
+            ),
         ),
         delta_y: float = InputField(
             default=0.0,
             ge=_CAMERA_DELTA_MIN,
             le=_CAMERA_DELTA_MAX,
-            description="Vertical mouse movement to apply to the next frame.",
+            description=(
+                "Relative vertical mouse movement in [-200, 200] to add to the next generated "
+                "frame. Multiple accepted calls accumulate and clamp to that range; the value "
+                "is ignored while `paused` is true."
+            ),
         ),
     ) -> ActionChanged:
         """Queue camera motion and report the movement accepted for the next frame."""
@@ -452,6 +504,7 @@ class OpenDreamer(ReactorPipeline):
                     self.state._delta_y + delta_y, _CAMERA_DELTA_MIN, _CAMERA_DELTA_MAX
                 )
             )
+            await self._send_state_update()
             return self._action_changed(
                 control="mouse_move",
                 delta_x=delta_x,
@@ -460,47 +513,77 @@ class OpenDreamer(ReactorPipeline):
         return self._action_changed(control="mouse_move")
 
     @event(
-        name="mouse_wheel", description="Scroll the Minecraft hotbar on the next frame."
+        name="mouse_wheel",
+        description=(
+            "Queue a Minecraft hotbar scroll for the next generated frame. Valid while the "
+            "session is active; calls before that frame accumulate and only the resulting "
+            "direction is applied. While `paused` is true, the request is acknowledged without "
+            "changing queued movement. Emits `action_changed`; accepted movement also emits "
+            "`state_update`. Values outside [-1, 1] are rejected before state changes."
+        ),
     )
-    def mouse_wheel(
+    async def mouse_wheel(
         self,
         delta: int = InputField(
             default=0,
             ge=-1,
             le=1,
-            description="Use -1 to scroll down, 1 to scroll up, or 0 for no movement.",
+            description=(
+                "Hotbar movement for the next generated frame: -1 scrolls down, 1 scrolls up, "
+                "and 0 leaves the selection unchanged. Ignored while `paused` is true."
+            ),
         ),
     ) -> ActionChanged:
         """Queue a hotbar scroll and report the movement accepted for the next frame."""
         if not self.state.paused:
             self.state._wheel_delta += delta
+            await self._send_state_update()
             return self._action_changed(control="mouse_wheel", wheel_delta=delta)
         return self._action_changed(control="mouse_wheel")
 
-    @event(name="set_paused", description="Pause or resume Minecraft frame generation.")
-    def set_paused(
+    @event(
+        name="set_paused",
+        description=(
+            "Pause or resume Minecraft frame generation immediately while preserving the "
+            "current world. Valid any time during a session and clears all held and one-frame "
+            "controls. Emits `action_changed` and `state_update` on success."
+        ),
+    )
+    async def set_paused(
         self,
         paused: bool = InputField(
             default=False,
-            description="Set true to pause generation or false to resume it.",
+            description=(
+                "Set true to stop before the next generated `main_video` frame or false to "
+                "resume from the preserved world. Applying either value clears all controls."
+            ),
         ),
     ) -> ActionChanged:
         """Set the pause state, release held controls, and report the resulting state."""
         self.state.paused = paused
         self._clear_controls()
+        await self._send_state_update()
         return self._action_changed(control="set_paused")
 
     @event(
         name="reset",
-        description="Restart the current scene from its conditioning frames.",
+        description=(
+            "Restart the selected starting scene from its conditioning frames. Valid any time "
+            "during a session; the reset takes effect at the next inference boundary, retains "
+            "the current pause state, and clears all controls. Emits `rollout_reset` and "
+            "`state_update` on success; out-of-range seeds are rejected before state changes."
+        ),
     )
-    def reset(
+    async def reset(
         self,
         seed: int = InputField(
             default=-1,
             ge=-1,
             le=2_147_483_647,
-            description="Random seed for the restarted rollout; -1 reuses the current seed.",
+            description=(
+                "Random seed for the restarted rollout in [-1, 2147483647]. Use -1 to retain "
+                "the current seed; a non-negative value replaces it when the reset is queued."
+            ),
         ),
     ) -> RolloutReset:
         """Restart the rollout and report the seed and starting scene it will use."""
@@ -508,20 +591,31 @@ class OpenDreamer(ReactorPipeline):
             self.state._seed = seed
         self.state._reset_requested = True
         self._clear_controls()
+        await self._send_state_update()
         return RolloutReset(
             seed=self.state._seed,
             conditioning=self._conditioning_source,
         )
 
     @event(
-        name="set_demo", description="Start a new rollout from a named dataset demo."
+        name="set_demo",
+        description=(
+            "Select a configured dataset demo as the next starting scene. Valid any time during "
+            "a session; the selection resets the rollout at the next inference boundary and "
+            "clears all controls. Emits `conditioning_changed` and `state_update` on success, "
+            "or `command_error` with `demo_unavailable` when the demo is not configured."
+        ),
     )
-    def set_demo(
+    async def set_demo(
         self,
         demo: str = InputField(
             default="demo_1",
             choices=DEMO_CHOICES,
-            description="Dataset demo to use as the starting scene.",
+            description=(
+                "Configured dataset demo to use for the next rollout. The selection takes "
+                "effect at the next inference boundary and replaces an uploaded image or the "
+                "previous demo."
+            ),
         ),
     ) -> ConditioningChanged:
         """Select a dataset demo and report the starting scene now in effect."""
@@ -531,27 +625,50 @@ class OpenDreamer(ReactorPipeline):
         if self.state is not None:
             self.state._reset_requested = True
             self._clear_controls()
+        await self._send_state_update()
         return ConditioningChanged(source="demo", selection=demo)
 
     @event(
         name="random_demo",
-        description="Start a new rollout from a random dataset demo.",
+        description=(
+            "Select a random configured dataset demo as the next starting scene. Valid any time "
+            "during a session; the selection resets the rollout at the next inference boundary "
+            "and clears all controls. Emits `conditioning_changed` and `state_update` on "
+            "success, or `command_error` with `demo_unavailable` when no demos are configured."
+        ),
     )
-    def random_demo(self) -> ConditioningChanged:
+    async def random_demo(self) -> ConditioningChanged:
         """Select a random dataset demo and report the chosen starting scene."""
         demo = self._random_demo_name()
         self._conditioning_source = demo
         if self.state is not None:
             self.state._reset_requested = True
             self._clear_controls()
+        await self._send_state_update()
         logger.info("selected random conditioning demo", demo=demo)
         return ConditioningChanged(source="demo", selection=demo)
 
     @event(
         name="set_conditioning_image",
-        description="Start a new rollout from an uploaded Minecraft screenshot.",
+        description=(
+            "Select an uploaded Minecraft screenshot as the next starting scene. Valid after "
+            "the model has loaded; the image is prepared immediately, then resets the rollout "
+            "at the next inference boundary and clears all controls. Emits "
+            "`conditioning_changed` and `state_update` on success, or `command_error` with "
+            "`model_not_ready`, `unsupported_media`, or `invalid_image` when validation fails."
+        ),
     )
-    def set_conditioning_image(self, image: UploadedFile) -> ConditioningChanged:
+    async def set_conditioning_image(
+        self,
+        image: UploadedFile = InputField(  # noqa: B008  # Reactor reads this schema metadata.
+            description=(
+                "Minecraft screenshot uploaded through Reactor's file-upload flow. The file "
+                "must have an `image/*` media type and decode successfully; it is "
+                "orientation-corrected, center-cropped, and resized to the model resolution "
+                "before the next rollout starts."
+            )
+        ),
+    ) -> ConditioningChanged:
         """Use one image as the starting scene and report the accepted filename."""
         if self._model_frame_shape is None or self._config is None:
             raise CommandError("model_not_ready", "OpenDreamer is still loading.")
@@ -573,6 +690,7 @@ class OpenDreamer(ReactorPipeline):
         if self.state is not None:
             self.state._reset_requested = True
             self._clear_controls()
+        await self._send_state_update()
         return ConditioningChanged(source="upload", selection=image.name)
 
     def inference(self) -> Iterator[OpenDreamerOutput | _IdleType]:
@@ -688,6 +806,17 @@ class OpenDreamer(ReactorPipeline):
             delta_y=delta_y,
             wheel_delta=wheel_delta,
         )
+
+    async def _send_state_update(self, client: ClientInfo | None = None) -> None:
+        """Send a complete client-facing snapshot of the shared world state."""
+        message = StateUpdate.from_state(
+            self.state,
+            conditioning=self._conditioning_source,
+        )
+        if client is not None:
+            await client.send(message)
+            return
+        await self.send(message)
 
     def _action_at(self, actions: Any, index: int) -> Any:
         """Remove the time dimension from one batched conditioning action."""

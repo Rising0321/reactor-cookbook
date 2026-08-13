@@ -110,13 +110,16 @@ the most reliable results.
 
 ## Model messages
 
-Every control command returns a typed, command-correlated message for the
-client timeline:
+Commands return typed, command-correlated messages for the client timeline:
 
-- `ActionChanged` contains the originating control, pause state, held keys and
+- `action_changed` contains the originating control, pause state, held keys and
   mouse buttons, and the mouse or wheel movement received.
-- `ConditioningChanged` contains the selected demo or uploaded image filename.
-- `RolloutReset` contains the selected seed and retained conditioning source.
+- `conditioning_changed` contains the selected demo or uploaded image
+  filename.
+- `rollout_reset` contains the selected seed and retained conditioning source.
+- `state_update` is a complete snapshot of the pause state, held controls,
+  seed, and conditioning selection. A joining viewer receives one immediately;
+  successful state changes broadcast another.
 
 Message delivery stays outside the synchronous inference loop.
 
