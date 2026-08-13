@@ -565,8 +565,7 @@ class AlayaWorld(ReactorPipeline):
     )
     async def set_image(
         self,
-        image: UploadedFile | None = InputField(  # noqa: B008 - schema field declaration
-            default=None,
+        image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
             description=(
                 "Reference image uploaded through the Reactor upload protocol. JPEG, PNG, WebP, "
                 "or BMP up to 25 MiB and 100 million pixels; EXIF orientation is applied before "
@@ -584,8 +583,6 @@ class AlayaWorld(ReactorPipeline):
         ),
     ) -> ImageSelected:
         """Validate uploaded image bytes and select them for the next rollout."""
-        if image is None:
-            raise CommandError("image_required", "Upload an image before calling set_image.")
         validate_uploaded_image(image)
         self._selected_input = image
         if self.state is not None:
