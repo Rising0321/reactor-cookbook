@@ -98,8 +98,11 @@ helpers. The package remains independent from the upstream checkout.
 
 Control events return an `ActionChanged` message containing the acknowledged
 controller, current held keys and mouse buttons, and any mouse delta accepted by
-that command. Message delivery therefore stays outside the synchronous
-inference loop.
+that command. Commands that change durable controls also broadcast a
+`StateUpdate` snapshot containing controller, pause, keyboard, and mouse-button
+state. A newly connected viewer receives the same snapshot without reconstructing
+state from earlier events. Message delivery therefore stays outside the
+synchronous inference loop.
 
 ## Start from an image
 

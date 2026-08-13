@@ -14,9 +14,11 @@ from typing import Any
 
 import numpy as np
 from reactor_runtime import (
+    ClientInfo,
     InputField,
     ReactorPipeline,
     UploadedFile,
+    connected,
     event,
     get_weights_path,
     session_ended,
@@ -47,17 +49,22 @@ from .types import (
     DiamondState,
     PreparedScene,
     SceneChanged,
+    StateUpdate,
 )
 
 logger = get_logger(__name__)
 
 _SPAWN_IMAGE_FIELD = InputField(
-    description="Uploaded image used as DIAMOND's repeated conditioning frame."
+    description=(
+        "Image uploaded through the Reactor upload protocol. Must contain decodable image "
+        "bytes with an `image/*` MIME type; it is center-cropped to the native aspect ratio, "
+        "resized, and applied when the fresh world starts at the next model-step boundary."
+    )
 )
 
 
 class Diamond(ReactorPipeline):
-    """Run one session-wide DIAMOND CSGO world from Reactor commands."""
+    """Stream one shared Counter-Strike world controlled by native game inputs."""
 
     fps = 15
     buffer_size = 1
@@ -205,21 +212,37 @@ class Diamond(ReactorPipeline):
         self._replay_step = 0
         self._clear_controls()
 
+    @connected
+    async def _connected(self, client: ClientInfo) -> None:
+        """Send the complete durable control state to one joining viewer."""
+        await client.send(StateUpdate.from_state(self.state))
+
     @event(
         name="reset",
-        description="Queue a fresh dataset spawn and release all human controls.",
+        description=(
+            "Queue a fresh built-in spawn for the next model-step boundary and release all "
+            "held human controls. Available throughout an active session. Emits "
+            "`action_changed` and broadcasts `state_update` on success."
+        ),
     )
-    def reset(self) -> ActionChanged:
+    async def reset(self) -> ActionChanged:
         """Request a reset and return the released native input state."""
         self._pending_scene = None
         self._queue_scene_reset()
-        return self._action_changed()
+        message = self._action_changed()
+        await self._send_state_update()
+        return message
 
     @event(
         name="random_scene",
-        description="Queue a random dataset scene for the next reset boundary.",
+        description=(
+            "Select a random built-in spawn and queue it for the next model-step boundary, "
+            "including recorded actions available to replay. Available throughout an active "
+            "session. Emits `scene_changed` and broadcasts `state_update` on success, or "
+            "`command_error` if the built-in scenes are unavailable."
+        ),
     )
-    def random_scene(self) -> SceneChanged:
+    async def random_scene(self) -> SceneChanged:
         """Queue a random official spawn and return its identifier."""
         if not self._spawn_dirs:
             raise RuntimeError("DIAMOND spawn scenes were not loaded")
@@ -228,15 +251,20 @@ class Diamond(ReactorPipeline):
         self._pending_scene = self._prepare_dataset_scene(scene_dir)
         self._queue_scene_reset()
         logger.info("dataset scene selected", scene=scene_dir.name)
-        return SceneChanged(source="dataset", scene=scene_dir.name)
+        message = SceneChanged(source="dataset", scene=scene_dir.name)
+        await self._send_state_update()
+        return message
 
     @event(
         name="set_spawn_image",
         description=(
-            "Queue an uploaded CSGO frame, switch to human control, and release controls."
+            "Start a fresh world from an uploaded image at the next model-step boundary, "
+            "switch to human input, and release held controls. Available throughout an active "
+            "session. Emits `scene_changed` and broadcasts `state_update` on success, or "
+            "`command_error` if the upload is not a decodable image."
         ),
     )
-    def set_spawn_image(
+    async def set_spawn_image(
         self,
         image: UploadedFile = _SPAWN_IMAGE_FIELD,
     ) -> SceneChanged:
@@ -260,18 +288,29 @@ class Diamond(ReactorPipeline):
         self.state.controller = self._controller
         self._queue_scene_reset()
         logger.info("uploaded scene selected", name=image.name, size=len(image.data))
-        return SceneChanged(source="upload", scene=image.name)
+        message = SceneChanged(source="upload", scene=image.name)
+        await self._send_state_update()
+        return message
 
     @event(
         name="set_controller",
-        description="Select human input or replay and restart from a compatible spawn.",
+        description=(
+            "Select client-controlled input or the built-in scene's recorded replay. A change "
+            "queues a fresh compatible world and releases held controls. Emits "
+            "`action_changed` and broadcasts `state_update` on success, or `command_error` "
+            "when `controller` is unsupported."
+        ),
     )
-    def set_controller(
+    async def set_controller(
         self,
         controller: str = InputField(
             default="human",
             choices=CONTROLLERS,
-            description="Action source: human commands or the spawn's recorded replay.",
+            description=(
+                'Action source used from the next model step: "human" applies client keyboard '
+                'and mouse commands, while "replay" follows a built-in scene\'s recorded '
+                "actions. Changing it queues a fresh world and releases held controls."
+            ),
         ),
     ) -> ActionChanged:
         """Switch controller and return the resulting native input state."""
@@ -287,17 +326,26 @@ class Diamond(ReactorPipeline):
             self.state._step_requested = False
             self._reset_requested = True
             self._clear_controls()
-        return self._action_changed()
+        message = self._action_changed()
+        await self._send_state_update()
+        return message
 
     @event(
         name="set_paused",
-        description="Pause or resume expensive model steps and release human controls.",
+        description=(
+            "Pause before the next model step or resume continuous generation, releasing all "
+            "held controls in either case. Available throughout an active session. Emits "
+            "`action_changed` and broadcasts `state_update` on success."
+        ),
     )
-    def set_paused(
+    async def set_paused(
         self,
         paused: bool = InputField(
             default=False,
-            description="True to stop model steps; false to resume continuous inference.",
+            description=(
+                "True pauses continuous generation before the next model step; false resumes "
+                "it. Both values release all held keyboard and mouse controls."
+            ),
         ),
     ) -> ActionChanged:
         """Pause or resume and return the released native input state."""
@@ -305,11 +353,17 @@ class Diamond(ReactorPipeline):
         self.state.paused = paused
         self.state._step_requested = False
         self._clear_controls()
-        return self._action_changed()
+        message = self._action_changed()
+        await self._send_state_update()
+        return message
 
     @event(
         name="step",
-        description="Request exactly one model step while the shared world is paused.",
+        description=(
+            "Queue exactly one generated frame while continuous generation is paused. When "
+            "generation is running, the command is acknowledged without effect. Emits no "
+            "model message."
+        ),
     )
     def step(self) -> None:
         """Request one inference step without leaving paused mode."""
@@ -318,18 +372,30 @@ class Diamond(ReactorPipeline):
 
     @event(
         name="set_key_state",
-        description="Hold or release a native key for human control; replay ignores it.",
+        description=(
+            "Hold or release one native game key from the next generated frame until changed. "
+            "Only human input uses the value; replay acknowledges and ignores it. Emits "
+            "`action_changed` and, for human input, broadcasts `state_update`, or returns "
+            "`command_error` when `key` is unsupported."
+        ),
     )
-    def set_key_state(
+    async def set_key_state(
         self,
         key: str = InputField(
             default="w",
             choices=KEYS,
-            description="Native DIAMOND key name.",
+            description=(
+                "Native key to change: `w`, `a`, `s`, and `d` move; `space` jumps; `ctrl` "
+                "crouches; `shift` walks; `1`, `2`, and `3` select weapon slots; `r` reloads. "
+                "Used only while `controller` is `human`."
+            ),
         ),
         pressed: bool = InputField(
             default=True,
-            description="True for key down; false for key up.",
+            description=(
+                "True holds `key` from the next generated frame until released; false releases "
+                "it. Resetting, pausing, or changing controller releases every key."
+            ),
         ),
     ) -> ActionChanged:
         """Update one held keyboard key and return the resulting input state."""
@@ -338,22 +404,36 @@ class Diamond(ReactorPipeline):
                 self.state._pressed_keys = self.state._pressed_keys.union((key,))
             else:
                 self.state._pressed_keys = self.state._pressed_keys.difference((key,))
-        return self._action_changed()
+        message = self._action_changed()
+        if self._controller == "human":
+            await self._send_state_update()
+        return message
 
     @event(
         name="set_mouse_button_state",
-        description="Hold or release a native mouse button; replay ignores it.",
+        description=(
+            "Hold or release one native mouse button from the next generated frame until "
+            "changed. Only human input uses the value; replay acknowledges and ignores it. "
+            "Emits `action_changed` and, for human input, broadcasts `state_update`, or returns "
+            "`command_error` when `button` is unsupported."
+        ),
     )
-    def set_mouse_button_state(
+    async def set_mouse_button_state(
         self,
         button: str = InputField(
             default="left",
             choices=MOUSE_BUTTONS,
-            description="Native mouse button: left fires and right scopes.",
+            description=(
+                "Native mouse button to change: `left` fires and `right` uses the secondary "
+                "action or scope. Used only while `controller` is `human`."
+            ),
         ),
         pressed: bool = InputField(
             default=True,
-            description="True for button down; false for button up.",
+            description=(
+                "True holds `button` from the next generated frame until released; false "
+                "releases it. Resetting, pausing, or changing controller releases every button."
+            ),
         ),
     ) -> ActionChanged:
         """Update one held mouse button and return the resulting input state."""
@@ -366,11 +446,18 @@ class Diamond(ReactorPipeline):
                 self.state._pressed_mouse_buttons = self.state._pressed_mouse_buttons.difference(
                     (button,)
                 )
-        return self._action_changed()
+        message = self._action_changed()
+        if self._controller == "human":
+            await self._send_state_update()
+        return message
 
     @event(
         name="mouse_move",
-        description="Set relative mouse movement for the next human step; replay ignores it.",
+        description=(
+            "Apply one relative camera movement to the next generated frame. Human input "
+            "consumes it once; replay acknowledges and ignores it. Emits `action_changed`, or "
+            "returns `command_error` when either delta is outside its supported range."
+        ),
     )
     def mouse_move(
         self,
@@ -378,13 +465,19 @@ class Diamond(ReactorPipeline):
             default=0.0,
             ge=DELTA_X_MIN,
             le=DELTA_X_MAX,
-            description="Horizontal mouse delta in DIAMOND's native range.",
+            description=(
+                "Horizontal relative movement in native DIAMOND units, from -1000 to 1000. "
+                "Applied once on the next human-controlled frame; zero leaves yaw unchanged."
+            ),
         ),
         delta_y: float = InputField(
             default=0.0,
             ge=DELTA_Y_MIN,
             le=DELTA_Y_MAX,
-            description="Vertical mouse delta in DIAMOND's native range.",
+            description=(
+                "Vertical relative movement in native DIAMOND units, from -200 to 200. Applied "
+                "once on the next human-controlled frame; zero leaves pitch unchanged."
+            ),
         ),
     ) -> ActionChanged:
         """Store one raw mouse delta and return the resulting input state."""
@@ -553,6 +646,10 @@ class Diamond(ReactorPipeline):
             delta_x=delta_x,
             delta_y=delta_y,
         )
+
+    async def _send_state_update(self) -> None:
+        """Broadcast the complete durable control state."""
+        await self.send(StateUpdate.from_state(self.state))
 
     def _replay_trajectory_finished(self) -> bool:
         """Return whether the recorded spawn actions were all consumed."""

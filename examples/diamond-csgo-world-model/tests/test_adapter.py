@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ Diamond = adapter.Diamond
 DiamondOutput = types_module.DiamondOutput
 DiamondState = types_module.DiamondState
 PreparedScene = types_module.PreparedScene
+StateUpdate = types_module.StateUpdate
 
 
 @dataclass
@@ -42,6 +44,14 @@ class _Scalar:
 
     def item(self) -> bool:
         return self._value
+
+
+class _Client:
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    async def send(self, message: Any) -> None:
+        self.messages.append(message)
 
 
 class _World:
@@ -93,16 +103,69 @@ def test_contract_uses_session_hooks_and_documents_side_effects() -> None:
 
     assert contract.lifecycle.session_started is not None
     assert contract.lifecycle.session_ended is not None
-    assert contract.lifecycle.connected is None
+    assert contract.lifecycle.connected is not None
     assert contract.lifecycle.disconnected is None
-    assert all(command.description for command in contract.commands.values())
+    assert all("Emits" in command.description for command in contract.commands.values())
+    assert all(
+        field.info.description
+        for command in contract.commands.values()
+        for field in command.command.__command_fields__.values()
+    )
 
     controller = contract.commands["set_controller"].command.__command_fields__["controller"]
     image = contract.commands["set_spawn_image"].command.__command_fields__["image"]
-    assert controller.info.description is not None
-    assert image.info.description is not None
-    assert "recorded replay" in controller.info.description
-    assert "conditioning frame" in image.info.description
+    assert "next model step" in controller.info.description
+    assert "next model-step boundary" in image.info.description
+
+    document = contract.render_schema().to_openapi()
+    assert set(document["webhooks"]) == {"action_changed", "scene_changed", "state_update"}
+    assert all(
+        webhook["post"]["summary"].startswith("Emitted ")
+        for webhook in document["webhooks"].values()
+    )
+
+
+def test_connect_sends_one_complete_state_snapshot() -> None:
+    """Give a joining viewer the durable controls without replaying events."""
+    model = _ready_model()
+    model.state.controller = "human"
+    model.state.paused = True
+    model.state._pressed_keys = frozenset({"w", "space"})
+    model.state._pressed_mouse_buttons = frozenset({"left"})
+    client = _Client()
+
+    asyncio.run(model._connected(client))
+
+    assert client.messages == [
+        StateUpdate(
+            controller="human",
+            paused=True,
+            pressed_keys=["w", "space"],
+            pressed_mouse_buttons=["left"],
+        )
+    ]
+
+
+def test_durable_control_change_broadcasts_a_state_snapshot() -> None:
+    """Broadcast the complete durable controls after accepting a key change."""
+    model = _ready_model()
+    messages: list[Any] = []
+
+    async def record(message: Any) -> None:
+        messages.append(message)
+
+    model.send = record
+    reply = asyncio.run(model.set_key_state("w", True))
+
+    assert reply.pressed_keys == ["w"]
+    assert messages == [
+        StateUpdate(
+            controller="human",
+            paused=False,
+            pressed_keys=["w"],
+            pressed_mouse_buttons=[],
+        )
+    ]
 
 
 def test_playout_matches_upstream_game_timing() -> None:
