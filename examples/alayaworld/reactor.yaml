@@ -1,0 +1,30 @@
+apiVersion: v1beta
+kind: VideoModel
+
+model:
+  name: alayaworld-distilled
+  version: v0.0.1
+  description: |
+    Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+
+runtime:
+  import: alayaworld:AlayaWorld
+  config: alayaworld.yaml
+  weights_path: ~/.cache/reactor_registry/alayaworld
+
+build:
+  runtime_version: "3.1.2"
+
+recording:
+  enabled: true
+  chunk_seconds: 4
+  clip_max_seconds: 300
+  video_track: main_video
+  video:
+    codec: h264
+    preset: veryfast
+    crf: 23
