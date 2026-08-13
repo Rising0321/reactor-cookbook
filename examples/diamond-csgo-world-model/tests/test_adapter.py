@@ -281,8 +281,8 @@ def test_model_download_uses_the_runtime_weights_mount(
     """Persist Hugging Face assets under Reactor's mounted weights root."""
     monkeypatch.setenv("REACTOR_WEIGHTS_PATH", str(tmp_path))
 
-    assert (
-        pipeline_module.get_weights_path() / "huggingface" == tmp_path / "huggingface"
+    assert pipeline_module._weights_cache_path() == (
+        tmp_path / "diamond-csgo-world-model" / "huggingface"
     )
 
 

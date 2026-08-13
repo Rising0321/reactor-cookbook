@@ -63,6 +63,10 @@ _SPAWN_IMAGE_FIELD = InputField(
 )
 
 
+def _weights_cache_path() -> Path:
+    return get_weights_path() / "diamond-csgo-world-model" / "huggingface"
+
+
 class Diamond(ReactorPipeline):
     """Stream one shared Counter-Strike world controlled by native game inputs."""
 
@@ -127,7 +131,7 @@ class Diamond(ReactorPipeline):
                 repo_id=config.repo_id,
                 revision=config.revision,
                 allow_patterns="csgo/*",
-                cache_dir=get_weights_path() / "huggingface",
+                cache_dir=_weights_cache_path(),
             )
         )
         cfg.agent = omega_conf.load(snapshot / "csgo/config/agent/csgo.yaml")
