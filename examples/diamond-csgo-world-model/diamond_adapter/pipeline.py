@@ -59,6 +59,8 @@ _SPAWN_IMAGE_FIELD = InputField(
 class Diamond(ReactorPipeline):
     """Run one session-wide DIAMOND CSGO world from Reactor commands."""
 
+    fps = 15
+    buffer_size = 1
     state: DiamondState
 
     def __init__(self) -> None:

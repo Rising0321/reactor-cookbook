@@ -52,6 +52,10 @@ the image:
 reactor build && reactor run
 ```
 
+`diamond.yaml` selects the `fast` profile for interactive play. Change
+`profile` to `higher_quality` to use more diffusion denoising steps for cleaner
+generation at substantially lower throughput.
+
 On an NVIDIA host, expose the GPU with `reactor run --gpus all`. On Apple
 Silicon, build the native Linux image before running:
 
@@ -130,6 +134,8 @@ clips up to five minutes.
   player policy.
 - Keyboard keys and mouse buttons are held until released. `mouse_move`
   contains relative deltas that are consumed by exactly one inference step.
+- Generation advances at DIAMOND's native 15 FPS with a one-frame output
+  buffer, so held controls do not run ahead of the displayed world.
 - The frontend owns keyboard, pointer, touch, and gamepad mappings. The backend
   exposes DIAMOND's native action semantics without prescribing a control
   layout or sensitivity.

@@ -105,6 +105,12 @@ def test_contract_uses_session_hooks_and_documents_side_effects() -> None:
     assert "conditioning frame" in image.info.description
 
 
+def test_playout_matches_upstream_game_timing() -> None:
+    """Advance the world at its native rate without queuing stale controls."""
+    assert Diamond.fps == 15
+    assert Diamond.buffer_size == 1
+
+
 def test_reconnect_preserves_the_session_world(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the shared world alive when the pipeline generator is recreated."""
     model = _ready_model()
