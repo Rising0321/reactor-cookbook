@@ -1,0 +1,25 @@
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments and upstream checkouts live in the mounted weights cache.
+.venv/
+venv/
+Matrix-Game-3.5/
+
+# Editor and operating-system state
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Source-control and Docker configuration
+.git/
+.gitignore
+Dockerfile
+.dockerignore
