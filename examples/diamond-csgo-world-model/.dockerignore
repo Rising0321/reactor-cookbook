@@ -1,0 +1,27 @@
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python environments
+.venv/
+venv/
+
+# Development-only files
+tests/
+
+# Editor and operating-system state
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Source control and Docker inputs already consumed by the build
+.git/
+.gitignore
+Dockerfile
+.dockerignore
