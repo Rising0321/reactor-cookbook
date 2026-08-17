@@ -1,0 +1,23 @@
+# Python and local development state
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Public source checkouts and model caches are prepared in the CLI-mounted
+# weights directory at runtime, rather than copied into the image.
+AlayaWorld/
+weights/
+
+# Editor, source-control, and Docker metadata
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.git/
+.gitignore
+Dockerfile
+.dockerignore
