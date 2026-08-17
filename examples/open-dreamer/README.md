@@ -9,22 +9,12 @@ The adapter and upstream implementation remain separate. This directory owns
 only the Reactor integration; its Dockerfile fetches the exact tested
 OpenDreamer revision into the model image and never edits its tracked files.
 
-## Prerequisites
-
-- The [`reactor` CLI](https://deploy-docs.reactor.inc/development/quickstart)
-  and Docker.
-- An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
-  intentionally unsupported.
-- About 8 GB in Reactor's weights cache for the checkpoint, plus Docker image
-  space for CUDA dependencies and the 184 MB public VPT sample.
-
 ## Run
 
 This directory is a `reactor` workspace: `reactor.yaml` names the model, the
 `Dockerfile` builds its CUDA-capable image, and `requirements.txt` pins the
 runtime and inference dependencies. The CLI installs everything inside the
-model image; the host only needs the CLI, Docker, and the NVIDIA prerequisites
-listed above. Build the image, then expose one GPU to the container:
+model image. Build the image, then expose one GPU to the container:
 
 ```sh
 cd examples/open-dreamer
