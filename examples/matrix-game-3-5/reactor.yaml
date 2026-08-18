@@ -1,0 +1,30 @@
+apiVersion: v1beta
+kind: VideoModel
+
+model:
+  name: matrix-game-3-5-distilled-first-person
+  version: v0.0.1
+  description: |
+    Explore an autoregressive world from an image, a prompt, and six-axis camera motion.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+
+runtime:
+  import: matrix_game_3_5:MatrixGame35
+  config: matrix_game_3_5.yaml
+  weights_path: ~/.cache/reactor_registry/matrix-game-3-5
+
+build:
+  runtime_version: "3.1.2"
+
+recording:
+  enabled: true
+  chunk_seconds: 4
+  clip_max_seconds: 300
+  video_track: main_video
+  video:
+    codec: h264
+    preset: veryfast
+    crf: 23

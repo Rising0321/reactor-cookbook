@@ -1,0 +1,7 @@
+# Public Runtime API version validated by this example. The model's upstream
+# packages are installed into an isolated Python 3.10 worker environment at
+# model load, keeping the Python 3.12 serving environment independent.
+reactor-runtime==3.1.2
+
+# Image validation and normalization in the serving process.
+Pillow>=10.1
