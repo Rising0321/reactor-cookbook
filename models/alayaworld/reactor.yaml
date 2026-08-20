@@ -3,9 +3,9 @@ kind: VideoModel
 
 model:
   name: alaya-world
-  version: v0.0.1
+  version: v1.1.0
   description: |
-    Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
+    Play distilled AlayaWorld v1.1 with live prompt and six-axis camera controls.
   resources:
     gpu:
       type: NVIDIA_B200
@@ -14,7 +14,7 @@ model:
 runtime:
   import: alayaworld:AlayaWorld
   config: alayaworld.yaml
-  weights_path: ~/.cache/reactor_registry/alayaworld
+  weights_path: ~/.cache/reactor_registry/alayaworld-v1-1
 
 build:
   runtime_version: "3.1.2"

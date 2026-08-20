@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
-
 from reactor_runtime import CommandError, UploadedFile
 
 _UPLOAD_MAX_BYTES = 25 * 1024 * 1024
@@ -70,6 +69,15 @@ def compact_rollout_cache(
             for new_index, old_index in enumerate(keep)
             if old_index in world_points
         }
+    for attribute in (
+        "vigeo_pointmaps",
+        "vigeo_valid_masks",
+        "vigeo_predicted_poses",
+        "vigeo_intrinsics",
+    ):
+        values = getattr(bank, attribute, None)
+        if isinstance(values, list) and len(values) == total:
+            setattr(bank, attribute, [values[index] for index in keep])
 
 
 def validate_uploaded_image(image: UploadedFile) -> None:
@@ -106,7 +114,9 @@ def validate_uploaded_image(image: UploadedFile) -> None:
     except CommandError:
         raise
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as error:
-        raise CommandError("invalid_image", f"{image.name} cannot be decoded.") from error
+        raise CommandError(
+            "invalid_image", f"{image.name} cannot be decoded."
+        ) from error
 
 
 def uploaded_image_video(
@@ -132,24 +142,30 @@ def uploaded_image_video(
 
 
 def load_upstream_modules(source_path: Path) -> dict[str, Any]:
-    """Import the unmodified public AlayaWorld inference surface lazily."""
+    """Import the unmodified public AlayaWorld v1.1 inference surface lazily."""
     source = str(source_path)
     if source not in sys.path:
         sys.path.insert(0, source)
-    rollout = importlib.import_module("flash_alaya.utils.rollout_utils")
+    rollout = importlib.import_module("alaya.inference.rollout_utils")
     return {
         "torch": importlib.import_module("torch"),
-        "load_config": importlib.import_module("flash_alaya.alaya.config.loader").load_config,
-        "pipeline_type": importlib.import_module("flash_alaya.utils.pipeline").FlashAlayaPipeline,
+        "load_config": importlib.import_module("alaya.config.loader").load_config,
+        "rollout_trainer": importlib.import_module(
+            "alaya.trainer.rollout_trainer"
+        ).RolloutTrainer,
+        "build_model_components": importlib.import_module(
+            "alaya.model.loader"
+        ).build_model_components,
+        "build_history_encoder": importlib.import_module(
+            "alaya.memory.builder"
+        ).build_history_encoder,
+        "load_checkpoint_weights": importlib.import_module(
+            "alaya.checkpoint"
+        ).load_checkpoint_weights,
         "load_input_sample": rollout.load_input_sample,
         "check_input_resolution": rollout.check_input_resolution,
-        "plan_rollout": rollout.plan_rollout,
-        "build_engine": rollout.build_engine,
-        "apply_da3_robust_scale": importlib.import_module(
-            "inference.da3_patch"
-        ).apply_da3_robust_scale,
         "pytorch_attention": importlib.import_module(
-            "flash_alaya.ltx2.modules.attention"
+            "ltx2.modules.attention"
         ).AttentionFunction.PYTORCH,
     }
 
@@ -178,7 +194,9 @@ class FlashAttention4:
     PyTorch implementation that builds the equivalent banded mask.
     """
 
-    def __init__(self, flash_attention: Any, masked_fallback: Any, torch_module: Any) -> None:
+    def __init__(
+        self, flash_attention: Any, masked_fallback: Any, torch_module: Any
+    ) -> None:
         self._flash_attention = flash_attention
         self._masked_fallback = masked_fallback
         self._torch = torch_module

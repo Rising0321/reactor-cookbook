@@ -1,40 +1,28 @@
-# AlayaWorld example
+# AlayaWorld v1.1
 
-Serve the public AlayaWorld distilled autoregressive world model through
-Reactor Runtime. The adapter calls AlayaWorld's `FlashAlayaPipeline` directly;
-the weights, text encoder, spatial memory, prompt encoding, denoiser, and VAE
-remain in the Runtime process and stay resident across chunks.
+Serve the public AlayaWorld v1.1 distilled autoregressive world model through
+Reactor Runtime. Start from an uploaded or built-in image, change the prompt at
+chunk boundaries, and move a six-axis camera while the generated world streams
+back over `main_video`.
 
-AlayaWorld generates four latent frames per turn. Each turn adds 32 RGB frames,
-or about 1.33 seconds of video. Prompt and six-axis camera values are sampled
-at the chunk boundary. Commands received during an in-flight CUDA turn apply
-to the following chunk.
+This recipe uses the stage3 DMD student: four denoising steps produce four
+latent frames, which the LTX-2.3 VAE decodes into 32 RGB frames at 960x544. One
+chunk represents about 1.33 seconds at the model's native 24 FPS. The model,
+text encoder, VAE, temporal history, and ViGeo cache remain in the Runtime
+process across chunks; there is no worker process or second model copy.
 
-A turn takes longer to compute than the video it produces, and how much longer
-depends on how far the camera moves, so the adapter declares no fixed frame rate
-and emits each chunk with the time it took. Frames then play at the rate they
-were produced instead of draining in 1.33 seconds and leaving the stream with
-nothing to show. `buffer_size` bounds the queue at one chunk, which is as low as
-it goes — the runtime never applies a bound below a single chunk — so a camera
-change is answered by the next turn generated rather than waiting behind frames
-already queued.
-
-A new session starts paused without choosing a scene for the user. Upload an
-image with `set_image`, or invoke `random_image` to select one of the public
-AlayaWorld examples. Either command initializes the autoregressive cache and
-starts generation.
+AlayaWorld v1.1 differs from the original recipe in two important ways. A
+nine-frame causal VAE motion window replaces the static nearby condition, and
+ViGeo's streaming 3D point cache replaces Depth-Anything-3. Camera AdaLN is not
+used: frontend camera values become pixel-rate camera-to-world poses, and ViGeo
+re-renders the spatial condition for the next chunk from those poses.
 
 ## Run
 
-This directory is a `reactor` workspace. The manifest names the model and its
-B200 resource, the Dockerfile builds a Python 3.12 image with the CUDA 12.8
-PyTorch wheels, and `requirements.txt` pins Reactor Runtime alongside the model
-dependencies. The host needs only the
-[`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
-the NVIDIA Container Toolkit, and a compatible NVIDIA GPU.
-
-Gemma is gated. Accept its Hugging Face license, export a read token, then build
-the image and expose one GPU to the container:
+You need the `reactor` CLI, Docker with the NVIDIA Container Toolkit, and one
+CUDA GPU with enough memory for the 13.1B transformer, Gemma, VAE, and ViGeo.
+The checked-in resource requests one NVIDIA B200. Gemma is gated, so accept its
+Hugging Face license and make a read token available on first load.
 
 ```sh
 cd models/alayaworld
@@ -44,33 +32,25 @@ reactor build
 reactor run --gpus device=0 -e HF_TOKEN
 ```
 
-The bare `-e HF_TOKEN` form forwards the host value without putting the token in
-the Docker command line. `--gpus device=3` selects host GPU 3 and presents it as
-device 0 inside the container; `--gpus all` exposes every GPU. The manifest
-requests one B200 when the same workspace is deployed.
-
-`reactor run` reuses the image produced by `reactor build`, and builds one on
-the first run when no local image exists. It serves WebRTC signaling on
-`http://localhost:8080` by default. Rebuild after changing code or
-dependencies. A different port is applied to both Docker and Runtime:
+The bare `-e HF_TOKEN` forwards the host value without placing the token in the
+Docker command line. Select another host GPU with `--gpus device=3`. A different
+port is applied to both Docker and Runtime:
 
 ```sh
-reactor build && reactor run --gpus device=0 -e HF_TOKEN --port 18080
-```
-
-Check readiness after the model finishes loading. Use the port passed to
-`reactor run`; for the command above that is `18080`:
-
-```sh
+reactor run --gpus device=3 -e HF_TOKEN --port 18080
 curl -s localhost:18080/health
 curl -s localhost:18080/schema
 ```
 
+`reactor run` reuses the image from `reactor build` and builds it automatically
+when the local image does not exist. Model loading can take several minutes on
+the first start because it downloads assets and reads large checkpoints before
+health becomes available.
+
 ## Play it in the browser
 
-[`demo/`](./demo) is a small Next.js app for this model: pick a starting image,
-write a prompt, and steer the camera from the keyboard while the video streams
-back. With the container running, start it in a second terminal:
+[`demo/`](./demo) is a small Next.js client for the model. With Runtime serving
+on its default port, start it in another terminal:
 
 ```sh
 cd models/alayaworld/demo
@@ -78,174 +58,113 @@ pnpm install
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The page lists three steps —
-**Connect**, choose a starting image, then drive — and reports which of them it is
-waiting on, so a disabled control always says why.
+Open [http://localhost:3000](http://localhost:3000). For a non-default Runtime
+port, copy `demo/.env.example` to `demo/.env` and set
+`REACTOR_LOCAL_URL=http://localhost:18080`.
 
-The app connects to `http://localhost:8080` with no configuration, matching where
-`reactor run` serves. Tell it about a different port through the environment:
-
-```sh
-cp .env.example .env
-# REACTOR_LOCAL_URL=http://localhost:18080   # match `reactor run --port`
-```
-
-`W`/`A`/`S`/`D` move, `I`/`J`/`K`/`L` look, `Space`/`C` change height, and `Q`/`E`
-roll. [`demo/README.md`](./demo/README.md) covers the full mapping and how its
-typed client is generated from the `/schema` response above.
-
-As an alternative, the [Reactor Sandbox](https://reactor-sandbox.vercel.app/)
-reaches the same container with **Local (Direct)**.
+`W`/`A`/`S`/`D` move, `I`/`J`/`K`/`L` look, `Space`/`C` change height, and
+`Q`/`E` roll. [`demo/README.md`](./demo/README.md) describes the complete
+mapping and typed client.
 
 ## Public source and model assets
 
-The CLI bind-mounts `runtime.weights_path` from `reactor.yaml` and exports that
-directory to the model as `REACTOR_WEIGHTS_PATH`. The checked-in default keeps
-AlayaWorld under `~/.cache/reactor_registry/alayaworld`, outside the image and
-the Git checkout, so container rebuilds retain every large download.
+`runtime.weights_path` points at `~/.cache/reactor_registry/alayaworld-v1-1`.
+The CLI bind-mounts that directory and exports it as `REACTOR_WEIGHTS_PATH`, so
+image rebuilds preserve sources and checkpoints. To relocate everything,
+change only that value in [`reactor.yaml`](./reactor.yaml).
 
-On first load the adapter clones the pinned AlayaWorld, Depth-Anything-3, and
-TAEHV revisions, downloads the merged checkpoint and Gemma text encoder, and
-populates the pinned DA3 cache. Interrupted Hugging Face downloads resume on
-the next start. Later runs verify and reuse the completed resources. The
-playground cases used by `random_image` arrive in the AlayaWorld checkout; no
-separate sample dataset is required.
+The first model load prepares every missing public asset automatically:
 
-The TAEHV checkout supplies the tiny decoder that `inference.bank_taehv` uses for
-spatial-memory pixels. Its `taeltx2_3_wide` weights are the larger LTX-2.3
-variant, published on a branch of the upstream repository rather than its default
-one, which is why `assets.taehv_source` pins a revision that a plain clone would
-not reach. Setting `bank_taehv: false` skips the decoder without removing the
-checkout; dropping `assets.taehv_source` skips the download too.
+- the pinned AlayaWorld v1.1 and ViGeo source revisions;
+- the LTX-2.3 architecture, VAE, and text-connector weights from the public
+  AlayaWorld bundle;
+- the complete v1.1 stage2b transformer and history encoder;
+- the v1.1 stage3 distilled LoRA;
+- the Gemma text encoder; and
+- the ViGeo 1.1 checkpoint.
 
-`source.path` in `alayaworld.yaml` is relative to the mounted weights root.
-Every other relative model, configuration, and playground path is then resolved
-from that source checkout. To place the cache elsewhere, change only
-`runtime.weights_path` in `reactor.yaml`; the CLI creates and mounts that path.
+Allow about 100 GB for the prepared assets and download metadata. Downloads are
+resumable. Completed files and source revisions are verified on later starts;
+an existing checkout at another revision fails clearly instead of being
+rewritten. The two `random_image` cases ship with the pinned AlayaWorld source,
+so there is no separate sample dataset.
 
-Model loading reports preparation progress in the container log. A failed
-download keeps health unavailable and names the public repository; gated model
-errors point to Hugging Face authentication. An existing source checkout must
-match the configured immutable revision, so startup never rewrites a different
-developer revision.
-
-The adapter imports DA3 directly from its pinned source checkout. Its optional
-visualization and export dependency set is outside the inference image because
-those paths are not used for serving.
+The LTX-2.3 base filename referenced by the upstream v1.1 config is not present
+in the current public LTX-2 repository snapshot. The public AlayaWorld bundle
+contains the same architecture metadata, VAE, and text-connector weights. The
+adapter uses those components, then loads the complete stage2b transformer with
+`missing=0` and `unexpected=0` before applying the stage3 LoRA. This keeps the
+recipe fully reproducible from available public artifacts.
 
 AlayaWorld and its weights use the LTX-2 Community License for academic and
-non-commercial use. Gemma and Depth-Anything-3 retain their own terms. The
-example does not redistribute their source or checkpoints.
+non-commercial use. Gemma and ViGeo retain their own terms. This recipe does not
+redistribute their source or checkpoints.
 
 ## Controls
 
-- `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes plus an optional
-  prompt, then resets from that image.
-- `random_image` selects a different built-in example when possible and applies
-  its matching prompt.
+- `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes and an optional
+  prompt, then starts a fresh rollout.
+- `random_image` selects a different built-in scene and its matching prompt.
 - `set_forward`, `set_strafe`, and `set_vertical` control local Z, X, and Y
   translation. Positive values move forward, right, and up.
 - `set_pitch`, `set_yaw`, and `set_roll` control local X, Y, and Z rotation.
   Positive values look up, turn right, and roll clockwise.
-- Every camera command accepts `-1.0` to `1.0` and returns a
-  `CameraMotionChanged` message containing the complete six-axis state and the
-  one-based chunk expected to consume it.
-- `set_prompt` changes the text condition for the next chunk and returns a
-  `PromptQueued` confirmation with the expected one-based chunk number.
-- `set_paused` stops before another expensive chunk starts and releases camera
-  motion. It returns `PauseChanged` with the resulting pause state.
-- `step` generates and plays exactly one 32-frame chunk while paused and returns
-  `StepQueued` with the chunk number.
-- `reset` rebuilds the autoregressive and spatial-memory state from the initial
-  selected image. Its optional non-negative `seed` selects the next reproducible
-  rollout, and `RolloutResetQueued` reports the seed and replaced chunk count.
+- `set_prompt` encodes new text for the next chunk without resetting history.
+- `set_paused` stops before the next chunk and releases camera motion.
+- `step` generates exactly one 32-frame chunk while paused.
+- `reset` rebuilds the causal VAE, temporal history, and ViGeo state from the
+  selected image. Its optional non-negative seed selects the fresh rollout.
 
-Prompt and camera commands require a selected image. Prompts are stripped and
-must contain non-whitespace text. `ImageSelected` reports the effective prompt
-alongside the uploaded or built-in filename, so every state-changing control has
-a typed confirmation in the model-message timeline. Successful controls also
-broadcast a `StateUpdate` snapshot with the complete prompt, image, playback,
-rollout, and six-axis camera state. A newly connected viewer receives the same
-snapshot immediately.
+All camera values are normalized to `[-1, 1]`. Camera and prompt commands return
+typed messages with the one-based chunk expected to consume them. Successful
+commands also broadcast `StateUpdate`, including queued and active prompts,
+image, pause state, completed chunk count, and all six camera axes.
 
-The frontend owns keyboard, pointer, joystick, sensitivity, and layout mapping.
-Key down sends `-1` or `1`; key up sends zero. [`demo/`](./demo) binds all six
-axes to twelve keys — W/S and A/D translate, I/K and J/L rotate, Space/C and Q/E
-cover height and roll — which suits a model that samples one velocity per chunk
-better than mouse deltas would. The same axes are equally reachable from touch
-controls, twin joysticks, or a six-degree-of-freedom controller. The backend
-normalizes simultaneous translation and rotation axes before integrating them
-into the pixel-rate camera-to-world matrices consumed by AlayaWorld.
+The frontend owns keyboard, pointer, joystick, and sensitivity mapping. The
+backend integrates the normalized axes into 32 camera poses immediately before
+the next ViGeo render, so a command received during an in-flight CUDA turn is
+applied to the following chunk.
 
 ## Image uploads
 
-The `set_image` command declares an `UploadedFile` parameter in Runtime's
-schema. A Reactor client reserves a session upload slot, writes the raw bytes to
-its returned URL, and sends the resulting upload reference with the command.
-This lets a schema-driven frontend render a real file picker instead of putting
-binary data inside a command message.
-
-[`example_images/`](./example_images) contains two licensed upstream still
-images ready for manual upload. These convenience copies are independent of
-`random_image`, which reads the same pinned playground cases from the source
-checkout prepared at startup.
+`set_image` declares an `UploadedFile` in the model schema. A Reactor client
+reserves a session upload, writes the raw bytes to its returned URL, and sends
+the upload reference with the command. [`example_images/`](./example_images)
+contains two licensed upstream still images ready for manual upload.
 
 Uploads are limited to 25 MiB and 100 million decoded pixels. EXIF orientation
 is applied before the image is resized and center-cropped to 960x544. The
-configured `inputs.upload_template` supplies camera calibration and a trajectory
-horizon; its pixels are not used. Uploaded bytes remain session-scoped and are
-released when the session ends.
+configured `inputs.upload_template` supplies only camera calibration; its image
+pixels are not used. Uploaded bytes remain session-scoped.
 
-`inputs.random_images` in `alayaworld.yaml` lists the known image triplets used
-by `random_image`. The current configuration exposes the two public playground
-cases shipped with the pinned AlayaWorld source.
+## Stateful chunk inference
 
-## Long-running sessions
+At reset, the adapter creates the same state used by upstream v1.1 validation:
+one sink latent, four temporal-history latents, a nine-pixel-frame causal motion
+window, and a ViGeo stream initialized from the selected image. Each chunk:
 
-`stream.max_chunks_per_rollout` defaults to 512. After chunk 512, the adapter
-broadcasts `RolloutResetQueued`, releases camera motion, and rebuilds the
-autoregressive state from the selected image, active prompt, and seed without
-reloading model weights. Chunk numbering then starts again at 1. This bounds the
-dense camera trajectory while allowing the Reactor session to continue.
+1. samples the queued prompt and 32 frontend camera poses;
+2. re-renders the spatial condition from the ViGeo point cache;
+3. runs the four-step distilled transformer with temporal memory;
+4. decodes exactly 32 target frames and re-encodes the next motion window; and
+5. appends the generated geometry and updates the four-latent history.
 
-`inference.attention_backend` chooses which attention implementation serves the
-model. `flash_attention_4` is the default and needs a Hopper or Blackwell GPU;
-`pytorch` serves anything older, and `upstream` leaves AlayaWorld's own selection
-alone. The adapter substitutes the callable on the loaded attention modules
-rather than patching the pinned source, and masked blocks always fall through to
-the PyTorch implementation, which is the only one that builds the banded mask a
-sliding window needs.
+Only the inference transformer is loaded. The DMD training teacher, critic,
+optimizers, dataloaders, and FSDP wrappers are intentionally omitted. The
+adapter calls the upstream model, checkpoint loader, history encoder, VAE, and
+ViGeo helpers directly and does not modify the cloned AlayaWorld source.
 
-`inference.bank_taehv` decodes spatial-memory pixels — the depth and warp sources
-the model builds its memory from — with a tiny decoder instead of the full VAE.
-It is lossy for that memory and leaves the frames the client sees untouched. The
-checkpoint comes from the pinned `assets.taehv_source` checkout; its filename
-selects the decoder architecture, so renaming it silently changes the model.
+The spatial bank is bounded to 320 frames, retaining 160 recent frames and 160
+older keyframes. `stream.max_chunks_per_rollout` defaults to 512; reaching it
+queues a reset from the selected image, active prompt, and seed without
+reloading weights, so the Reactor session can continue indefinitely.
 
-The adapter uses the default `torch.compile` mode so generation keeps
-Inductor-compiled kernels without enabling CUDA Graph Trees, whose thread-local
-execution state is incompatible with Runtime's off-loop chunk generation.
+`inference.attention_backend` defaults to `flash_attention_4` for Hopper and
+Blackwell GPUs. `pytorch` is useful for debugging but requires substantially
+more time and memory at full resolution. `inference.compile` is `none` by
+default because the four-step student is already fast and eager mode avoids a
+large first-turn compile; set a supported `torch.compile` mode when repeated
+throughput matters more than startup latency.
 
-Those kernels are built on the first turn that reaches them rather than when the
-engine is constructed, and the attention backend compiles its own on top, so the
-adapter generates `inference.warmup_chunks` throwaway turns from a built-in scene
-while loading and discards the rollout they build. Health stays unavailable until
-that finishes, which keeps a cost of tens of seconds off the first client's first
-chunk. Set it to `0` to serve sooner and pay the compile on first use; the caches
-live in the container, so a restart compiles again.
-
-Autoregressive history remains a 16-latent sliding window. The adapter keeps
-only the latest generated latent outside that window and bounds the spatial
-bank at 320 frames: 160 dense recent frames plus 160 keyframes sampled across
-the older trajectory. This keeps GPU memory and retrieval work bounded while
-preserving sparse long-range viewpoints within the active rollout. Very old
-revisits therefore have less spatial detail than recent ones, and the automatic
-rollout reset deliberately trades unbounded history for predictable resources.
-
-## Streaming decode
-
-The public VAE is non-causal. The adapter decodes each new chunk with six
-latents of left context, which keeps memory bounded and avoids re-decoding the
-whole history. It cannot be pixel-identical to a future-aware offline decode at
-the live edge. Recording captures the same interactive frames sent over
-`main_video` and requires `ffmpeg` on `PATH`.
+Recording captures the same interactive frames sent on `main_video` and
+requires `ffmpeg` on `PATH`.

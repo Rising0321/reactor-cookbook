@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Never, cast
 
 import yaml
-
 from reactor_runtime import get_weights_path
 from reactor_runtime.log import get_logger
 
@@ -44,20 +43,21 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
         raise ValueError("AlayaWorld requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text())
     if not isinstance(document, dict):
-        raise ValueError(f"{config_path}: expected a YAML mapping")
+        raise TypeError(f"{config_path}: expected a YAML mapping")
     source = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
     inference = _mapping(document.get("inference"), "inference")
     inputs = _mapping(document.get("inputs"), "inputs")
     motion = _mapping(document.get("motion"), "motion")
-    decode = _mapping(document.get("decode"), "decode")
     memory = _mapping(document.get("memory"), "memory")
     stream = _mapping(document.get("stream", {}), "stream")
-    da3_source = _mapping(assets.get("da3_source"), "assets.da3_source")
+    vigeo_source = _mapping(assets.get("vigeo_source"), "assets.vigeo_source")
 
     compile_mode = str(inference.get("compile", "reduce-overhead"))
     if compile_mode not in _COMPILE_MODES:
-        raise ValueError(f"inference.compile must be one of {', '.join(_COMPILE_MODES)}")
+        raise ValueError(
+            f"inference.compile must be one of {', '.join(_COMPILE_MODES)}"
+        )
     attention_backend = str(inference.get("attention_backend", "flash_attention_4"))
     if attention_backend not in _ATTENTION_BACKENDS:
         raise ValueError(
@@ -67,24 +67,29 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
     if warmup_chunks < 0:
         raise ValueError("inference.warmup_chunks must be zero or more")
 
-    overlap = int(decode.get("overlap_latents", 6))
-    if overlap <= 0:
-        raise ValueError("decode.overlap_latents must be positive")
     max_spatial_frames = int(memory.get("max_spatial_frames", 320))
     recent_spatial_frames = int(memory.get("recent_spatial_frames", 160))
     if max_spatial_frames < 10:
         raise ValueError("memory.max_spatial_frames must be at least 10")
     if not 1 <= recent_spatial_frames <= max_spatial_frames:
-        raise ValueError("memory.recent_spatial_frames must be between 1 and max_spatial_frames")
+        raise ValueError(
+            "memory.recent_spatial_frames must be between 1 and max_spatial_frames"
+        )
     max_chunks_per_rollout = int(stream.get("max_chunks_per_rollout", 512))
     if max_chunks_per_rollout < 1:
         raise ValueError("stream.max_chunks_per_rollout must be positive")
 
     motion_rates = {
         "strafe_units_per_second": float(motion.get("strafe_units_per_second", 0.126)),
-        "vertical_units_per_second": float(motion.get("vertical_units_per_second", 0.261)),
-        "forward_units_per_second": float(motion.get("forward_units_per_second", 1.905)),
-        "pitch_degrees_per_second": float(motion.get("pitch_degrees_per_second", 4.039)),
+        "vertical_units_per_second": float(
+            motion.get("vertical_units_per_second", 0.261)
+        ),
+        "forward_units_per_second": float(
+            motion.get("forward_units_per_second", 1.905)
+        ),
+        "pitch_degrees_per_second": float(
+            motion.get("pitch_degrees_per_second", 4.039)
+        ),
         "yaw_degrees_per_second": float(motion.get("yaw_degrees_per_second", 9.375)),
         "roll_degrees_per_second": float(motion.get("roll_degrees_per_second", 4.094)),
     }
@@ -93,12 +98,6 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
             raise ValueError(f"motion.{name} must be positive")
 
     source_path = _path(get_weights_path(), source["path"])
-    taehv_raw = assets.get("taehv")
-    taehv_path = _path(source_path, taehv_raw) if taehv_raw else None
-    taehv_source_raw = assets.get("taehv_source")
-    taehv_source = (
-        _mapping(taehv_source_raw, "assets.taehv_source") if taehv_source_raw else None
-    )
     random_inputs_raw = inputs.get("random_images")
     if not isinstance(random_inputs_raw, list) or not random_inputs_raw:
         raise ValueError("inputs.random_images must be a non-empty YAML list")
@@ -109,35 +108,37 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
         upstream_config=_path(source_path, inference["config"]),
         upload_template=_path(source_path, inputs["upload_template"]),
         random_inputs=tuple(_path(source_path, value) for value in random_inputs_raw),
-        model=_asset(source_path, assets.get("model"), "assets.model"),
+        base_model=_asset(source_path, assets.get("base_model"), "assets.base_model"),
+        ar_transformer=_asset(
+            source_path,
+            assets.get("ar_transformer"),
+            "assets.ar_transformer",
+        ),
+        history_encoder=_asset(
+            source_path,
+            assets.get("history_encoder"),
+            "assets.history_encoder",
+        ),
+        dmd_lora=_asset(source_path, assets.get("dmd_lora"), "assets.dmd_lora"),
         gemma=_asset(source_path, assets.get("gemma"), "assets.gemma"),
-        da3_source_path=_path(source_path, da3_source["path"]),
-        da3_source_url=_repository_url(da3_source.get("url"), "assets.da3_source.url"),
-        da3_source_revision=_revision(da3_source.get("revision"), "assets.da3_source.revision"),
-        da3_model=_asset(source_path, assets.get("da3_model"), "assets.da3_model"),
-        da3_cache=_path(source_path, assets["da3_cache"]),
+        vigeo_source_path=_path(source_path, vigeo_source["path"]),
+        vigeo_source_url=_repository_url(
+            vigeo_source.get("url"),
+            "assets.vigeo_source.url",
+        ),
+        vigeo_source_revision=_revision(
+            vigeo_source.get("revision"),
+            "assets.vigeo_source.revision",
+        ),
+        vigeo_checkpoint=_asset(
+            source_path,
+            assets.get("vigeo_checkpoint"),
+            "assets.vigeo_checkpoint",
+        ),
         seed=int(inference.get("seed", 1234)),
         compile_mode=compile_mode,
         warmup_chunks=warmup_chunks,
         attention_backend=attention_backend,
-        flex_attention=bool(inference.get("flex_attention", True)),
-        ttc=bool(inference.get("ttc", False)),
-        bank_taehv=bool(inference.get("bank_taehv", False)),
-        taehv_path=taehv_path,
-        taehv_source_path=(
-            None if taehv_source is None else _path(source_path, taehv_source["path"])
-        ),
-        taehv_source_url=(
-            None
-            if taehv_source is None
-            else _repository_url(taehv_source.get("url"), "assets.taehv_source.url")
-        ),
-        taehv_source_revision=(
-            None
-            if taehv_source is None
-            else _revision(taehv_source.get("revision"), "assets.taehv_source.revision")
-        ),
-        decode_overlap_latents=overlap,
         max_spatial_frames=max_spatial_frames,
         recent_spatial_frames=recent_spatial_frames,
         max_chunks_per_rollout=max_chunks_per_rollout,
@@ -158,30 +159,18 @@ def prepare_runtime_assets(config: AlayaWorldConfig) -> None:
         revision=config.source_revision,
         name="AlayaWorld source",
     )
-    _ensure_hf_file(config.model, name="AlayaWorld merged checkpoint")
+    _ensure_hf_file(config.base_model, name="LTX-2.3 base bundle")
+    _ensure_hf_file(config.ar_transformer, name="AlayaWorld v1.1 stage2b transformer")
+    _ensure_hf_file(config.history_encoder, name="AlayaWorld v1.1 history encoder")
+    _ensure_hf_file(config.dmd_lora, name="AlayaWorld v1.1 distilled LoRA")
     _ensure_hf_snapshot(config.gemma, name="Gemma text encoder")
     _ensure_git_checkout(
-        config.da3_source_path,
-        url=config.da3_source_url,
-        revision=config.da3_source_revision,
-        name="Depth-Anything-3 source",
+        config.vigeo_source_path,
+        url=config.vigeo_source_url,
+        revision=config.vigeo_source_revision,
+        name="ViGeo source",
     )
-    _ensure_hf_snapshot(
-        config.da3_model,
-        name="Depth-Anything-3 checkpoint",
-        cache_dir=config.da3_cache / "hub",
-    )
-    if (
-        config.taehv_source_path is not None
-        and config.taehv_source_url is not None
-        and config.taehv_source_revision is not None
-    ):
-        _ensure_git_checkout(
-            config.taehv_source_path,
-            url=config.taehv_source_url,
-            revision=config.taehv_source_revision,
-            name="TAEHV tiny decoder source",
-        )
+    _ensure_hf_file(config.vigeo_checkpoint, name="ViGeo 1.1 checkpoint")
 
 
 def validate_runtime_paths(config: AlayaWorldConfig) -> None:
@@ -189,11 +178,13 @@ def validate_runtime_paths(config: AlayaWorldConfig) -> None:
     required = {
         "AlayaWorld source": config.source_path,
         "AlayaWorld inference config": config.upstream_config,
-        "AlayaWorld merged checkpoint": config.model.path,
+        "LTX-2.3 base bundle": config.base_model.path,
+        "AlayaWorld v1.1 stage2b transformer": config.ar_transformer.path,
+        "AlayaWorld v1.1 history encoder": config.history_encoder.path,
+        "AlayaWorld v1.1 distilled LoRA": config.dmd_lora.path,
         "Gemma text encoder": config.gemma.path,
-        "Depth-Anything-3 source": config.da3_source_path,
-        "Depth-Anything-3 checkpoint": config.da3_model.path,
-        "DA3 checkpoint cache": config.da3_cache,
+        "ViGeo source": config.vigeo_source_path,
+        "ViGeo 1.1 checkpoint": config.vigeo_checkpoint.path,
     }
     for name, path in required.items():
         if not path.exists():
@@ -201,8 +192,6 @@ def validate_runtime_paths(config: AlayaWorldConfig) -> None:
     _validate_scene_triplet(config.upload_template, "upload template")
     for index, path in enumerate(config.random_inputs):
         _validate_scene_triplet(path, f"random image {index}")
-    if config.bank_taehv and (config.taehv_path is None or not config.taehv_path.is_file()):
-        raise FileNotFoundError("inference.bank_taehv requires assets.taehv")
 
 
 def scene_prompt_path(path: Path) -> Path:
@@ -235,7 +224,7 @@ def load_scene_metadata(path: Path, torch_module: Any) -> dict[str, Any]:
 def _mapping(value: object, name: str) -> dict[str, Any]:
     """Return a YAML mapping or raise a precise configuration error."""
     if not isinstance(value, dict):
-        raise ValueError(f"{name} must be a YAML mapping")
+        raise TypeError(f"{name} must be a YAML mapping")
     return cast(dict[str, Any], value)
 
 
@@ -293,9 +282,13 @@ def _ensure_git_checkout(path: Path, *, url: str, revision: str, name: str) -> N
         return
     logger.info("downloading source checkout", asset=name, url=url, revision=revision)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".reactor-download-", dir=path.parent) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix=".reactor-download-", dir=path.parent
+    ) as temporary:
         checkout = Path(temporary) / "checkout"
-        _run_git(["clone", "--filter=blob:none", "--no-checkout", url, str(checkout)], name)
+        _run_git(
+            ["clone", "--filter=blob:none", "--no-checkout", url, str(checkout)], name
+        )
         _run_git(["-C", str(checkout), "checkout", "--detach", revision], name)
         with suppress(FileExistsError):
             checkout.rename(path)
@@ -337,9 +330,11 @@ def _ensure_hf_file(asset: Asset, *, name: str) -> None:
             revision=asset.revision,
             local_dir=asset.path.parent,
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - normalize third-party transport errors.
         _raise_hf_download_error(name, asset.repo_id, error)
-    if downloaded.resolve() != asset.path.resolve() or not _is_nonempty_file(asset.path):
+    if downloaded.resolve() != asset.path.resolve() or not _is_nonempty_file(
+        asset.path
+    ):
         raise RuntimeError(f"{name} download did not create {asset.path}")
     _write_marker(marker, asset.revision)
 
@@ -375,7 +370,7 @@ def _ensure_hf_snapshot(
                 revision=asset.revision,
                 cache_dir=cache_dir,
             )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - normalize third-party transport errors.
         _raise_hf_download_error(name, asset.repo_id, error)
     if not downloaded.exists() or not _snapshot_has_content(asset.path):
         raise RuntimeError(f"{name} download did not create {asset.path}")

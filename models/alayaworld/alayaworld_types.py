@@ -27,7 +27,7 @@ class Asset:
 
 @dataclass(frozen=True)
 class AlayaWorldConfig:
-    """Hold validated source, asset, inference, and interaction settings."""
+    """Hold validated v1.1 source, asset, inference, and interaction settings."""
 
     source_path: Path
     source_url: str
@@ -35,25 +35,19 @@ class AlayaWorldConfig:
     upstream_config: Path
     upload_template: Path
     random_inputs: tuple[Path, ...]
-    model: Asset
+    base_model: Asset
+    ar_transformer: Asset
+    history_encoder: Asset
+    dmd_lora: Asset
     gemma: Asset
-    da3_source_path: Path
-    da3_source_url: str
-    da3_source_revision: str
-    da3_model: Asset
-    da3_cache: Path
+    vigeo_source_path: Path
+    vigeo_source_url: str
+    vigeo_source_revision: str
+    vigeo_checkpoint: Asset
     seed: int
     compile_mode: str
     warmup_chunks: int
     attention_backend: str
-    flex_attention: bool
-    ttc: bool
-    bank_taehv: bool
-    taehv_path: Path | None
-    taehv_source_path: Path | None
-    taehv_source_url: str | None
-    taehv_source_revision: str | None
-    decode_overlap_latents: int
     max_spatial_frames: int
     recent_spatial_frames: int
     max_chunks_per_rollout: int

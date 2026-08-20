@@ -1,0 +1,4 @@
+# AlayaWorld v1.1's trainer module imports its video dataset at module load.
+# Runtime inference does not read videos through it, but the public source still
+# requires the package to be importable.
+decord==0.6.0

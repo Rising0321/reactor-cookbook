@@ -21,6 +21,11 @@ RUN python -m pip install --no-cache-dir -r /app/requirements.txt \
     && python -m pip install --no-cache-dir -r /app/requirements-flash-attn.txt \
     && python -m pip install --no-cache-dir --no-deps "protobuf==7.35.1"
 
+# Isolate the small version-specific import dependency from the model stack so
+# edits to it do not rebuild the large CUDA dependency layer.
+COPY requirements-v1-1.txt /app/
+RUN python -m pip install --no-cache-dir --no-deps -r /app/requirements-v1-1.txt
+
 COPY . /app/
 
 ENV PYTHONUNBUFFERED=1 \
