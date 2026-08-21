@@ -39,8 +39,10 @@ assets:
 inference:
   config: configs/infer_i2v_camera.yaml
   seed: 1234
-  compile: none
-  warmup_chunks: 0
+  # Compile neutral and moving initial turns plus the history-conditioned path
+  # before the Runtime becomes available, so viewers receive steady turns.
+  compile: default
+  warmup_chunks: 3
   # FlashAttention 4 is installed for B200. Set this to pytorch only for
   # debugging: full-resolution attention is substantially slower and larger.
   attention_backend: flash_attention_4

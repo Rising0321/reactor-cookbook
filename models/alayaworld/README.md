@@ -161,10 +161,13 @@ reloading weights, so the Reactor session can continue indefinitely.
 
 `inference.attention_backend` defaults to `flash_attention_4` for Hopper and
 Blackwell GPUs. `pytorch` is useful for debugging but requires substantially
-more time and memory at full resolution. `inference.compile` is `none` by
-default because the four-step student is already fast and eager mode avoids a
-large first-turn compile; set a supported `torch.compile` mode when repeated
-throughput matters more than startup latency.
+more time and memory at full resolution. `inference.compile` defaults to
+`default`, and three warmup chunks run while Runtime still reports the model as
+loading. They cover neutral and moving initial turns plus the temporal-history
+path used from the second turn onward. The passes also initialize ViGeo before
+the first viewer arrives. TorchInductor artifacts are cached under
+`runtime.weights_path`; set `compile: none` and `warmup_chunks: 0` only when
+debugging eager execution.
 
 Recording captures the same interactive frames sent on `main_video` and
 requires `ffmpeg` on `PATH`.

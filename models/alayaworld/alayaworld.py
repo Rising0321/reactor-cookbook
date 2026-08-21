@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import secrets
 import time
 from collections.abc import AsyncGenerator
@@ -27,6 +28,7 @@ from reactor_runtime import (
     connected,
     disconnected,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
@@ -140,6 +142,7 @@ class AlayaWorld(ReactorPipeline):
             config_path: Path to ``alayaworld.yaml`` from ``reactor.yaml``.
         """
         config = read_config(config_path)
+        self._configure_compile_cache(config)
         prepare_runtime_assets(config)
         validate_runtime_paths(config)
         modules = load_upstream_modules(config.source_path)
@@ -194,6 +197,15 @@ class AlayaWorld(ReactorPipeline):
             max_chunks_per_rollout=config.max_chunks_per_rollout,
         )
 
+    @staticmethod
+    def _configure_compile_cache(config: AlayaWorldConfig) -> None:
+        """Keep generated compiler artifacts beside the persistent model assets."""
+        if config.compile_mode == "none":
+            return
+        cache_path = get_weights_path() / ".torchinductor"
+        cache_path.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(cache_path))
+
     def _warmup(self) -> None:
         """Generate throwaway turns so the first client does not pay for them.
 
@@ -215,8 +227,23 @@ class AlayaWorld(ReactorPipeline):
         logger.info("AlayaWorld warming up", chunks=config.warmup_chunks)
         try:
             self._reset_rollout(prompt or _UPLOAD_DEFAULT_PROMPT, config.seed, scene)
-            for _ in range(config.warmup_chunks):
-                self._generate_chunk(prompt, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            for index in range(config.warmup_chunks):
+                if index == 1:
+                    self._reset_rollout(
+                        prompt or _UPLOAD_DEFAULT_PROMPT,
+                        config.seed,
+                        scene,
+                    )
+                moving = index >= 1
+                self._generate_chunk(
+                    prompt,
+                    0.0,
+                    0.0,
+                    0.35 if moving else 0.0,
+                    0.0,
+                    0.1 if moving else 0.0,
+                    0.0,
+                )
         finally:
             self._cache = None
             if self._backend is not None:

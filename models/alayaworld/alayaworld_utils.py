@@ -20,6 +20,7 @@ _UPLOAD_MIME_FORMATS = {
     "image/png": "PNG",
     "image/webp": "WEBP",
 }
+_FLASH_ATTENTION_4_OP: Any | None = None
 
 
 def compact_rollout_cache(
@@ -197,7 +198,10 @@ class FlashAttention4:
     def __init__(
         self, flash_attention: Any, masked_fallback: Any, torch_module: Any
     ) -> None:
-        self._flash_attention = flash_attention
+        self._flash_attention = _flash_attention_4_op(
+            torch_module,
+            flash_attention,
+        )
         self._masked_fallback = masked_fallback
         self._torch = torch_module
 
@@ -217,18 +221,56 @@ class FlashAttention4:
         head_dim = fused // heads
         query, key, value = (t.view(batch, -1, heads, head_dim) for t in (q, k, v))
         bfloat16 = self._torch.bfloat16
+        window_left, window_right = window_size or (-1, -1)
         out = self._flash_attention(
             query.to(bfloat16),
             key.to(bfloat16),
             value.to(bfloat16),
-            # (-1, -1) is full attention; anything else is the token window the
-            # caller asked for, in (left, right) form.
-            window_size=window_size if window_size is not None else (-1, -1),
+            window_left,
+            window_right,
         )
-        # The kernel returns the output alongside its log-sum-exp.
-        if isinstance(out, tuple):
-            out = out[0]
         return out.reshape(batch, -1, heads * head_dim).to(value.dtype)
+
+
+def _flash_attention_4_op(torch_module: Any, flash_attention: Any) -> Any:
+    """Expose the CuTe kernel to Dynamo as one opaque tensor operation."""
+    global _FLASH_ATTENTION_4_OP
+    if _FLASH_ATTENTION_4_OP is not None:
+        return _FLASH_ATTENTION_4_OP
+
+    def kernel(
+        query: Any,
+        key: Any,
+        value: Any,
+        window_left: int,
+        window_right: int,
+    ) -> Any:
+        output = flash_attention(
+            query,
+            key,
+            value,
+            window_size=(window_left, window_right),
+        )
+        return output[0] if isinstance(output, tuple) else output
+
+    operation = torch_module.library.custom_op(
+        "reactor_alayaworld::flash_attention_4",
+        mutates_args=(),
+        schema="(Tensor query, Tensor key, Tensor value, int window_left, int window_right) -> Tensor",
+    )(kernel)
+
+    @operation.register_fake
+    def fake(
+        query: Any,
+        _key: Any,
+        _value: Any,
+        _window_left: int,
+        _window_right: int,
+    ) -> Any:
+        return torch_module.empty_like(query)
+
+    _FLASH_ATTENTION_4_OP = operation
+    return operation
 
 
 def resolve_attention_backend(
