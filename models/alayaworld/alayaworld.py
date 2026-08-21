@@ -43,7 +43,6 @@ if TYPE_CHECKING:
         scene_prompt_path,
         validate_runtime_paths,
     )
-    from examples.alayaworld.alayaworld_backend import AlayaWorldV11Backend
     from examples.alayaworld.alayaworld_camera import CameraMotionPlanner, MotionConfig
     from examples.alayaworld.alayaworld_types import (
         AlayaWorldConfig,
@@ -58,6 +57,7 @@ if TYPE_CHECKING:
         StepQueued,
     )
     from examples.alayaworld.alayaworld_utils import (
+        AlayaWorldV11Backend,
         compact_rollout_cache,
         load_upstream_modules,
         resolve_attention_backend,
@@ -68,7 +68,6 @@ if TYPE_CHECKING:
 else:
     module_prefix = f"{__package__}." if __package__ else ""
     assets_module = importlib.import_module(f"{module_prefix}alayaworld_assets")
-    backend_module = importlib.import_module(f"{module_prefix}alayaworld_backend")
     camera_motion = importlib.import_module(f"{module_prefix}alayaworld_camera")
     types_module = importlib.import_module(f"{module_prefix}alayaworld_types")
     utils_module = importlib.import_module(f"{module_prefix}alayaworld_utils")
@@ -78,7 +77,7 @@ else:
     scene_image_path = assets_module.scene_image_path
     scene_prompt_path = assets_module.scene_prompt_path
     validate_runtime_paths = assets_module.validate_runtime_paths
-    AlayaWorldV11Backend = backend_module.AlayaWorldV11Backend
+    AlayaWorldV11Backend = utils_module.AlayaWorldV11Backend
     CameraMotionPlanner = camera_motion.CameraMotionPlanner
     MotionConfig = camera_motion.MotionConfig
     AlayaWorldConfig = types_module.AlayaWorldConfig

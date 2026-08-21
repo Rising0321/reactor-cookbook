@@ -35,3 +35,5 @@ matplotlib
 moviepy==1.0.3
 omegaconf
 plyfile
+# The v1.1 trainer imports its video dataset module while loading inference.
+decord==0.6.0
