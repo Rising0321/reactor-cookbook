@@ -16,12 +16,14 @@ documentation. For API references and guides, see the
 
 ## Structure
 
-The two top-level folders sit on opposite sides of a session.
+The three top-level folders cover distinct ways to build with Reactor.
 
-- [`models/`](./models) holds models you serve. Each folder is a `reactor`
-  workspace you build and run with the CLI, and everything that example needs
-  lives inside it — the adapter, its configuration, and any client shipped to
-  demonstrate it. [Build your own model](https://docs.reactor.inc/deploy/overview)
+- [`examples/`](./examples) holds complete applications and demos built on
+  hosted Reactor models. Each example is a top-level, self-contained project
+  you can copy, run, and adapt.
+- [`models/`](./models) holds models you deploy. Each folder is a `reactor`
+  workspace you build and run with the CLI, and everything that deployment
+  needs lives inside it. [Build your own model](https://docs.reactor.inc/deploy/overview)
   covers the workspace they follow.
 - [`robotics/`](./robotics) holds code that drives a model someone else is
   already serving: policy quickstarts and closed-loop simulator integrations
@@ -31,11 +33,11 @@ Each example has a README explaining what it does and how to run it.
 
 ## Contributing
 
-Adding an example? Put it under [`models/`](./models) if it serves a model, and
-under [`robotics/`](./robotics) if it drives one that is already served. Keep
-each example self-contained, give the folder a name describing what it does
-rather than the API it happens to call, and lead its README with the problem it
-solves.
+Adding a complete application or demo? Put it directly under
+[`examples/`](./examples). Put model deployments under [`models/`](./models)
+and robotics integrations under [`robotics/`](./robotics). Keep each project
+self-contained, give the folder a name describing what it does rather than the
+API it happens to call, and lead its README with the problem it solves.
 
 ## License
 

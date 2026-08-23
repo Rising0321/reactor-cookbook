@@ -21,5 +21,6 @@ Name a folder for the model it serves, and give it a README covering:
 - Notes on anything surprising in the code
 
 Nothing lives directly in this folder besides this file — every model gets its
-own subfolder. Code that drives a model someone else is already serving belongs
-in [`robotics/`](../robotics) instead.
+own subfolder. Complete applications and demos using hosted models belong in
+[`examples/`](../examples); robotics integrations belong in
+[`robotics/`](../robotics).
