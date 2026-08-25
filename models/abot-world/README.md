@@ -8,7 +8,8 @@ rolling KV cache and emits one decoded autoregressive chunk.
 
 ABot-World is an image-to-video world model. It generates three latent frames
 per chunk, decoded to 9 RGB frames for the first chunk and 12 RGB frames for
-each later chunk at 1280×704 and streamed at 12 FPS. The adapter retains the
+each later chunk at 1280×704. Playback adapts to measured inference throughput,
+and the output queue holds one complete 12-frame chunk. The adapter retains the
 upstream 21-latent local-attention window.
 
 ## Run locally

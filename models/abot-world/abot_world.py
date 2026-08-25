@@ -63,6 +63,7 @@ from abot_world_types import (
 logger = get_logger(__name__)
 
 FPS = 12
+FRAMES_PER_CHUNK = 12
 _EXPECTED_LATENTS_PER_CHUNK = 3
 _EXPECTED_LOCAL_CACHE_LATENTS = 21
 
@@ -83,8 +84,7 @@ class ABotWorld(ReactorPipeline):
 
     state: ABotWorldState
     output: ABotWorldOutput
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
