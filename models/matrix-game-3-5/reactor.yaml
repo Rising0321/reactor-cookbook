@@ -79,9 +79,8 @@ runtime:
   weights_path: ~/.cache/reactor_registry/matrix-game-3-5
 
 build:
-  # The CLI renders this block into an in-memory Dockerfile and hands it to
-  # BuildKit. No generated Dockerfile is stored in the recipe.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   python_version: "3.12"
   system_packages:
