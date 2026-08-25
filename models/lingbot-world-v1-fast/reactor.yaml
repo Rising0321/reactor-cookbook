@@ -22,10 +22,8 @@ runtime:
   weights_path: ~/.cache/reactor_registry/lingbot-world-v1-fast
 
 build:
-  # Reactor generates the image definition from this block. The Runtime pin
-  # must match requirements.txt so local builds and hosted releases use the
-  # same authoring surface.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   # CUDA 12.8 wheels contain the kernels used by the B200 declared above and
   # match the isolated upstream worker environment prepared on first load.

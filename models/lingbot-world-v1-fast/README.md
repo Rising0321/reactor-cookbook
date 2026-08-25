@@ -5,34 +5,30 @@ camera model as an interactive Reactor backend. A client can start from a
 built-in scene or uploaded image, change the prompt, apply six-axis camera
 motion, stream generated video, and record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-the Reactor integration and a stateful source extension; first load clones the
-exact tested LingBot-World revision into the persistent weights cache and adds
-the extension without changing its tracked files.
-
-Reactor generates the CUDA serving image directly from the `build:` block in
-`reactor.yaml`. This recipe has no handwritten Dockerfile.
+The adapter loads an exact tested LingBot-World revision from the persistent
+weights cache and applies a stateful source extension that exposes its native
+chunk boundary.
 
 ## Prerequisites
 
-- The `reactor` CLI and Docker.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   unsupported. The recipe requests one B200; a tested 13-chunk rollout used
   about 48 GB of VRAM, so a GPU with at least 64 GB is recommended.
 - About 90 GB on persistent storage for the Fast checkpoint, VAE, UMT5 assets,
-  source checkout, and worker environment, plus space for the generated CUDA
-  image and Docker build cache.
+  source checkout, and worker environment, plus space for the model image and
+  build cache.
 
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-declares CUDA 12.8.1 and Python 3.12, lists the required system packages, and
-points Reactor at `requirements.txt`. The CLI turns that manifest into an image
-definition in memory. See
-[Build a model](https://deploy-docs.reactor.inc/platform/build) for the current
-manifest workflow.
+controls its Reactor Runtime 3.2.3, CUDA 12.8.1, Python 3.12, system packages,
+and Python dependencies. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
-Validate the workspace, build the generated image, and expose one GPU to the
+Validate the workspace, build the model image, and expose one GPU to the
 container:
 
 ```sh
@@ -112,20 +108,16 @@ documented in [`example_image`](example_image).
 
 ## Runtime boundary
 
-LingBot-World Fast is an autoregressive video model. Its public `generate()`
-denoises three latent frames at a time and commits each completed chunk to a
-causal self-attention KV cache, but creates and destroys that cache on every
-call. The included `InteractiveFastRollout` extension exposes the same native
-boundary as a resumable session: model weights load once, one Reactor request
-runs one original four-timestep chunk, and self-KV, absolute RoPE position,
-prompt cross-attention, random generator, and causal VAE feature cache remain
-alive for the next request.
+LingBot-World Fast is an autoregressive video model. The included
+`InteractiveFastRollout` runs its native three-latent, four-timestep boundary as
+a resumable session: model weights load once, and self-KV, absolute RoPE
+position, prompt cross-attention, random generator, and causal VAE feature
+cache remain alive for the next request.
 
 The first three-latent chunk decodes to 9 RGB frames because it includes the
 image anchor. Every later chunk decodes to 12 frames, played at the upstream 16
 FPS. The official 81-frame Fast invocation contains 21 VAE latents; the adapter
-keeps that exact rolling native KV window instead of shortening memory for
-latency.
+keeps that exact rolling native KV window for every session.
 
 Prompt changes replace only cross-attention conditioning at the next chunk
 boundary. Visual self-KV remains intact, so future video responds to the new
@@ -146,16 +138,15 @@ Message delivery remains outside the synchronous inference loop.
 ## Public source and model assets
 
 `lingbot_world_v1.yaml` pins the source and both Hugging Face snapshots. First
-load downloads only the base VAE, UMT5 encoder and tokenizer, and Fast model
-shards. It does not download the unused Base model's low- and high-noise
-transformer weights. Downloads resume after interruption, and marker files
-record the immutable revisions.
+load downloads the base VAE, UMT5 encoder and tokenizer, and Fast model shards.
+Downloads resume after interruption, and marker files record the immutable
+revisions.
 
 Reactor Runtime and LingBot-World require different NumPy major versions. A
 persistent Python 3.12 worker provides dependency isolation while remaining the
 only model process and loading one copy of the weights. The source extension
-contains the chunk boundary; the upstream scheduler, four denoising timesteps,
-self-KV eviction, camera Plücker embedding, and VAE decoder remain unchanged.
+delegates each chunk to the upstream scheduler, four denoising timesteps,
+self-KV eviction, camera Plücker embedding, and VAE decoder.
 
 The CLI bind-mounts `runtime.weights_path` at the same absolute path inside the
 container and exports it as `REACTOR_WEIGHTS_PATH`. The checked-in default is
@@ -170,9 +161,9 @@ ln -s "$LINGBOT_ROOT/weights" \
   "$HOME/.cache/reactor_registry/lingbot-world-v1-fast"
 ```
 
-Docker image layers and BuildKit cache are host-level storage rather than model
-weights. Configure Docker's data root on a large volume before `reactor build`
-when its default system location has limited space.
+The container engine stores image layers and build cache separately from model
+weights. Configure that storage on a large volume before `reactor build` when
+the system disk has limited space.
 
 ## Recording
 
