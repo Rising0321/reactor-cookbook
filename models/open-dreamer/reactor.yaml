@@ -71,10 +71,46 @@ runtime:
   config: opendreamer.yaml
 
 build:
-  # The reactor-runtime release this workspace is built against. The install
-  # pin is the `reactor-runtime==<version>` line in requirements.txt; bump it
-  # there and here together to upgrade.
+  # The reactor-runtime release this workspace is built against.
   runtime_version: "3.1.2"
+
+  # Reactor generates the image from this build declaration. Model
+  # dependencies are resolved together with the runtime inside the image.
+  python_requirements: requirements.txt
+  python_version: "3.12"
+  cuda_version: "12.9.1"
+  # OpenDreamer uses JAX's CUDA wheels rather than PyTorch's wheel index.
+  python_indexes:
+    - https://pypi.org/simple
+  system_packages:
+    - ca-certificates
+    - curl
+    - ffmpeg
+    - git
+
+  # Keep the pinned upstream checkout separate from this adapter and expose it
+  # to the model process through the same public configuration contract.
+  runtime_env:
+    OPENDREAMER_PATH: /opt/open-dreamer
+
+  # These commands run before the adapter source is copied, preserving the
+  # expensive upstream and dataset layers across adapter-only edits.
+  run:
+    - >-
+      git init /opt/open-dreamer
+      && git -C /opt/open-dreamer fetch --depth 1
+      https://github.com/next-state/open-dreamer.git
+      797e41f052b5996740938fd2fe8161f1866de3a2
+      && git -C /opt/open-dreamer checkout --detach FETCH_HEAD
+    - mkdir -p /opt/open-dreamer/samples/vpt
+    - >-
+      curl --fail --location --retry 3
+      https://openaipublic.blob.core.windows.net/minecraft-rl/data/10.0/cheeky-cornflower-setter-02e496ce4abb-20220421-092639.mp4
+      --output /opt/open-dreamer/samples/vpt/cheeky-cornflower-setter-02e496ce4abb-20220421-092639.mp4
+    - >-
+      curl --fail --location --retry 3
+      https://openaipublic.blob.core.windows.net/minecraft-rl/data/10.0/cheeky-cornflower-setter-02e496ce4abb-20220421-092639.jsonl
+      --output /opt/open-dreamer/samples/vpt/cheeky-cornflower-setter-02e496ce4abb-20220421-092639.jsonl
 
 # Session recording. The runtime records the named video track in chunks and
 # serves clips up to `clip_max_seconds`. OpenDreamer emits no audio.
