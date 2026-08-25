@@ -80,9 +80,8 @@ runtime:
   weights_path: ~/.cache/reactor_registry/alayaworld
 
 build:
-  # The CLI renders this block into an in-memory Dockerfile and hands it to
-  # BuildKit. No generated Dockerfile is stored in the recipe.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
@@ -93,9 +92,8 @@ build:
     - build-essential
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
-  # FlashAttention 4 and Runtime cannot share one dependency resolution: CuTe
-  # caps protobuf below 7 while Runtime needs 7.35. Both serve with 7.35, so
-  # install the attention wheel separately and restore Runtime's wire version.
+  # Install FlashAttention 4 with CuTe, then select Runtime's protobuf wire
+  # version for the completed image.
   run:
     - pip install --no-cache-dir "flash-attn-4==4.0.0b26"
     - pip install --no-cache-dir --no-deps "protobuf==7.35.1"

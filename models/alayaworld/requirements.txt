@@ -2,8 +2,7 @@
 # `build.runtime_version` owns the Runtime version, while
 # `build.cuda_version` selects the CUDA 12.8 PyTorch index for Blackwell.
 
-# B200-compatible replacement for AlayaWorld's upstream PyTorch 2.6/cu124
-# stack.
+# B200-compatible PyTorch stack.
 torch==2.9.1
 torchvision==0.24.1
 torchaudio==2.9.1
@@ -25,9 +24,8 @@ tqdm
 easydict
 huggingface-hub
 
-# Minimal Depth-Anything-3 inference imports. AlayaWorld adds local stubs for
-# DA3's optional export-only packages, so its full application dependency set
-# (including the upstream numpy<2 pin) is intentionally not installed.
+# Depth-Anything-3 inference imports. AlayaWorld supplies local stubs for DA3's
+# optional export modules.
 addict
 imageio
 matplotlib
