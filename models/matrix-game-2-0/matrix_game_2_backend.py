@@ -20,6 +20,8 @@ LATENT_WIDTH = 80
 FRAME_HEIGHT = 352
 FRAME_WIDTH = 640
 FPS = 25
+FIRST_CHUNK_FRAMES = 9
+FRAMES_PER_CHUNK = 12
 
 _KEYBOARD_VECTOR_ORDER = ("w", "s", "a", "d")
 _NATIVE_CAMERA_SCALE = 0.1
@@ -332,7 +334,9 @@ class MatrixGame2Backend:
         frames = (
             ((frames.float() + 1) * 127.5).clip(0, 255).to(torch.uint8).cpu().numpy()[0]
         )
-        expected_frames = 9 if self.completed_chunks == 1 else 12
+        expected_frames = (
+            FIRST_CHUNK_FRAMES if self.completed_chunks == 1 else FRAMES_PER_CHUNK
+        )
         if frames.shape != (expected_frames, FRAME_HEIGHT, FRAME_WIDTH, 3):
             raise RuntimeError(
                 "unexpected Matrix causal decode shape: "

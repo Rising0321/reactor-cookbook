@@ -117,9 +117,11 @@ keyboard and mouse action KV caches, the visual cross-attention cache, and all
 three-step distilled denoising schedule, context-cache commit, and 360-latent
 horizon remain unchanged.
 
-The first causal decode emits 9 RGB frames and each later decode emits 12 at 25
-FPS. One rollout therefore provides 120 interactive chunks before the adapter
-pauses and requires `reset`, `set_image`, or `random_image`.
+The first causal decode emits 9 RGB frames and each later decode emits 12.
+Playback adapts to measured inference throughput, and the output queue holds
+one complete 12-frame chunk. One rollout therefore provides 120 interactive
+chunks before the adapter pauses and requires `reset`, `set_image`, or
+`random_image`.
 
 ## Model messages
 

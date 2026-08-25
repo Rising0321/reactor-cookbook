@@ -29,7 +29,7 @@ from matrix_game_2_assets import (
     read_config,
     validate_uploaded_image,
 )
-from matrix_game_2_backend import FPS, ChunkAction, MatrixGame2Backend
+from matrix_game_2_backend import FRAMES_PER_CHUNK, ChunkAction, MatrixGame2Backend
 from matrix_game_2_types import (
     KEYBOARD_KEYS,
     ActionChanged,
@@ -50,8 +50,7 @@ class MatrixGame2(ReactorPipeline):
 
     state: MatrixGame2State
     output: MatrixGame2Output
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -81,13 +80,11 @@ class MatrixGame2(ReactorPipeline):
         self._config = config
         self._backend = backend
         self._seed = config.seed
-        self.output.fps = FPS
         logger.info(
             "Matrix-Game-2.0 model ready",
             source_revision=config.source_revision,
             checkpoint_revision=config.model_revision,
             max_chunks=config.max_chunks,
-            fps=FPS,
         )
 
     @session_started
