@@ -6,13 +6,13 @@ uploaded image or a bundled example, optionally condition the world with text,
 apply native movement and camera controls, stream autoregressive video, and
 record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; the runtime clones the exact tested Matrix-Game
-revision into its mounted weights cache and never edits its tracked files.
+The adapter loads an exact tested Matrix-Game revision from its mounted weights
+cache and calls the upstream interactive pipeline directly.
 
 ## Prerequisites
 
-- The `reactor` CLI and Docker.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported. The distilled recipe is tested on a B200; allow
   roughly 90 GB of GPU memory for an active rollout.
@@ -23,10 +23,10 @@ revision into its mounted weights cache and never edits its tracked files.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-fully describes its CUDA-capable image through the YAML
-[`build:` configuration](https://deploy-docs.reactor.inc/platform/build).
-There is no Dockerfile. `requirements.txt` contains only upstream inference
-dependencies; `build.runtime_version` is the single Reactor Runtime pin.
+controls its Reactor Runtime 3.2.3, CUDA 12.8.1, Python 3.12, system packages,
+and Python dependencies. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
 Build the image, then expose one GPU to the container:
 
@@ -37,12 +37,11 @@ reactor build
 reactor run --gpus device=0
 ```
 
-`reactor build` generates the Dockerfile in memory and installs Reactor Runtime
-3.1.2, Python 3.12, CUDA 12.8.1, and the model dependencies. `reactor run`
-reuses that image, building it automatically if none exists, and bind-mounts
-the local weights cache into the container. The first model load clones the
-pinned upstream revision and downloads the pinned distilled checkpoint subset;
-later runs reuse both.
+`reactor build` prepares the configured model image. `reactor run` reuses that
+image, building it automatically if none exists, and bind-mounts the local
+weights cache into the container. The first model load clones the pinned
+upstream revision and downloads the pinned distilled checkpoint subset; later
+runs reuse both.
 
 The runtime reports ready on `http://localhost:8080`. Rebuild after editing
 anything baked into the image:
@@ -118,8 +117,7 @@ reuse its causal image condition, denoised memory latents, camera-aware memory
 selection, keyboard and pose history, and 34-entry streaming VAE cache.
 
 Matrix encodes text before entering that loop. `set_prompt` therefore starts a
-fresh rollout from the selected image instead of claiming to modify text inside
-an incompatible in-progress cache. Movement and camera changes preserve the
+fresh rollout from the selected image. Movement and camera changes preserve the
 active autoregressive state.
 
 ## Model messages
@@ -139,16 +137,15 @@ inference.
 ## Recording
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
-clips up to five minutes. The generated image includes FFmpeg. Matrix-Game 3.0
+clips up to five minutes. The model image includes FFmpeg. Matrix-Game 3.0
 does not emit audio.
 
 ## Storage
 
-With no host-specific `runtime.weights_path` in this public recipe, local CLI
-runs use the workspace's `weights/` cache and mount it at the same absolute
-path inside the container. Clone the cookbook onto a disk with enough capacity,
-or set `runtime.weights_path` locally to an existing directory on a larger
-disk. The cache is excluded from Git and the image build context.
+Local CLI runs use the workspace's `weights/` cache and mount it at the same
+absolute path inside the container. Clone the cookbook onto a disk with enough
+capacity, or set `runtime.weights_path` locally to an existing directory on a
+larger disk. The cache is excluded from Git and the image build context.
 
 Docker image layers are independent of Reactor's weights cache. Configure the
 Docker daemon's data root on a large disk when the system disk is constrained.
@@ -158,10 +155,9 @@ Docker daemon's data root on a large disk when the system disk is constrained.
 - `matrix_game_3_0.yaml` pins the upstream source, distilled checkpoint,
   sampling schedule, INT8 attention projections, MG-LightVAE v2 decoder, and
   native rollout length.
-- The first load downloads only the distilled 5B DiT, UMT5 assets, Wan2.2
+- The first load downloads the distilled 5B DiT, UMT5 assets, Wan2.2
   encoder VAE, and the 0.75-pruned MG-LightVAE v2 decoder.
 - The upstream model imports its attention function directly. The adapter
   routes that symbol through the adjacent upstream dispatcher so `fa_version: 0`
-  consistently uses SDPA. Flash Attention 4, CUDA graphs, compilation, and
-  warmup remain separate acceleration work.
+  consistently uses SDPA.
 - Stop `reactor run` to remove the container and release its GPU memory.
