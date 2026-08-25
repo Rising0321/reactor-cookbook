@@ -1,0 +1,37 @@
+source:
+  path: DreamX-World
+  url: https://github.com/AMAP-ML/DreamX-World.git
+  revision: a1f4c6e5e45600718e5236955f2e0702e53fc275
+
+assets:
+  dreamx:
+    path: checkpoints/DreamX-World-5B/model.safetensors
+    repo_id: GD-ML/DreamX-World-5B
+    revision: 67487c4a61466bb7166d30b7187dd465e0ac9f6c
+  wan:
+    path: checkpoints/Wan2.2-TI2V-5B
+    repo_id: Wan-AI/Wan2.2-TI2V-5B
+    revision: 921dbaf3f1674a56f47e83fb80a34bac8a8f203e
+
+inference:
+  config: configs/dreamx-ar/causal_camera_forcing_5b.yaml
+  transformer_config: configs/dreamx-ar/config.json
+  seed: 42
+  # Preserve generate_trajectory_from_json's public inference default.
+  motion_speed: 1.5
+  # Preserve inference_ar_forcing.sh's full Lab correction.
+  color_correction_strength: 1.0
+
+inputs:
+  evaluation_inputs: configs/dreamx/eval.json
+  random_images:
+    - demo/007.jpg
+    - demo/VCG211326403844_crop.jpg
+    - demo/51_L-shape_Forward.png
+  default_upload_prompt: >-
+    Style: Photorealistic. A coherent, detailed world with natural lighting,
+    stable geometry, and realistic motion.
+
+stream:
+  # Bound rollout bookkeeping while retaining automatic continuous play.
+  max_chunks_per_rollout: 512

@@ -2,11 +2,13 @@
 
 Models you serve on Reactor. Every folder here is a `reactor` workspace: a
 `reactor.yaml` naming the model and the GPU it wants, an adapter built on the
-[Reactor Runtime](https://github.com/reactor-team/reactor-runtime), and a
-Dockerfile the CLI builds into the image it runs. `reactor build` and
-`reactor run` serve any of them on your own machine, and
-[Build your own model](https://docs.reactor.inc/deploy/overview) explains the
-shape they follow.
+[Reactor Runtime](https://github.com/reactor-team/reactor-runtime), and an image
+definition. New workspaces declare the image in `reactor.yaml`'s `build` block,
+which the CLI renders in memory; a Dockerfile remains available when a recipe
+needs build steps the schema cannot express. `reactor build` and `reactor run`
+serve either form on your own machine, and
+[Build your own model](https://deploy-docs.reactor.inc/platform/build) explains
+the workspace shape.
 
 An example folder is self-contained. Whatever it needs stays inside it —
 configuration, pinned upstream revisions, and any client written to demonstrate

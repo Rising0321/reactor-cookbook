@@ -1,0 +1,51 @@
+$schema: reactor/v1
+
+model:
+  name: dreamx-world-5b
+  version: v0.0.1
+  description: |
+    Explore an autoregressive world from an image, event prompt, and native
+    composable camera controls.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "4"
+      limit: "8"
+    memory:
+      request: 32Gi
+      limit: 96Gi
+
+runtime:
+  import: dreamx_world:DreamXWorld
+  config: dreamx_world.yaml
+  weights_path: ~/.cache/reactor_registry/dreamx-world
+
+build:
+  # Reactor renders the image definition from this block in memory. Keep the
+  # runtime pin aligned with the public API used by dreamx_world.py.
+  runtime_version: "3.1.2"
+  python_requirements: requirements.txt
+
+  # CUDA 12.8 selects the matching NVIDIA base and PyTorch wheel index. The
+  # pinned FlashAttention wheel in requirements.txt targets the same Torch and
+  # CUDA ABI and supports the B200 requested above.
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+
+  # Runtime asset preparation clones the immutable public DreamX checkout.
+  # Model weights remain outside the image under runtime.weights_path.
+  system_packages:
+    - ca-certificates
+    - git
+
+recording:
+  enabled: true
+  chunk_seconds: 4
+  clip_max_seconds: 300
+  video_track: main_video
+  video:
+    codec: h264
+    preset: veryfast
+    crf: 23
