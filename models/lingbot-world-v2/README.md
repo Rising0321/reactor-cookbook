@@ -73,9 +73,10 @@ KV, and rolling self-attention KV. Ending the session releases rollout state
 while keeping model weights resident for the next session.
 
 Each inference turn generates one native four-latent chunk with the released
-four-step sampler. Chunk one emits 13 RGB frames and later chunks emit 16 at the
-model's native 16 FPS. Single-frame backpressure keeps inference, WebRTC
-playout, and recording on the same complete sequence.
+four-step sampler. Chunk one emits 13 RGB frames and later chunks emit 16.
+Playback adapts to measured inference throughput, and the output queue holds
+one complete 16-frame chunk so inference, WebRTC playout, and recording retain
+the same complete sequence.
 
 The adapter preserves the released 18-frame rolling self-attention window,
 six-frame attention sink, clean-`x0` cache commit, and causal decoder state.

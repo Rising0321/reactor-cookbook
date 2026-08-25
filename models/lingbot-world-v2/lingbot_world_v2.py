@@ -107,8 +107,7 @@ class LingBotWorldV2(ReactorPipeline):
 
     state: LingBotWorldV2State
     output: LingBotWorldV2Output
-    fps = RGB_FPS
-    buffer_size = 1
+    buffer_size = STEADY_CHUNK_FRAMES
 
     def __init__(self) -> None:
         super().__init__()
@@ -467,7 +466,7 @@ class LingBotWorldV2(ReactorPipeline):
         return message
 
     async def inference(self) -> AsyncGenerator[object, None]:
-        """Generate one native causal chunk per turn and emit it at 16 FPS."""
+        """Generate and emit one native causal chunk per turn."""
         config = self._require_loaded()
         backend = self._backend
         planner = self._planner
