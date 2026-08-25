@@ -1,0 +1,5 @@
+# Runtime and upstream inference use different NumPy major versions. This file
+# describes only the Python 3.12 serving process; load() prepares the isolated
+# upstream model environment from worker-requirements.txt.
+reactor-runtime==3.1.2
+Pillow>=10.1

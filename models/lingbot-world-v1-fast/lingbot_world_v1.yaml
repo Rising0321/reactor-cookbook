@@ -1,0 +1,45 @@
+source:
+  path: lingbot-world-v1
+  url: https://github.com/robbyant/lingbot-world.git
+  revision: a43bec7f8091c83e9b30b16b912f6fc906236fa6
+
+assets:
+  base:
+    repo_id: robbyant/lingbot-world-base-cam
+    revision: 6fc824ffc338d64c97c77e2eb8c0f4cfc24d82bd
+  fast:
+    repo_id: robbyant/lingbot-world-fast
+    revision: b7a1db2da9bd3ba675ee01c228f41db0309b981e
+
+samples:
+  - image: examples/03/image.jpg
+    intrinsics: examples/03/intrinsics.npy
+    prompt: >-
+      A serene lakeside scene with a lone tree standing in calm water, surrounded by distant
+      snow-capped mountains under a bright blue sky with drifting white clouds. Gentle ripples
+      reflect the tree and sky as the camera moves smoothly through the tranquil landscape.
+  - image: examples/04/image.jpg
+    intrinsics: examples/04/intrinsics.npy
+    prompt: >-
+      A sweeping cinematic journey along the Great Wall of China, winding through golden autumn
+      hills under a brilliant blue sky. Stone pathways stretch into the distance as the camera
+      glides smoothly forward through the ancient landscape.
+
+inference:
+  seed: 42
+  # Official Fast inference resolution and flow-matching shift.
+  max_area: 399360
+  shift: 10.0
+
+stream:
+  # Official 81-frame inference has 21 VAE latents. Preserve that memory length
+  # as a rolling KV window while requesting one three-latent chunk at a time.
+  context_latents: 21
+  # Fast RoPE tables contain 1024 latent positions; 320 chunks use 960.
+  max_chunks: 320
+
+motion:
+  # Upstream demo trajectories move 0.05 units and rotate 2 degrees per RGB
+  # frame, then sample every four frames and normalize non-zero translation.
+  translation_units_per_latent: 1.0
+  rotation_degrees_per_latent: 8.0
