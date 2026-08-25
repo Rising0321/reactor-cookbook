@@ -176,9 +176,9 @@ def test_durable_control_change_broadcasts_a_state_snapshot() -> None:
     ]
 
 
-def test_playout_matches_upstream_game_timing() -> None:
-    """Advance the world at its native rate without queuing stale controls."""
-    assert Diamond.fps == 15
+def test_playout_holds_one_complete_generation_turn() -> None:
+    """Use measured inference timing without queuing stale controls."""
+    assert "fps" not in Diamond.__dict__
     assert Diamond.buffer_size == 1
 
 

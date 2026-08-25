@@ -54,6 +54,7 @@ from diamond_types import (
 
 logger = get_logger(__name__)
 
+FRAMES_PER_CHUNK = 1
 _SPAWN_IMAGE_FIELD = InputField(
     description=(
         "Image uploaded through the Reactor upload protocol. Must contain decodable image "
@@ -70,8 +71,7 @@ def _weights_cache_path() -> Path:
 class Diamond(ReactorPipeline):
     """Stream one shared Counter-Strike world controlled by native game inputs."""
 
-    fps = 15
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
     state: DiamondState
 
     def __init__(self) -> None:
