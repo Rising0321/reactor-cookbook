@@ -29,8 +29,8 @@ class StateUpdate(ModelMessage):
     )
     image_source: str = MessageField(
         description=(
-            "Source of the active anchor image: `built_in` for the default or `upload` after "
-            "`set_image`."
+            "Source of the active anchor image: `none` while waiting for the first upload, "
+            "`upload` after `set_image`, or `built_in` for a programmatic fallback."
         )
     )
     image_name: str = MessageField(
@@ -70,8 +70,8 @@ class StateUpdate(ModelMessage):
     )
     next_chunk: int | None = MessageField(
         description=(
-            "One-based chunk that commands accepted now will first affect. Null when "
-            "`limit_reached` is true."
+            "One-based chunk that commands accepted now will first affect. Null while no "
+            "anchor image is selected or when `limit_reached` is true."
         )
     )
     max_chunks: int = MessageField(
@@ -198,10 +198,11 @@ class MatrixGame35State(InputState):
         ),
     )
     paused: bool = InputField(
-        default=False,
+        default=True,
         description=(
-            "Whether continuous generation pauses before the next chunk. Changes preserve the "
-            "current world and release all camera axes plus a queued `step`."
+            "Whether continuous generation pauses before the next chunk. New sessions start "
+            "paused while waiting for an anchor upload. Changes preserve the current world "
+            "and release all camera axes plus a queued `step`."
         ),
     )
     _step_requested: bool = False

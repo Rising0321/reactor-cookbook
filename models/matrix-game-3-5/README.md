@@ -20,13 +20,16 @@ Memory across requests. `context_chunks: 7` remains the rolling KV window; it
 does not force seven chunks into one interactive request.
 
 The anchor image initializes Matrix's causal visual state, so `set_image` starts
-a fresh rollout at chunk 1 without reloading model weights. Text conditioning is
-sampled per causal chunk. `set_prompt` re-encodes only the text context for the
-next chunk while retaining the current camera pose, rolling KV cache, dynamic
-visual context, and Patch Memory. As the rolling window advances, chunks made
-under the new prompt naturally replace older cached chunks. The worker retains
-only the active encoded prompt, so repeated prompt changes do not accumulate GPU
-text contexts over a long session.
+a fresh rollout at chunk 1 without reloading model weights. A new session starts
+paused without selecting an image. Each successful upload queues exactly one
+chunk while keeping continuous generation paused, so the client receives visual
+confirmation before choosing whether to step again or resume. Text conditioning
+is sampled per causal chunk. `set_prompt` re-encodes only the text context for
+the next chunk while retaining the current camera pose, rolling KV cache,
+dynamic visual context, and Patch Memory. As the rolling window advances,
+chunks made under the new prompt naturally replace older cached chunks. The
+worker retains only the active encoded prompt, so repeated prompt changes do not
+accumulate GPU text contexts over a long session.
 
 The adapter emits each finished chunk with single-frame backpressure. WebRTC
 playout and session recording consume the same complete 16 FPS sequence, while
@@ -34,12 +37,15 @@ camera axes are sampled again before the next expensive chunk begins.
 
 ## Run with the Reactor CLI
 
-This directory is a `reactor` workspace, described in
-[Build your own model](https://docs.reactor.inc/deploy/overview). The host needs
-only the
-[`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
-the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires
-Linux, CUDA, and approximately 40 GB of VRAM at 704x1280.
+This directory is a `reactor` workspace. The manifest names the model and its
+B200 resource, and its `build` block defines the complete Python 3.12 serving
+image. `requirements.txt` contains only model dependencies because
+`build.runtime_version` installs Reactor Runtime in the same resolution. The
+recipe intentionally has no Dockerfile: the host needs only the `reactor` CLI,
+Docker, the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix
+requires Linux, CUDA, and approximately 40 GB of VRAM at 704x1280. See the
+public [build configuration guide](https://deploy-docs.reactor.inc/platform/build)
+for the supported image fields.
 
 Build the Python 3.12 serving image, expose one GPU, and start Runtime:
 
@@ -51,9 +57,11 @@ reactor run --gpus device=0
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 inside the
 container; `--gpus all` exposes every GPU. The manifest requests one B200 when
-the workspace is deployed. `reactor run` reuses the built image and serves on
-`http://localhost:8080`. Rebuild after changing code or dependencies. To use a
-different port:
+the workspace is deployed. `reactor build` renders the manifest into an
+in-memory Dockerfile and leaves no generated build file in the workspace.
+`reactor run` reuses that image, and builds one on the first run when no local
+image exists. It serves WebRTC signaling on `http://localhost:8080` by default.
+Rebuild after changing code or dependencies. To use a different port:
 
 ```sh
 reactor build && reactor run --gpus device=0 --port 18011
@@ -68,18 +76,15 @@ reactor run --gpus device=0 -e HF_TOKEN
 ```
 
 Startup waits for the Matrix worker to prepare its assets and load the weights.
-Once it is ready:
+Check readiness using the port passed to `reactor run`:
 
 ```sh
 curl -s localhost:8080/health
 curl -s localhost:8080/schema
-curl -s -X POST localhost:8080/start_session \
-  -H 'content-type: application/json' -d '{}'
 ```
 
-A WebRTC client consumes the `main_video` track at 16 FPS. Recording is enabled
-for that video track. Connect using a client built with the
-[Reactor SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk).
+A Reactor client consumes the `main_video` WebRTC track at 16 FPS. Recording is
+enabled for that video track.
 
 ## Public source and model assets
 
@@ -110,14 +115,19 @@ mount; every worker, model, tokenizer, inference, and sample path is derived fro
 that one root. To relocate everything, change only `runtime.weights_path` in
 `reactor.yaml`.
 
-The default first-person image, prompt, intrinsics, and camera pose arrive in
-the pinned source checkout. They are session fallbacks rather than a
-restriction: a client can upload its own anchor image and prompt at runtime.
+The adapter provides a generic default prompt that asks Matrix to preserve the
+uploaded scene without introducing a particular setting or object. Users can
+therefore leave the prompt empty. The default intrinsics and camera pose arrive
+in the pinned source checkout. The demo image is copied into `example_image` for
+convenient manual upload, but Runtime does not select it automatically. Every
+new session waits for the client to upload its anchor image.
 
 ## Controls
 
 - `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes plus an optional
-  prompt, then starts a fresh rollout from that image.
+  prompt, then starts a fresh paused rollout and automatically generates its
+  first 12-frame chunk. An empty prompt uses the generic default from
+  `matrix_game_3_5.yaml`.
 - `set_prompt` applies a new non-empty text condition at the next chunk boundary
   without resetting visual history. `StateUpdate.next_chunk` identifies that
   boundary.
@@ -148,6 +158,7 @@ therefore do not need to reconstruct shared state from partial messages.
 Additional commands:
 
 - `set_paused` stops before another expensive chunk starts and holds playback.
+  It is enabled by default; resuming requires an uploaded image.
 - `step` generates and plays one complete 12-frame chunk while paused. Calling it
   while running returns `pause_required`.
 - `reset` restores the selected anchor and prompt; an optional non-negative `seed`
@@ -176,6 +187,11 @@ schema. A Reactor client reserves a session upload slot, writes the raw bytes to
 its returned URL, and sends the resulting upload reference with the command. A
 schema-driven frontend can therefore render a file picker without embedding
 binary data in a command message.
+
+No anchor is selected when a session starts. A successful `set_image` keeps the
+session paused, queues one chunk, and broadcasts completion after its 12 frames
+have been generated. This provides immediate visual confirmation without
+starting an unbounded rollout.
 
 A ready-to-upload copy of the public first-person demo input lives in
 [`example_image`](example_image).
