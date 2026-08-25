@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 from reactor_runtime.interface.model.contract import ModelContract
 from reactor_runtime.manifest import load_config
 
@@ -266,12 +267,23 @@ def test_paused_scene_upload_emits_without_a_model_step(
     assert world.actions == []
 
 
-def test_manifest_and_runtime_pin_match_the_package_entrypoint() -> None:
-    """Keep the manifest entrypoint and public Runtime pin reproducible."""
-    config = load_config(EXAMPLE_DIR / "reactor.yaml")
+def test_manifest_defines_the_runtime_entrypoint_and_generated_image() -> None:
+    """Keep the entrypoint and generated image inputs reproducible."""
+    manifest_path = EXAMPLE_DIR / "reactor.yaml"
+    config = load_config(manifest_path)
+    manifest = yaml.safe_load(manifest_path.read_text())
+    build = manifest["build"]
 
     assert config.model_ref == "diamond:Diamond"
-    assert "reactor-runtime==3.1.2" in (EXAMPLE_DIR / "requirements.txt").read_text()
+    assert build["runtime_version"] == "3.1.2"
+    assert build["python_requirements"] == "requirements.txt"
+    assert build["cuda_version"] == "12.8.1"
+    assert build["python_version"] == "3.12"
+    assert build["system_packages"] == ["git"]
+    assert build["runtime_env"]["DIAMOND_PATH"] == "/opt/diamond"
+    assert "851cefb497733d27f1b85c804104638765860fca" in build["run"][0]
+    assert not (EXAMPLE_DIR / "Dockerfile").exists()
+    assert "reactor-runtime" not in (EXAMPLE_DIR / "requirements.txt").read_text()
 
 
 def test_model_download_uses_the_runtime_weights_mount(
