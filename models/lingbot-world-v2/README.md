@@ -5,13 +5,13 @@ as an interactive Reactor backend. Start from an uploaded or built-in image,
 change the text prompt without resetting the world, and explore with continuous
 six-axis camera motion.
 
-The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; startup clones the exact tested source revision
-into Reactor's weights cache and verifies that its tracked files are unmodified.
+The adapter loads an exact tested source revision from Reactor's weights cache
+and calls the upstream causal-fast inference components directly.
 
 ## Prerequisites
 
-- The [`reactor` CLI](https://deploy-docs.reactor.inc/platform/build) and Docker.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. The deployment
   manifest requests one NVIDIA B200.
 - About 100 GB on a local volume for the public source and 14B `causal-fast`
@@ -25,11 +25,10 @@ before running or redistributing the model.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` names the model,
-declares the CUDA and Python image in `build:`, and points Runtime at the model
-adapter and configuration. The CLI renders the build definition into an
-in-memory Dockerfile, so this recipe has no checked-in Dockerfile. See
-[Build your own model](https://deploy-docs.reactor.inc/platform/build) for the
-current workspace format.
+controls its Reactor Runtime 3.2.3, CUDA and Python image, and points Runtime at
+the model adapter and configuration. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
 Build the image, expose one GPU, and start Runtime:
 
@@ -58,8 +57,8 @@ On first load, the adapter clones the pinned public source and downloads the
 pinned Hugging Face checkpoint into the CLI-mounted `runtime.weights_path`.
 Later starts verify and reuse both. The checked-in default is
 `~/.cache/reactor_registry/lingbot-world-v2`; change that one manifest value to
-place all model assets on a larger volume. Configure Docker's `data-root`
-separately when image layers and build cache must also live on that volume.
+place all model assets on a larger volume. Configure the container engine's
+image and build-cache storage on that volume when the system disk is small.
 
 `LINGBOT_WORLD_V2_PATH` and `LINGBOT_WORLD_V2_CHECKPOINT_PATH` may point to
 existing copies available inside the container. A source override must be a
