@@ -107,8 +107,9 @@ stable rollouts.
 ## Autoregressive inference
 
 One turn runs upstream's four-step self-forcing Stage 1, one three-latent
-refiner block, and one causal-VAE decode, then emits 24 RGB frames at 1280x704
-and 16 FPS. The adapter constructs
+refiner block, and one causal-VAE decode, then emits 24 RGB frames at 1280x704.
+Playback adapts to measured inference throughput, and the output queue holds
+one complete 24-frame chunk. The adapter constructs
 `SelfForcingFlowEulerCamCtrl.sample_chunks` once per rollout and advances that
 incremental runner across Reactor turns.
 

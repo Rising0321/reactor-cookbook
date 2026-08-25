@@ -32,7 +32,6 @@ from reactor_runtime.log import get_logger
 
 from sana_wm_assets import prepare_source, read_config
 from sana_wm_backend import (
-    FPS,
     PIXEL_FRAMES_PER_CHUNK,
     SanaStreamingBackend,
     TrajectoryCompleteError,
@@ -150,8 +149,7 @@ class SanaWM(ReactorPipeline):
 
     state: SanaWMState
     output: SanaWMOutput
-    fps = FPS
-    buffer_size = 1
+    buffer_size = PIXEL_FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -592,7 +590,7 @@ class SanaWM(ReactorPipeline):
         return message
 
     async def inference(self) -> AsyncGenerator[object, None]:
-        """Advance one native upstream chunk off-loop and stream its frames at 16 FPS."""
+        """Advance and emit one native upstream chunk off-loop."""
         backend = self._backend
         config = self._require_config()
         if backend is None:
