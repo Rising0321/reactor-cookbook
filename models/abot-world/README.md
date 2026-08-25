@@ -13,21 +13,21 @@ upstream 21-latent local-attention window.
 
 ## Run locally
 
-Follow the Reactor [build guide](https://deploy-docs.reactor.inc/platform/build)
-to install the CLI and Docker with the NVIDIA Container Toolkit, then run the
-model from this directory. At native resolution the distilled model uses about
-23 GB of VRAM; the deployment manifest requests a B200 and allows up to 32 GiB
-of host memory.
+Install the [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation)
+and Docker with the NVIDIA Container Toolkit, then run the model from this
+directory. At native resolution the distilled model uses about 23 GB of VRAM;
+the deployment manifest requests a B200 and allows up to 32 GiB of host memory.
 
 ```sh
 reactor build
 reactor run --gpus device=0 --port 8080
 ```
 
-There is no Dockerfile. The CLI generates the image in memory from the
-`build:` block in `reactor.yaml`, including CUDA 12.8, Python 3.12,
-FlashAttention 2.8.1, Git, and FFmpeg. Run `reactor build` again after changing
-the model code, requirements, or build configuration.
+The `build:` block in `reactor.yaml` configures CUDA 12.8, Python 3.12,
+FlashAttention 2.8.1, Git, and FFmpeg. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields. Run `reactor build` again after changing model code,
+requirements, or build configuration.
 
 The first container start clones the pinned public
 [ABot-World](https://github.com/amap-cvlab/ABot-World) revision and downloads
@@ -61,8 +61,7 @@ the GPU indefinitely; reset or select an image to begin a fresh rollout.
 
 ## Upstream fidelity
 
-The repository checkout remains unmodified. The adapter calls the upstream
-prompt encoder, first-frame encoder, eight-channel action encoder, denoising
-loop, rolling KV cache update, and cached VAE decoder directly. FP8
-quantization, CUDA graphs, FlashAttention 4, and warmup passes are intentionally
-outside this SDK-only adapter.
+The adapter uses a pinned upstream checkout and calls its prompt encoder,
+first-frame encoder, eight-channel action encoder, denoising loop, rolling KV
+cache update, and cached VAE decoder directly. Inference uses the released
+distilled checkpoint with bfloat16 execution and FlashAttention 2.8.1.
