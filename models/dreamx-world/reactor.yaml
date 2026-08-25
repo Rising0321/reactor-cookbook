@@ -23,9 +23,8 @@ runtime:
   weights_path: ~/.cache/reactor_registry/dreamx-world
 
 build:
-  # Reactor renders the image definition from this block in memory. Keep the
-  # runtime pin aligned with the public API used by dreamx_world.py.
-  runtime_version: "3.1.2"
+  # Keep this release aligned with the public API used by dreamx_world.py.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
 
   # CUDA 12.8 selects the matching NVIDIA base and PyTorch wheel index. The

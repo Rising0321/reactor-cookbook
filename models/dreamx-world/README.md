@@ -5,10 +5,9 @@ distilled autoregressive world model through Reactor Runtime. Start from an
 uploaded or built-in image, describe the world with a prompt, and move through
 it with DreamX's native composable keyboard camera controls.
 
-The adapter calls the pinned upstream model, scheduler, camera conditioning,
-denoiser, VAE, and rolling KV-cache implementation directly. Model weights and
-causal state stay resident across chunks; the upstream checkout remains clean
-and unmodified.
+The adapter calls the model, scheduler, camera conditioning, denoiser, VAE, and
+rolling KV-cache implementation from a pinned upstream checkout. Model weights
+and causal state stay resident across chunks.
 
 DreamX generates three latent frames per turn. Streaming VAE decode emits 9 RGB
 frames for the first turn and 12 for every later turn at 16 FPS. Prompt and
@@ -23,25 +22,24 @@ continues.
 
 ## Prerequisites
 
-- The [`reactor` CLI](https://deploy-docs.reactor.inc/platform/build) and
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
   Docker.
 - An NVIDIA GPU, recent driver, and NVIDIA Container Toolkit. The manifest
   requests one B200; a compatible GPU with at least 48 GB of VRAM is sufficient
   for local development. CPU inference is unsupported.
 - Public network access to GitHub and Hugging Face for first-run source and
   model downloads. Neither checkpoint repository is gated.
-- At least 80 GB on a fast filesystem for the CUDA image, BuildKit cache, and
+- At least 80 GB on a fast filesystem for the model image, build cache, and
   selected model assets.
 
 ## Run
 
-This directory is a `reactor` workspace with no Dockerfile. The `build` block in
-`reactor.yaml` declares Reactor Runtime 3.1.2, Python 3.12, CUDA 12.8.1, system
-packages, and `requirements.txt`; `reactor build` renders that image definition
-in memory and hands it to BuildKit. The CLI installs everything inside the
-image; the host needs only the prerequisites above.
+The `build` block in `reactor.yaml` controls the model image: Reactor Runtime
+3.2.3, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
+Reactor's [build configuration](https://deploy-docs.reactor.inc/platform/build)
+for the supported fields. The host needs only the prerequisites above.
 
-Build the YAML-defined image, expose one GPU, and choose a free port:
+Build the model image, expose one GPU, and choose a free port:
 
 ```sh
 cd models/dreamx-world
@@ -66,9 +64,8 @@ memory.
 
 ## Keep large data off the system disk
 
-First startup downloads the 21 GB DreamX checkpoint and only Wan2.2's text
-encoder, tokenizer, and VAE; the unused Wan transformer shards are not
-downloaded.
+First startup downloads the 21 GB DreamX checkpoint and the required Wan2.2
+text encoder, tokenizer, and VAE.
 
 `runtime.weights_path` controls the host directory that `reactor run` mounts for
 source and model assets. Its checked-in value is portable. On a
@@ -80,11 +77,9 @@ runtime:
   weights_path: /mnt/fast/reactor/dreamx-world
 ```
 
-Container images and BuildKit caches belong to the Docker daemon rather than
-the workspace. Configure Docker's image storage on the same large volume when
-the system disk is small. On Docker Engine installations backed by containerd,
-make sure the containerd image and snapshot roots move as well as Docker's
-`data-root`.
+The container engine stores image layers and build caches separately from the
+workspace. Configure that storage on the same large volume when the system disk
+is small.
 
 ## Public source and model assets
 
@@ -105,8 +100,7 @@ reactor run --gpus device=0 --port 18085 \
 ```
 
 The adapter and upstream DreamX source are Apache-2.0. Downloaded checkpoints
-retain the terms published by their source repositories and are not
-redistributed by this recipe.
+retain the terms published by their source repositories.
 
 ## Controls
 
