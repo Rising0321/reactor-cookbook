@@ -72,9 +72,8 @@ runtime:
   config: diamond.yaml
 
 build:
-  # The CLI translates this declarative block into the image build executed by
-  # BuildKit, keeping the complete build contract in reactor.yaml.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

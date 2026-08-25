@@ -5,13 +5,12 @@ as an interactive Reactor backend. Use this recipe when a client needs to start
 from an official spawn or an uploaded CSGO frame, apply native keyboard and
 mouse actions, stream generated video, and record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-the Reactor integration; the generated image fetches a pinned, unmodified
-DIAMOND source snapshot during the build.
+The adapter uses a pinned DIAMOND source snapshot and calls its public CSGO
+inference components directly.
 
 ## Prerequisites
 
-- The [Reactor CLI](https://deploy-docs.reactor.inc/platform/installation) and a
+- The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation) and a
   running Docker daemon. On macOS:
 
   ```sh
@@ -33,10 +32,9 @@ mounted weights cache; later containers reuse those files.
 ## Run
 
 This directory is a `reactor` workspace: `reactor.yaml` names the model and
-fully defines its generated image, while `requirements.txt` lists DIAMOND's
-serving dependencies. The CLI consumes the declarative build configuration,
-installs Runtime 3.1.2, and runs the resulting image — nothing to install on
-your host but the CLI and Docker.
+controls its Reactor Runtime 3.2.3 image, while `requirements.txt` lists
+DIAMOND's serving dependencies. The host needs the CLI and Docker from the
+prerequisites above.
 
 ```sh
 cd models/diamond-csgo-world-model
@@ -70,7 +68,7 @@ CPU-only and substantially slower than host-native MPS.
 
 Connect a client from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/)
 (pick **Local (Direct)**), or point the
-[JS SDK](https://deploy-docs.reactor.inc/sdk-reference/using-the-sdk) at it
+[JS SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk) at it
 with `local: true`. A quick liveness check:
 
 ```sh
