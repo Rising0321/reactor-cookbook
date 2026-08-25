@@ -30,9 +30,9 @@ dynamic visual context, and Patch Memory. As the rolling window advances,
 chunks made under the new prompt naturally replace older cached chunks. The
 worker retains one active encoded prompt across repeated prompt changes.
 
-The adapter emits each finished chunk with single-frame backpressure. WebRTC
-playout and session recording consume the same complete 16 FPS sequence, while
-camera axes are sampled again before the next expensive chunk begins.
+The adapter submits each finished chunk as one 12-frame batch. Playback adapts
+to measured inference throughput, and the output queue holds one complete chunk
+while camera axes are sampled again before the next expensive turn begins.
 
 ## Run with the Reactor CLI
 
@@ -81,8 +81,8 @@ curl -s localhost:8080/health
 curl -s localhost:8080/schema
 ```
 
-A Reactor client consumes the `main_video` WebRTC track at 16 FPS. Recording is
-enabled for that video track.
+A Reactor client consumes the `main_video` WebRTC track. Recording is enabled
+for that video track.
 
 ## Public source and model assets
 

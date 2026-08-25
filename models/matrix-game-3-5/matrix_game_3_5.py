@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         read_config,
     )
     from examples.matrix_game_3_5.matrix_images import (
+        OUTPUT_FRAMES_PER_CHUNK,
         normalize_output_frames,
         validate_uploaded_image,
     )
@@ -67,6 +68,7 @@ else:
     MatrixConfig = matrix_config.MatrixConfig
     prepare_runtime = matrix_config.prepare_runtime
     read_config = matrix_config.read_config
+    OUTPUT_FRAMES_PER_CHUNK = matrix_images.OUTPUT_FRAMES_PER_CHUNK
     normalize_output_frames = matrix_images.normalize_output_frames
     validate_uploaded_image = matrix_images.validate_uploaded_image
     MatrixGame35Output = matrix_schema.MatrixGame35Output
@@ -79,7 +81,7 @@ else:
 logger = get_logger(__name__)
 
 FPS = 16
-_CAMERA_POSES_PER_CHUNK = 12
+_CAMERA_POSES_PER_CHUNK = OUTPUT_FRAMES_PER_CHUNK
 
 
 class _Backend(Protocol):
@@ -110,8 +112,7 @@ class MatrixGame35(ReactorPipeline):
 
     state: MatrixGame35State
     output: MatrixGame35Output
-    fps = FPS
-    buffer_size = 1
+    buffer_size = OUTPUT_FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -523,7 +524,7 @@ class MatrixGame35(ReactorPipeline):
         return self._state_update()
 
     async def inference(self) -> AsyncGenerator[object, None]:
-        """Generate chunks off-loop and emit their frames at Matrix's native FPS."""
+        """Generate and emit one complete chunk off-loop per turn."""
         backend = self._backend
         planner = self._planner
         config = self._config
@@ -595,10 +596,7 @@ class MatrixGame35(ReactorPipeline):
                 )
             await self.send(self._state_update())
 
-            for frame in frames:
-                if self.state._restart_requested:
-                    break
-                yield MatrixGame35Output(main_video=frame)
+            yield MatrixGame35Output(main_video=frames)
 
     def _clear_controls(self) -> None:
         """Return every camera axis to neutral."""
@@ -616,6 +614,7 @@ class MatrixGame35(ReactorPipeline):
         self.state._restart_requested = True
         self.state._limit_reached = False
         self._chunk_index = 0
+        self.output.flush()
 
     def _next_control_chunk(self) -> int:
         """Return the one-based chunk expected to consume new camera motion."""
