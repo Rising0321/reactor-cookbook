@@ -1,0 +1,28 @@
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python environments
+.venv/
+venv/
+
+# Editor and operating-system state
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Source control and local container overrides
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+
+# Runtime assets are downloaded into the mounted weights path, never copied
+# into the image build context.
+weights/
