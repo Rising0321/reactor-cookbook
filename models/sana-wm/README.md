@@ -5,14 +5,13 @@ model as an image-, prompt-, and camera-controlled Reactor backend. The recipe
 targets the distilled `Efficient-Large-Model/SANA-WM_streaming` release and
 emits one 24-frame autoregressive video chunk per model turn.
 
-The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; the first run clones the exact tested SANA
-revision into Reactor's persistent weights cache and never edits its tracked
-files.
+The adapter loads an exact tested SANA revision from Reactor's persistent
+weights cache and calls its streaming inference components directly.
 
 ## Prerequisites
 
-- The [`reactor` CLI](https://deploy-docs.reactor.inc/platform/build) and Docker.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported; the manifest declares one NVIDIA B200.
 - About 110 GB in Reactor's weights cache for the pinned SANA-WM, Gemma, and
@@ -20,11 +19,11 @@ files.
 
 ## Run
 
-This directory is a `reactor` workspace. `reactor.yaml` names the model and
-declares its CUDA 12.8, Python 3.12, system-package, and Python-package build.
-The CLI generates the image recipe from that manifest, so this directory
-intentionally has no Dockerfile. `requirements.txt` contains only the model's
-inference dependencies; `build.runtime_version` pins Reactor Runtime itself.
+This directory is a `reactor` workspace. `reactor.yaml` controls its Reactor
+Runtime 3.2.3, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
+`requirements.txt` contains the model's inference dependencies. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
 Validate the workspace, build the image, and expose one GPU to the container:
 
@@ -71,9 +70,8 @@ ln -s "$SANA_WORK" "$HOME/.cache/reactor_registry/sana-wm-streaming-reactor"
 
 Skip the `ln` command when the destination already exists. Reactor's weights
 mount retains the upstream source and model assets across image rebuilds.
-Docker layers and build cache belong to the Docker daemon, so configure that
-daemon's `data-root` on the large volume separately when image storage must
-also stay off the system disk.
+The container engine stores image layers and build cache separately, so
+configure that storage on the large volume when the system disk is small.
 
 ## Controls
 
@@ -111,8 +109,8 @@ stable rollouts.
 One turn runs upstream's four-step self-forcing Stage 1, one three-latent
 refiner block, and one causal-VAE decode, then emits 24 RGB frames at 1280x704
 and 16 FPS. The adapter constructs
-`SelfForcingFlowEulerCamCtrl.sample_chunks` once per rollout rather than
-replaying earlier frames through a replacement inference path.
+`SelfForcingFlowEulerCamCtrl.sample_chunks` once per rollout and advances that
+incremental runner across Reactor turns.
 
 The upstream state remains incremental across Reactor turns:
 
@@ -122,8 +120,8 @@ The upstream state remains incremental across Reactor turns:
 
 The defaults in `sana_wm.yaml` preserve those released memory lengths. Prompt
 changes start a fresh rollout because upstream encodes text when the caches are
-initialized. The distilled release uses classifier-free guidance scale 1, so
-its fixed empty negative prompt is not exposed as an ineffective control.
+initialized. The distilled release uses classifier-free guidance scale 1 with
+its fixed empty negative prompt.
 
 Each rollout is bounded at 512 chunks. Reaching the bound broadcasts a reset,
 reinitializes the caches from the selected image, prompt, and seed, and
@@ -162,14 +160,14 @@ SANA-WM does not emit audio.
   and five built-in scenes.
 - Set `SANA_WM_SOURCE_PATH` with
   `reactor run -e SANA_WM_SOURCE_PATH=/path/in/container` to reuse a clean
-  checkout already visible inside the weights mount. The adapter imports the
-  checkout directly and does not install SANA's training package metadata.
+  checkout already visible inside the weights mount. The adapter imports that
+  checkout directly.
 - Diffusers 0.38 is intentional because the released refiner accesses LTX-2.3
-  attention-gating fields introduced after 0.37. Transformer Engine and
-  quantized weights remain disabled.
+  attention-gating fields introduced after 0.37. Inference uses the released
+  checkpoint precision.
 - The adapter follows this cookbook's Apache-2.0 license. SANA source, SANA-WM
   checkpoints, Gemma, LTX-2 components, and Pi3X retain their upstream licenses
-  and terms; this recipe downloads rather than redistributes them.
+  and terms.
 - Ending a session releases its controls, uploaded conditioning, and
   per-rollout caches. Stop `reactor run` to remove the container and release
   its GPU memory.

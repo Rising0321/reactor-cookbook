@@ -23,7 +23,7 @@ runtime:
   weights_path: ~/.cache/reactor_registry/sana-wm-streaming-reactor
 
 build:
-  runtime_version: "3.1.2"
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
