@@ -72,14 +72,13 @@ runtime:
 
 build:
   # The reactor-runtime release this workspace is built against.
-  runtime_version: "3.1.2"
+  runtime_version: "3.2.3"
 
-  # Reactor generates the image from this build declaration. Model
-  # dependencies are resolved together with the runtime inside the image.
+  # Resolve model dependencies with the runtime inside the image.
   python_requirements: requirements.txt
   python_version: "3.12"
   cuda_version: "12.9.1"
-  # OpenDreamer uses JAX's CUDA wheels rather than PyTorch's wheel index.
+  # OpenDreamer uses JAX's CUDA wheels from PyPI.
   python_indexes:
     - https://pypi.org/simple
   system_packages:
@@ -88,13 +87,11 @@ build:
     - ffmpeg
     - git
 
-  # Keep the pinned upstream checkout separate from this adapter and expose it
-  # to the model process through the same public configuration contract.
+  # Expose the pinned upstream checkout to the model process.
   runtime_env:
     OPENDREAMER_PATH: /opt/open-dreamer
 
-  # These commands run before the adapter source is copied, preserving the
-  # expensive upstream and dataset layers across adapter-only edits.
+  # Install the pinned source and public demo assets.
   run:
     - >-
       git init /opt/open-dreamer

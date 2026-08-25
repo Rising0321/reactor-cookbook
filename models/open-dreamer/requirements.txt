@@ -1,6 +1,5 @@
-# Python dependencies installed into the model image in one pass, so conflicts
-# fail during `reactor build` rather than during model loading. Reactor Runtime
-# is selected by `build.runtime_version` in reactor.yaml.
+# Resolve these model dependencies with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 jax[cuda12]==0.10.1
 flax==0.12.7
 orbax-checkpoint==0.11.40

@@ -5,14 +5,13 @@ as an interactive Minecraft Reactor backend. Use this recipe when a client
 needs to start from a dataset demo or uploaded Minecraft frame, apply native
 keyboard and mouse actions, stream generated video, and record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; the `build` block in `reactor.yaml` fetches the
-exact tested OpenDreamer revision into the model image and never edits its
-tracked files.
+The adapter uses an exact tested OpenDreamer revision in the model image and
+calls its public inference components directly.
 
 ## Prerequisites
 
-- The `reactor` CLI and Docker.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported.
 - About 8 GB in Reactor's weights cache for the checkpoint, plus Docker image
@@ -21,10 +20,8 @@ tracked files.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
-runtime, recording, and complete CUDA-capable image build;
-`requirements.txt` contains only the model's Python dependencies. There is no
-checked-in Dockerfile: the CLI renders one in memory from the `build` block and
-hands it to BuildKit. See Reactor's
+runtime, recording, and complete CUDA-capable image build. `requirements.txt`
+contains only the model's Python dependencies. See Reactor's
 [build configuration](https://deploy-docs.reactor.inc/platform/build) for the
 supported YAML fields.
 
@@ -35,12 +32,12 @@ cd models/open-dreamer
 reactor run --gpus device=0
 ```
 
-On the first run, the CLI builds the generated image, installs Reactor Runtime
-3.1.2 and the model dependencies, and fetches the pinned OpenDreamer source and
-public demo. It then downloads the pinned `reactor-team/open-dreamer`
-checkpoint into the CLI-mounted weights cache. Later runs reuse both the local
-image and cached checkpoint. The model compiles its JAX generation and
-conditioning paths before reporting ready on `http://localhost:8080`.
+On the first run, the CLI builds the model image with Reactor Runtime 3.2.3 and
+the model dependencies, including the pinned OpenDreamer source and public
+demo. It then downloads the pinned `reactor-team/open-dreamer` checkpoint into
+the CLI-mounted weights cache. Later runs reuse both the local image and cached
+checkpoint. The model compiles its JAX generation and conditioning paths before
+reporting ready on `http://localhost:8080`.
 
 Use `reactor build` when you want to build without starting the service, or to
 rebuild after editing anything baked into the image:
@@ -51,7 +48,8 @@ reactor run --gpus device=0
 ```
 
 Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
-**Local (Direct)** and `http://localhost:8080`, or point the JS SDK at it with
+**Local (Direct)** and `http://localhost:8080`, or point the
+[JS SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk) at it with
 `local: true`. A quick liveness check:
 
 ```sh
@@ -86,9 +84,8 @@ Each session selects one of three dataset demos at random. Each demo is a
 `set_demo` selects `demo_1`, `demo_2`, or `demo_3`; `random_demo`
 chooses another window randomly. Both reset the model's incremental KV caches.
 
-The YAML build downloads the paired MP4 and JSONL into the isolated upstream
-checkout. They are internal dataset conditioning assets; clients do not upload
-them.
+The model image includes the paired MP4 and JSONL in the upstream checkout.
+They are internal dataset conditioning assets; clients do not upload them.
 
 ## Start from an image
 
