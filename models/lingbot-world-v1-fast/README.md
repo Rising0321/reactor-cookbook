@@ -115,9 +115,11 @@ position, prompt cross-attention, random generator, and causal VAE feature
 cache remain alive for the next request.
 
 The first three-latent chunk decodes to 9 RGB frames because it includes the
-image anchor. Every later chunk decodes to 12 frames, played at the upstream 16
-FPS. The official 81-frame Fast invocation contains 21 VAE latents; the adapter
-keeps that exact rolling native KV window for every session.
+image anchor. Every later chunk decodes to 12 frames. Each turn is submitted as
+one frame batch; playback adapts to measured inference throughput, and the
+output queue holds one complete 12-frame chunk. The official 81-frame Fast
+invocation contains 21 VAE latents; the adapter keeps that exact rolling native
+KV window for every session.
 
 Prompt changes replace only cross-attention conditioning at the next chunk
 boundary. Visual self-KV remains intact, so future video responds to the new
@@ -168,7 +170,7 @@ the system disk has limited space.
 ## Recording
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
-clips up to five minutes. The model emits video at 16 FPS and no audio.
+clips up to five minutes. The model emits video without audio.
 
 ## Notes
 

@@ -60,6 +60,7 @@ else:
 logger = get_logger(__name__)
 
 FPS = 16
+FRAMES_PER_CHUNK = 12
 
 
 class _Backend(Protocol):
@@ -86,8 +87,7 @@ class LingBotWorldV1(ReactorPipeline):
 
     state: LingBotWorldState
     output: LingBotWorldOutput
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -480,7 +480,7 @@ class LingBotWorldV1(ReactorPipeline):
         return self._state_update()
 
     async def inference(self) -> AsyncGenerator[object, None]:
-        """Generate one native chunk per request and emit it at 16 FPS."""
+        """Generate and emit one native chunk per request."""
         backend = self._backend
         planner = self._planner
         config = self._require_config()
@@ -551,10 +551,7 @@ class LingBotWorldV1(ReactorPipeline):
                     )
                 )
             await self.send(self._state_update())
-            for frame in frames:
-                if self.state._restart_requested:
-                    break
-                yield LingBotWorldOutput(main_video=frame)
+            yield LingBotWorldOutput(main_video=frames)
 
     def _set_axis(self, name: str, value: float) -> StateUpdate:
         """Set one validated axis and return a complete state snapshot."""
@@ -585,6 +582,7 @@ class LingBotWorldV1(ReactorPipeline):
         self.state._limit_reached = False
         self._chunk_index = 0
         self._last_chunk_seconds = None
+        self.output.flush()
 
     def _require_available_rollout(self) -> None:
         """Reject controls that cannot apply until a fresh rollout starts."""
