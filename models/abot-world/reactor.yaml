@@ -1,0 +1,41 @@
+$schema: reactor/v1
+
+model:
+  name: abot-world
+  version: v0.0.1
+  description: |
+    Play the distilled ABot-World model with uploaded images, prompts, and native keyboard controls.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "4"
+      limit: "8"
+    memory:
+      request: 8Gi
+      limit: 32Gi
+
+runtime:
+  import: abot_world:ABotWorld
+  config: abot_world.yaml
+  weights_path: ~/.cache/reactor_registry/abot-world
+
+build:
+  runtime_version: "3.1.2"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    - ffmpeg
+    - git
+
+recording:
+  enabled: true
+  chunk_seconds: 4
+  clip_max_seconds: 300
+  video_track: main_video
+  video:
+    codec: h264
+    preset: veryfast
+    crf: 23

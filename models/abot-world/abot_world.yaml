@@ -1,0 +1,26 @@
+source:
+  path: source/ABot-World
+  url: https://github.com/amap-cvlab/ABot-World.git
+  revision: 604a09c4b135c08af684cadbba0a53efeb119e6d
+
+checkpoint:
+  path: checkpoints/ABot-World-0-5B-LF
+  repo_id: acvlab/ABot-World-0-5B-LF
+  revision: d26a3003701e70d38cd17e2af2faf63bd4ff7632
+
+seed: 42
+
+stream:
+  height: 704
+  width: 1280
+  max_chunks: 512
+
+examples:
+  - image: example_images/desert-valley.png
+    prompt: A third-person view walking through a sunlit desert river valley with rocky terrain and stable forward motion.
+  - image: example_images/mountain-meadow.png
+    prompt: A first-person hike along an alpine meadow trail with lush grass, distant peaks, and gentle forward motion.
+  - image: example_images/forest-stream.png
+    prompt: A first-person walk stepping across stones in a forest stream with dappled light and moss-covered rocks.
+  - image: example_images/landscape.png
+    prompt: A realistic outdoor landscape with a navigable path, natural lighting, detailed terrain, and stable camera motion.
