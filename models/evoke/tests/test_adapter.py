@@ -238,9 +238,9 @@ def test_inference_requests_exactly_one_native_chunk() -> None:
 
     async def collect() -> list[Any]:
         generator = model.inference()
-        outputs = [await anext(generator) for _ in range(36)]
+        output = await anext(generator)
         await generator.aclose()
-        return outputs
+        return [output]
 
     outputs = asyncio.run(collect())
 
@@ -251,7 +251,7 @@ def test_inference_requests_exactly_one_native_chunk() -> None:
     assert seed == 42
     assert prompt == "A coral reef"
     assert all(isinstance(output, EvokeOutput) for output in outputs)
-    assert all(output.main_video.shape == (384, 640, 3) for output in outputs)
+    assert outputs[0].main_video.shape == (36, 384, 640, 3)
     assert any(isinstance(message, StateUpdate) for message in messages)
 
 
@@ -293,7 +293,7 @@ def test_paused_image_upload_generates_one_preview_chunk() -> None:
 
     async def collect() -> tuple[list[Any], Any]:
         generator = model.inference()
-        outputs = [await anext(generator) for _ in range(36)]
+        outputs = [await anext(generator)]
         idle = await anext(generator)
         await generator.aclose()
         return outputs, idle
@@ -301,8 +301,9 @@ def test_paused_image_upload_generates_one_preview_chunk() -> None:
     outputs, idle = asyncio.run(collect())
 
     assert "first preview chunk queued" in reply.detail
-    assert len(outputs) == 36
+    assert len(outputs) == 1
     assert all(isinstance(output, EvokeOutput) for output in outputs)
+    assert outputs[0].main_video.shape == (36, 384, 640, 3)
     assert len(backend.generate_calls) == 1
     assert idle is pipeline_module.Idle
     assert model.state.paused is True

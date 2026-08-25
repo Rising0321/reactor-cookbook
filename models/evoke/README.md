@@ -134,7 +134,9 @@ matrices consumed by EVOKE.
 EVOKE generates nine latent frames per native turn at 384x640 and 24 FPS.
 Camera-conditioned i2v and v2v warm the persistent decoder with a real prior
 and emit 36 RGB frames per command. Prompt-only t2v has no prior, so its first
-turn emits 33 frames and later turns emit 36.
+turn emits 33 frames and later turns emit 36. Each turn is submitted as one
+frame batch; playback adapts to measured inference throughput, and the output
+queue holds one complete 36-frame chunk.
 
 ## Start from an image
 

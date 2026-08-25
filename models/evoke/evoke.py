@@ -62,7 +62,8 @@ else:
 logger = get_logger(__name__)
 
 FPS = 24
-CAMERA_POSES_PER_CHUNK = 36
+FRAMES_PER_CHUNK = 36
+CAMERA_POSES_PER_CHUNK = FRAMES_PER_CHUNK
 
 
 class _Backend(Protocol):
@@ -95,8 +96,7 @@ class Evoke(ReactorPipeline):
 
     state: EvokeState
     output: EvokeOutput
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -674,8 +674,7 @@ class Evoke(ReactorPipeline):
                 )
             self._chunk_index += 1
             await self.send(self._state_update())
-            for frame in frames:
-                yield EvokeOutput(main_video=frame)
+            yield EvokeOutput(main_video=frames)
 
             config = self._require_config()
             if self._chunk_index >= config.max_chunks:
