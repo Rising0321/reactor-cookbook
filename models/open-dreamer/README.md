@@ -123,6 +123,9 @@ Commands return typed, command-correlated messages for the client timeline:
 
 Message delivery stays outside the synchronous inference loop.
 
+Each autoregressive turn emits one RGB frame. Playback adapts to measured
+inference throughput, and the output queue holds that complete one-frame turn.
+
 ## Recording
 
 `reactor.yaml` records `main_video` by default in four-second chunks and

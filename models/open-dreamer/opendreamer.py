@@ -108,6 +108,7 @@ _BUTTON_TO_VPT_NAME = {
 }
 _CAMERA_DELTA_MIN = -200.0
 _CAMERA_DELTA_MAX = 200.0
+FRAMES_PER_CHUNK = 1
 
 
 class OpenDreamer(ReactorPipeline):
@@ -115,6 +116,7 @@ class OpenDreamer(ReactorPipeline):
 
     state: OpenDreamerState
     output: OpenDreamerOutput
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
