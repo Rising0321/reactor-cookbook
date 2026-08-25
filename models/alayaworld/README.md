@@ -24,14 +24,16 @@ image with `set_image`, or invoke `random_image` to select one of the public
 AlayaWorld examples. Either command initializes the autoregressive cache and
 starts generation.
 
-## Run
+## Run with the Reactor CLI
 
 This directory is a `reactor` workspace. The manifest names the model and its
-B200 resource, the Dockerfile builds a Python 3.12 image with the CUDA 12.8
-PyTorch wheels, and `requirements.txt` pins Reactor Runtime alongside the model
-dependencies. The host needs only the
-[`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
-the NVIDIA Container Toolkit, and a compatible NVIDIA GPU.
+B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
+12.8 image. `requirements.txt` contains only model dependencies because
+`build.runtime_version` installs Reactor Runtime in the same resolution. The
+recipe intentionally has no Dockerfile: the host needs only the `reactor` CLI,
+Docker, the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See the public
+[build configuration guide](https://deploy-docs.reactor.inc/platform/build)
+for the supported image fields.
 
 Gemma is gated. Accept its Hugging Face license, export a read token, then build
 the image and expose one GPU to the container:
@@ -49,9 +51,10 @@ the Docker command line. `--gpus device=3` selects host GPU 3 and presents it as
 device 0 inside the container; `--gpus all` exposes every GPU. The manifest
 requests one B200 when the same workspace is deployed.
 
-`reactor run` reuses the image produced by `reactor build`, and builds one on
-the first run when no local image exists. It serves WebRTC signaling on
-`http://localhost:8080` by default. Rebuild after changing code or
+`reactor build` renders the manifest into an in-memory Dockerfile and leaves no
+generated build file in the workspace. `reactor run` reuses that image, and
+builds one on the first run when no local image exists. It serves WebRTC
+signaling on `http://localhost:8080` by default. Rebuild after changing code or
 dependencies. A different port is applied to both Docker and Runtime:
 
 ```sh

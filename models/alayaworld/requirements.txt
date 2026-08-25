@@ -1,8 +1,6 @@
-# Install the runtime and model dependencies into the image in one pass. The
-# additional index supplies the CUDA 12.8 PyTorch wheels used on Blackwell.
---extra-index-url https://download.pytorch.org/whl/cu128
-
-reactor-runtime==3.1.2
+# Install model dependencies into the same resolution as Reactor Runtime.
+# `build.runtime_version` owns the Runtime version, while
+# `build.cuda_version` selects the CUDA 12.8 PyTorch index for Blackwell.
 
 # B200-compatible replacement for AlayaWorld's upstream PyTorch 2.6/cu124
 # stack.
