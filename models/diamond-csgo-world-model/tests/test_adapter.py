@@ -275,7 +275,7 @@ def test_manifest_defines_the_runtime_entrypoint_and_generated_image() -> None:
     build = manifest["build"]
 
     assert config.model_ref == "diamond:Diamond"
-    assert build["runtime_version"] == "3.1.2"
+    assert build["runtime_version"] == "3.2.3"
     assert build["python_requirements"] == "requirements.txt"
     assert build["cuda_version"] == "12.8.1"
     assert build["python_version"] == "3.12"
