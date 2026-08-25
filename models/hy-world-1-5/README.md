@@ -22,15 +22,16 @@ continuous generation.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
-runtime entry point, CUDA and Python versions, system packages, and Python
-requirements. Reactor uses that `build:` block to generate the image definition
-in memory; this recipe has no handwritten Dockerfile. See
-[Build a model](https://deploy-docs.reactor.inc/platform/build) for the manifest
-workflow.
+runtime entry point, Reactor Runtime 3.2.3, CUDA and Python versions, system
+packages, and Python requirements. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
-The host needs the Reactor CLI, Docker, the NVIDIA Container Toolkit, and a
-compatible NVIDIA GPU. From the recipe directory, validate the manifest, build
-the generated image, and expose one GPU to the container:
+The host needs the
+[`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
+the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. From the recipe
+directory, validate the manifest, build the image, and expose one GPU to the
+container:
 
 ```sh
 cd models/hy-world-1-5
@@ -63,12 +64,12 @@ reactor run --gpus device=0 --port 18089 -e HF_TOKEN
 ```
 
 When that gated asset is unavailable, startup prepares the matching public
-SigLIP SO400M architecture from Google instead of dropping image-semantic
-conditioning.
+SigLIP SO400M architecture from Google and keeps image-semantic conditioning
+enabled.
 
 For a hosted release, choose a unique `model.name`, bump `model.version`, and
-review the resources in `reactor.yaml`. The same generated-image workflow is
-used by the publish command:
+review the resources in `reactor.yaml`. The publish command uses the same
+manifest:
 
 ```sh
 reactor model publish
@@ -114,8 +115,8 @@ ln -s "$HY_WORLD_WORK/weights" \
   "$HOME/.cache/reactor_registry/hy-world-1-5"
 ```
 
-Docker and BuildKit storage belong to the host. Configure their data roots on a
-large volume when the default Docker data root has limited space.
+The container engine stores image layers and build cache separately. Configure
+that storage on a large volume when the system disk has limited space.
 
 To reuse an existing public checkout or prepared asset, place it somewhere
 visible inside the container and forward one or more of these environment
@@ -134,7 +135,7 @@ export HY_WORLDPLAY_VISION_ENCODER_PATH=/path/to/siglip-layout
 `feature_extractor/`. The action model path must contain
 `ar_distilled_action_model/model.safetensors`. Existing source checkouts must
 match the immutable revision in `hy_world_1_5.yaml`; startup reports a clear
-error instead of rewriting a different developer checkout.
+revision mismatch for any other checkout.
 
 ## Controls
 
@@ -187,14 +188,11 @@ before the upstream image-conditioning path prepares its 832x480 input.
 After the initial image-conditioned chunk, the backend selects the official
 20-frame context for every turn: the recent 12 latent frames plus
 geometry-aligned historical memory, including the initial chunk. The distilled
-four-step denoiser and official memory settings are validated rather than
-exposed as performance knobs because changing them would alter memory
-evaluation.
+four-step denoiser and official memory settings are fixed and validated because
+changing them would alter memory evaluation.
 
-This integration keeps the upstream PyTorch attention path and does not patch
-the pinned model source with compile, CUDA Graph, or replacement attention
-kernels. Those serving optimizations are separate from the autoregressive SDK
-adaptation and generated-image deployment workflow demonstrated here.
+Inference uses the upstream PyTorch attention path and eager execution from the
+pinned model source.
 
 `stream.max_chunks` defaults to 512. At the limit, generation pauses and emits
 `RolloutLimitReached`; `reset`, `set_image`, or `random_image` starts a fresh

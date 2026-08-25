@@ -22,9 +22,8 @@ runtime:
   weights_path: ~/.cache/reactor_registry/hy-world-1-5
 
 build:
-  # Reactor renders the image definition directly from this block. Keep the
-  # runtime pin here rather than duplicating it in requirements.txt.
-  runtime_version: "3.1.2"
+  # Keep the runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   # CUDA 12.8 wheels contain the sm_100 kernels required by the B200 declared
   # above.
