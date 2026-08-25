@@ -1,0 +1,32 @@
+source:
+  path: Evoke
+  url: https://github.com/AlayaLab/Evoke.git
+  revision: 74d268516d95c8fceadd2378f91a73f9f187042b
+
+assets:
+  weights:
+    repo_id: AlayaLab/Evoke
+    revision: 7fa34ecef85754fde6f08996b1ece9d195dcd2f4
+  vigeo:
+    repo_id: pkqbajng/ViGeo
+    revision: 320bbfa59000df0732afe54511cd7669bb342386
+
+inference:
+  seed: 42
+  reference_seconds: 5.0
+  # A scene-neutral positive condition for omitted prompts. The distilled model
+  # runs CFG-free, so negative prompts do not affect exposure or color.
+  stability_prompt: >-
+    The input scene continues faithfully with balanced exposure, preserved
+    highlight and shadow detail, stable brightness, consistent color,
+    consistent lighting, and smooth temporal continuity.
+
+stream:
+  # Reset only the rollout state after 512 chunks; loaded weights stay resident.
+  max_chunks: 512
+
+motion:
+  # Full-scale rates follow the released pose-track envelope: at most 1.5
+  # translation units and 9 degrees over one 1.5-second native chunk.
+  translation_units_per_second: 1.0
+  rotation_degrees_per_second: 6.0

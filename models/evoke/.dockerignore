@@ -1,0 +1,20 @@
+# Python build and test artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Source-control and editor state
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# The generated build consumes these files before COPY.
+.dockerignore
+Dockerfile
+
+# Local runtime state belongs on runtime.weights_path, never in the image.
+Evoke/
