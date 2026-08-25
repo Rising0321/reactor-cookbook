@@ -27,6 +27,7 @@ from reactor_runtime import (
 from reactor_runtime.log import get_logger
 
 if TYPE_CHECKING:
+    from dreamx_camera import FRAMES_PER_CHUNK
     from dreamx_types import (
         ActionChanged,
         ChunkGenerated,
@@ -44,9 +45,11 @@ if TYPE_CHECKING:
 else:
     module_prefix = f"{__package__}." if __package__ else ""
     assets_module = importlib.import_module(f"{module_prefix}dreamx_assets")
+    camera_module = importlib.import_module(f"{module_prefix}dreamx_camera")
     images_module = importlib.import_module(f"{module_prefix}dreamx_images")
     types_module = importlib.import_module(f"{module_prefix}dreamx_types")
     read_config = assets_module.read_config
+    FRAMES_PER_CHUNK = camera_module.FRAMES_PER_CHUNK
     prepare_runtime_assets = assets_module.prepare_runtime_assets
     validate_uploaded_image = images_module.validate_uploaded_image
     ActionChanged = types_module.ActionChanged
@@ -88,8 +91,7 @@ class DreamXWorld(ReactorPipeline):
 
     state: DreamXWorldState
     output: DreamXWorldOutput
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -409,7 +411,7 @@ class DreamXWorld(ReactorPipeline):
         return message
 
     async def inference(self) -> AsyncGenerator[object, None]:
-        """Generate one upstream-native chunk at a time and stream it at 16 FPS."""
+        """Generate and emit one upstream-native chunk at a time."""
         backend = self._backend
         config = self._require_config()
         if backend is None:

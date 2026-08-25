@@ -10,9 +10,10 @@ rolling KV-cache implementation from a pinned upstream checkout. Model weights
 and causal state stay resident across chunks.
 
 DreamX generates three latent frames per turn. Streaming VAE decode emits 9 RGB
-frames for the first turn and 12 for every later turn at 16 FPS. Prompt and
-held-key state are sampled at the chunk boundary, so a command received during
-an in-flight turn applies to the following one.
+frames for the first turn and 12 for every later turn. Playback adapts to
+measured inference throughput, and the output queue holds one complete 12-frame
+chunk. Prompt and held-key state are sampled at the chunk boundary, so a command
+received during an in-flight turn applies to the following one.
 
 A new session starts paused without choosing a scene. Upload an image with
 `set_image`, or call `random_image` to select one of the public DreamX examples.

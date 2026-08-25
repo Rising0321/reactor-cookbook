@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 _FIRST_CHUNK_PIXEL_FRAMES = 9
-_LATER_CHUNK_PIXEL_FRAMES = 12
+FRAMES_PER_CHUNK = 12
 _FIRST_LATENT_INDICES = (0, 1, 5)
 _LATER_LATENT_INDICES = (0, 4, 8)
 
@@ -42,7 +42,7 @@ class DreamXCameraController:
     ) -> CameraChunk:
         """Return latent-aligned poses for one native three-latent-frame chunk."""
         frame_count = (
-            _FIRST_CHUNK_PIXEL_FRAMES if first_chunk else _LATER_CHUNK_PIXEL_FRAMES
+            _FIRST_CHUNK_PIXEL_FRAMES if first_chunk else FRAMES_PER_CHUNK
         )
         selected_indices = (
             _FIRST_LATENT_INDICES if first_chunk else _LATER_LATENT_INDICES
