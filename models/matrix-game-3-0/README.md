@@ -108,7 +108,8 @@ most reliable rollouts.
 
 One Reactor chunk is one original Matrix iteration. The first chunk contains
 57 frames and each later chunk contains 40. The configured upstream limit is
-12 chunks, or 497 frames at 17 FPS.
+12 chunks, or 497 frames total. Playback adapts to measured inference
+throughput, and the output queue holds the largest complete chunk of 57 frames.
 
 The adapter loads `MatrixGame3Pipeline` once and runs its original interactive
 `generate()` method. It replaces only the blocking terminal action reader and

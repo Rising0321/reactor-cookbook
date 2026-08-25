@@ -34,6 +34,7 @@ from reactor_runtime.log import get_logger
 if TYPE_CHECKING:
     from matrix_game_3_0_assets import MatrixGame30Config
     from matrix_game_3_0_backend import NativeAction
+    from matrix_game_3_0_images import FRAMES_PER_CHUNK
     from matrix_game_3_0_schema import (
         MOVEMENT_KEYS,
         ControlsChanged,
@@ -55,6 +56,7 @@ else:
     MatrixGame30Backend = backend_module.MatrixGame30Backend
     NativeAction = backend_module.NativeAction
     action_from_controls = backend_module.action_from_controls
+    FRAMES_PER_CHUNK = images.FRAMES_PER_CHUNK
     normalize_output_frames = images.normalize_output_frames
     validate_uploaded_image = images.validate_uploaded_image
     MOVEMENT_KEYS = schema.MOVEMENT_KEYS
@@ -66,9 +68,6 @@ else:
     StateUpdate = schema.StateUpdate
 
 logger = get_logger(__name__)
-
-FPS = 17
-
 
 class _Backend(Protocol):
     """Define the blocking upstream operations used by the Reactor loop."""
@@ -93,8 +92,7 @@ class MatrixGame30(ReactorPipeline):
 
     state: MatrixGame30State
     output: MatrixGame30Output
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -127,7 +125,6 @@ class MatrixGame30(ReactorPipeline):
             distilled=True,
             int8=config.use_int8,
             vae=config.vae_type,
-            fps=FPS,
         )
 
     @session_started
