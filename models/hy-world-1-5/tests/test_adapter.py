@@ -92,8 +92,8 @@ def test_contract_is_atomic_and_documents_command_results() -> None:
         for command in contract.commands.values()
         for field in command.command.__command_fields__.values()
     )
-    assert HYWorld15.fps == 24
-    assert HYWorld15.buffer_size == 1
+    assert "fps" not in HYWorld15.__dict__
+    assert HYWorld15.buffer_size == 16
 
 
 def test_native_camera_keeps_anchor_and_dual_action_alignment() -> None:

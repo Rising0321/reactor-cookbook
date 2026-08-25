@@ -12,6 +12,8 @@ from reactor_runtime import CommandError, UploadedFile
 _UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 _UPLOAD_MAX_PIXELS = 100_000_000
 _UPLOAD_FORMATS = {"BMP", "JPEG", "PNG", "WEBP"}
+FIRST_CHUNK_FRAMES = 13
+FRAMES_PER_CHUNK = 16
 
 
 def validate_uploaded_image(image: UploadedFile) -> None:
@@ -70,7 +72,7 @@ def load_reference_image(value: Path | UploadedFile) -> Image.Image:
 def normalize_output_frames(value: np.ndarray, *, first_chunk: bool) -> np.ndarray:
     """Return one contiguous uint8 RGB causal chunk with its native length."""
     frames = np.asarray(value)
-    expected = 13 if first_chunk else 16
+    expected = FIRST_CHUNK_FRAMES if first_chunk else FRAMES_PER_CHUNK
     if frames.ndim != 4 or frames.shape[-1] != 3:
         raise RuntimeError(
             f"HY-World output must have shape (T, H, W, 3), got {frames.shape}"

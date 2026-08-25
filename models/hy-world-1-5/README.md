@@ -10,8 +10,8 @@ clients.
 
 HY-World predicts four causal latents per turn at 480p. The first turn decodes
 to 13 RGB frames because its first latent is the image anchor; every later turn
-decodes to 16 frames. Frames stream on `main_video` at the model's native 24
-FPS, with one complete model turn per interactive chunk.
+decodes to 16 frames. Playback on `main_video` adapts to measured inference
+throughput, with one complete model turn in the 16-frame output queue.
 
 A new session starts paused and without choosing a scene for the user. Upload
 an image with `set_image`, or invoke `random_image` to select an official

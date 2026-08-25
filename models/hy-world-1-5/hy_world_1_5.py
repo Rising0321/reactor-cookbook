@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from hy_world_1_5_assets import ExampleImage, HYWorld15Config
     from hy_world_1_5_backend import HYWorld15Backend
     from hy_world_1_5_camera import CameraControl, NativeCameraPlanner
+    from hy_world_1_5_images import FRAMES_PER_CHUNK
     from hy_world_1_5_schema import (
         CameraMotionChanged,
         ChunkCompleted,
@@ -57,6 +58,7 @@ else:
     HYWorld15Backend = backend_module.HYWorld15Backend
     CameraControl = camera_module.CameraControl
     NativeCameraPlanner = camera_module.NativeCameraPlanner
+    FRAMES_PER_CHUNK = images_module.FRAMES_PER_CHUNK
     load_reference_image = images_module.load_reference_image
     normalize_output_frames = images_module.normalize_output_frames
     validate_uploaded_image = images_module.validate_uploaded_image
@@ -74,7 +76,6 @@ else:
 
 logger = get_logger(__name__)
 
-FPS = 24
 _DEFAULT_UPLOAD_PROMPT = "Continue the world shown in the reference image."
 
 
@@ -83,8 +84,7 @@ class HYWorld15(ReactorPipeline):
 
     state: HYWorld15State
     output: HYWorld15Output
-    fps = FPS
-    buffer_size = 1
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -432,7 +432,7 @@ class HYWorld15(ReactorPipeline):
         return message
 
     async def inference(self) -> AsyncGenerator[Any, None]:
-        """Generate one native causal chunk at a time and emit frames at 24 FPS."""
+        """Generate and emit one native causal chunk at a time."""
         backend = self._require_backend()
         planner = self._require_planner()
         config = self._require_config()
