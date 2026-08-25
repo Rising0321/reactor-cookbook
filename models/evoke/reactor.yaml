@@ -36,10 +36,9 @@ runtime:
   weights_path: ~/.cache/reactor_registry/evoke
 
 build:
-  # Reactor renders the image definition from this block in memory. EVOKE
-  # clones its pinned public source on first load and its v2v reader links to
-  # the X11/audio libraries bundled by these Debian runtime packages.
-  runtime_version: "3.1.2"
+  # EVOKE's v2v reader links to the X11/audio libraries bundled by these Debian
+  # runtime packages.
+  runtime_version: "3.2.3"
   system_packages:
     - ffmpeg
     - git

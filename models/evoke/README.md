@@ -9,11 +9,11 @@ The adapter and upstream implementation remain separate. This directory owns
 the Reactor integration and a narrow patch that exposes EVOKE's native chunk
 boundary. On first load, the adapter clones the exact tested upstream revision
 into Reactor's mounted weights cache, applies that patch once, and downloads
-only the post-distillation inference assets.
+the required post-distillation inference assets.
 
 ## Prerequisites
 
-- The [Reactor CLI](https://deploy-docs.reactor.inc/platform/installation) and
+- The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation) and
   a running Docker daemon.
 - An NVIDIA Hopper or Blackwell GPU, NVIDIA driver, and NVIDIA Container
   Toolkit. The recipe uses FlashAttention 4 and declares one B200 for deployed
@@ -28,11 +28,10 @@ license before commercial use.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-fully defines its generated image, while `requirements.txt` lists the adapter's
-serving dependencies. The CLI consumes the declarative
-[`build` block](https://deploy-docs.reactor.inc/platform/build), installs
-Reactor Runtime 3.1.2 and the required system packages, and runs the resulting
-image. There is intentionally no Dockerfile.
+controls its Reactor Runtime 3.2.3 image, while `requirements.txt` lists the
+adapter's serving dependencies. See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
 ```sh
 cd models/evoke
@@ -47,7 +46,7 @@ Python 3.10 inference worker, and downloads the pinned model snapshots on first
 load. Later containers reuse all of those files. The model reports ready on
 `http://localhost:8080` after its weights have loaded.
 
-Rebuild after editing anything included in the generated image:
+Rebuild after editing anything included in the model image:
 
 ```sh
 reactor build && reactor run --gpus device=0
@@ -55,7 +54,7 @@ reactor build && reactor run --gpus device=0
 
 Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
 **Local (Direct)** and `http://localhost:8080`, or point the
-[JS SDK](https://deploy-docs.reactor.inc/sdk-reference/using-the-sdk) at it
+[JS SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk) at it
 with `local: true`. A quick liveness check:
 
 ```sh
@@ -80,22 +79,14 @@ Alternatively, edit `runtime.weights_path` to an absolute large-disk path.
 `REACTOR_WEIGHTS_PATH`, so the adapter's default caches remain on the
 persistent volume.
 
-Model storage and image storage are independent. `reactor build` uses the
-Docker daemon selected by `DOCKER_HOST`; check its location before building on
-a space-constrained machine:
-
-```sh
-docker info --format '{{.DockerRootDir}}'
-```
-
-Configure that daemon's data root on a large disk when necessary.
+Model storage and container image storage are independent. Configure both on a
+large disk when the system disk is space constrained.
 
 ## Runtime boundary
 
-The adapter does not reproduce EVOKE's denoising loop. Its patch adds one hook
-that waits for the next chunk's prompt and camera poses and another that
-publishes the decoded chunk. The original `EvokePipeline` call remains alive
-between requests and preserves the released inference state:
+The original `EvokePipeline` call remains alive between requests. A narrow
+patch supplies each native chunk boundary with the next prompt and camera poses
+and publishes the decoded chunk while preserving the released inference state:
 
 - rolling latent history with `history_sizes: [16, 2, 1]`;
 - the persistent cross-chunk VAE decode cache;
@@ -157,7 +148,7 @@ The world remains paused after that preview, so the viewer can see the new
 rollout before stepping or resuming continuous generation.
 
 When user text is empty, the adapter selects this documented, scene-neutral
-condition instead of an object-specific example prompt:
+condition:
 
 > The input scene continues faithfully with balanced exposure, preserved
 > highlight and shadow detail, stable brightness, consistent color, consistent
@@ -193,15 +184,14 @@ git -C "$HOME/.cache/reactor_registry/evoke/Evoke" checkout \
   74d268516d95c8fceadd2378f91a73f9f187042b
 ```
 
-Leave the checkout otherwise unchanged. Startup verifies its revision and
-applies `stateful_rollout.patch` once. It downloads only:
+Startup verifies the checkout revision and applies `stateful_rollout.patch`
+once. The required snapshots are:
 
 - `AlayaLab/Evoke/evoke-base`;
 - `AlayaLab/Evoke/evoke/stage3_post_distillation`;
 - `pkqbajng/ViGeo/vigeo.pt`.
 
-Stage-1, teacher, and training checkpoints are excluded. Interrupted Hugging
-Face downloads resume.
+Interrupted Hugging Face downloads resume.
 
 ## Recording
 
@@ -215,6 +205,5 @@ allows clips up to five minutes. EVOKE does not emit audio.
 - The geometric bank stays at the release recipe's default horizon because
   memory-behavior evaluations depend on it.
 - FlashAttention 4 supplies the varlen attention implementation needed by
-  EVOKE on Hopper and Blackwell; this recipe does not replace the upstream
-  sampling algorithm with a separate inference implementation.
+  EVOKE on Hopper and Blackwell.
 - Stop `reactor run` to remove the container and release its GPU memory.
