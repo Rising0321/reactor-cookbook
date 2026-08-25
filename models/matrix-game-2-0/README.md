@@ -6,32 +6,31 @@ model as an interactive Reactor backend. Use this recipe when a client needs to
 start from a public demo or uploaded image, apply native keyboard and
 mouse-camera controls, stream autoregressive video, and record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration. On first load it fetches the exact tested source
-revision and checkpoint into Reactor's mounted weights cache without editing the
-upstream checkout. Reactor builds the model image from the `build:` block in
-`reactor.yaml`; this recipe has no Dockerfile.
+The adapter loads an exact tested source revision and checkpoint from Reactor's
+mounted weights cache and calls the upstream autoregressive components
+directly. The `build:` block in `reactor.yaml` controls the model image.
 
 ## Prerequisites
 
-- The `reactor` CLI and Docker, configured as described in the
-  [Reactor build documentation](https://deploy-docs.reactor.inc/platform/build).
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported. The published resource request targets one B200.
 - About 12 GB in Reactor's weights cache, plus approximately 30 GB of Docker
   image and build working space.
 
-When the system disk is small, place both Reactor's weights cache and the Docker
-daemon's data root on a high-capacity volume. `runtime.weights_path` controls the
-host directory mounted for source and checkpoints; Docker image and BuildKit
-storage are configured on the Docker daemon itself.
+When the system disk is small, place Reactor's weights cache and the container
+engine's image storage on a high-capacity volume. `runtime.weights_path`
+controls the host directory mounted for source and checkpoints.
 
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-declares its generated image build, mounts the persistent weights cache, and
-configures recording. `requirements.txt` contains inference dependencies only;
-`build.runtime_version` is the single Reactor Runtime version pin.
+configures its Reactor Runtime 3.2.3 image, mounts the persistent weights cache,
+and enables recording. `requirements.txt` contains the inference dependencies.
+See Reactor's
+[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+supported fields.
 
 Check the host, build the image, and expose one free GPU to the container:
 
@@ -42,15 +41,13 @@ reactor build
 reactor run --gpus device=0 --port 8080
 ```
 
-The CLI renders the YAML build definition into a Dockerfile in memory and hands
-it to BuildKit. It installs Reactor Runtime 3.1.2, Python 3.12, CUDA 12.8, the
-model dependencies, and the required system packages without writing a
-Dockerfile into the workspace. `reactor run` reuses the local image, building it
-automatically when its tag is absent.
+The configured image contains Reactor Runtime 3.2.3, Python 3.12, CUDA 12.8,
+the model dependencies, and the required system packages. `reactor run` reuses
+the local image, building it automatically when its tag is absent.
 
 On first load the adapter sparsely clones the pinned `Matrix-Game-2` source and
-downloads only the universal distilled checkpoint, Wan 2.1 VAE, image encoder,
-and tokenizer files from the pinned Hugging Face snapshot. Interrupted downloads
+downloads the universal distilled checkpoint, Wan 2.1 VAE, image encoder, and
+tokenizer files from the pinned Hugging Face snapshot. Interrupted downloads
 resume from the mounted cache, and later runs reuse the same assets.
 
 Check readiness and inspect the generated command schema with:
@@ -111,8 +108,8 @@ their rollout state are session-scoped and released when the session ends.
 
 The adapter loads the official model, image VAE/CLIP encoder, causal VAE decoder,
 and universal distilled checkpoint in the Runtime process. Each `step` advances
-the same native three-latent block as upstream `inference_streaming.py`; it does
-not rerun an offline rollout or rebuild history from rendered frames.
+the same native three-latent block as upstream `inference_streaming.py` and
+continues its incremental state.
 
 The active rollout preserves the diffusion model's 30 rolling KV caches, the
 keyboard and mouse action KV caches, the visual cross-attention cache, and all
@@ -144,7 +141,7 @@ Message delivery stays outside the synchronous inference path.
 ## Recording
 
 `reactor.yaml` records `main_video` as H.264 in four-second chunks and allows
-clips up to five minutes. The generated image includes FFmpeg. Matrix-Game-2.0
+clips up to five minutes. The model image includes FFmpeg. Matrix-Game-2.0
 does not emit audio.
 
 ## Notes
@@ -153,10 +150,7 @@ does not emit audio.
   universal distilled variant, 360-latent horizon, seed, and public demo images.
 - Set `MATRIX_GAME_2_PATH` to an existing `Matrix-Game-2` source directory to
   reuse a checkout. Its Git revision must match the pinned revision.
-- Matrix-Game-2.0 removed the text-conditioning branch from its released 2.0
-  inference model, so this adapter does not expose a prompt command the
-  checkpoint cannot consume.
-- The image uses Matrix-Game-2.0's native Flash Attention 2.8.3 dependency. This
-  recipe deliberately does not add Flash Attention 4, CUDA Graphs, or warmup;
-  those are separate inference-optimization work.
+- The released Matrix-Game-2.0 checkpoint accepts image and action
+  conditioning. The command schema exposes those native inputs.
+- The image uses Matrix-Game-2.0's native Flash Attention 2.8.3 dependency.
 - Stop `reactor run` to remove the container and release its GPU memory.

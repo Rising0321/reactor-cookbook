@@ -35,9 +35,8 @@ runtime:
   weights_path: ~/.cache/reactor_registry/matrix-game-2-0
 
 build:
-  # Reactor renders this image definition into a Dockerfile in memory. Keep
-  # reactor-runtime out of requirements.txt: this is its single version pin.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
