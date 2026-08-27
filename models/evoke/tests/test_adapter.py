@@ -253,6 +253,17 @@ def test_inference_requests_exactly_one_native_chunk() -> None:
     assert any(isinstance(message, StateUpdate) for message in messages)
 
 
+def test_rollout_restart_flushes_pending_media(monkeypatch: Any) -> None:
+    """Discard frames queued by the world that a restart replaces."""
+    model, _, _ = _ready_model()
+    flushes: list[None] = []
+    monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
+
+    model._request_restart()
+
+    assert flushes == [None]
+
+
 def test_public_example_image_passes_upload_validation() -> None:
     """Accept the bundled public image through the same uploaded-byte path."""
     path = EXAMPLE_DIR / "example_image/evoke-coral-reef.jpg"

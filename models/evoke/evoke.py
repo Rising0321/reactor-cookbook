@@ -671,6 +671,7 @@ class Evoke(ReactorPipeline):
                 )
 
     def _request_restart(self) -> None:
+        self.output.flush()
         self.state._restart_requested = True
         self.state._step_requested = False
         self._chunk_index = 0
