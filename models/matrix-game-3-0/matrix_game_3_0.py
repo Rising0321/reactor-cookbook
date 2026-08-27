@@ -68,6 +68,7 @@ else:
 
 logger = get_logger(__name__)
 
+
 class _Backend(Protocol):
     """Define the blocking upstream operations used by the Reactor loop."""
 
@@ -470,13 +471,11 @@ class MatrixGame30(ReactorPipeline):
                 )
             await self.send(self._state_update())
 
-            for frame in frames:
-                if self.state._restart_requested:
-                    break
-                yield MatrixGame30Output(main_video=frame)
+            yield MatrixGame30Output(main_video=frames)
 
     def _request_fresh_rollout(self, *, auto_step: bool) -> None:
         """Queue a fresh upstream rollout and clear controls and progress."""
+        self.output.flush()
         self._clear_controls()
         self.state._restart_requested = True
         self.state._step_requested = auto_step

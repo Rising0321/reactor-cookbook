@@ -18,7 +18,7 @@ MOVEMENT_KEYS = ["w", "a", "s", "d"]
 
 
 class MatrixGame30Output(Output):
-    """Carry one generated Matrix-Game 3.0 RGB frame."""
+    """Carry one generated Matrix-Game 3.0 RGB frame batch."""
 
     main_video: Video
 
