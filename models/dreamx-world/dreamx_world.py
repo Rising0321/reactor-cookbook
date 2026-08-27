@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import secrets
 import time
@@ -148,12 +147,12 @@ class DreamXWorld(ReactorPipeline):
         self._generating = False
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release image and causal rollout state when the shared session ends."""
         backend = self._backend
         try:
             if backend is not None:
-                await asyncio.to_thread(backend.end_session)
+                backend.end_session()
         finally:
             self._clear_controls()
             self.state._step_requested = False
@@ -432,7 +431,7 @@ class DreamXWorld(ReactorPipeline):
                 self._generating = True
                 await self.send(self._state_update())
                 try:
-                    await asyncio.to_thread(backend.reset, self._seed, selected)
+                    backend.reset(self._seed, selected)
                 finally:
                     self._generating = False
                 if self.state._reset_requested or selected is not self._selected_input:
@@ -447,8 +446,7 @@ class DreamXWorld(ReactorPipeline):
             pressed_keys = self.state._pressed_keys
             self._generating = True
             try:
-                frames = await asyncio.to_thread(
-                    backend.generate_chunk,
+                frames = backend.generate_chunk(
                     prompt,
                     pressed_keys,
                 )
