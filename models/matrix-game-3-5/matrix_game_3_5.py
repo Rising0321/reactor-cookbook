@@ -9,7 +9,6 @@ reusing the rollout's KV cache, dynamic visual context, and Patch Memory.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -191,12 +190,12 @@ class MatrixGame35(ReactorPipeline):
         await client.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release causal state and controls owned by the completed world."""
         backend = self._backend
         try:
             if backend is not None:
-                await asyncio.to_thread(backend.end_session)
+                backend.end_session()
         finally:
             self._clear_controls()
             self.state.paused = True
@@ -541,8 +540,7 @@ class MatrixGame35(ReactorPipeline):
                 if not prompt:
                     raise RuntimeError("Matrix-Game-3.5 requires a non-empty prompt")
                 self.state._restart_requested = False
-                await asyncio.to_thread(
-                    backend.reset,
+                backend.reset(
                     self._seed,
                     selected_input,
                     prompt,
@@ -572,8 +570,7 @@ class MatrixGame35(ReactorPipeline):
             )
             self._chunk_in_flight = True
             try:
-                frames = await asyncio.to_thread(
-                    backend.generate_chunk,
+                frames = backend.generate_chunk(
                     trajectory,
                     self._seed,
                     self.state.prompt,
