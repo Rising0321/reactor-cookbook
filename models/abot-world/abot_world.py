@@ -9,7 +9,6 @@ changes and resets initialize a fresh autoregressive world.
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -203,7 +202,7 @@ class ABotWorld(ReactorPipeline):
         await self._send_state_update()
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release session inputs while keeping loaded model weights resident."""
         self._clear_controls()
         self._selected_input = None
@@ -212,7 +211,7 @@ class ABotWorld(ReactorPipeline):
         self._active_prompt = ""
         self._sampled_keys = frozenset()
         self._chunk_index = 0
-        await asyncio.to_thread(self._reset_upstream_stream)
+        self._reset_upstream_stream()
 
     @event(
         name="set_key_state",
@@ -511,8 +510,7 @@ class ABotWorld(ReactorPipeline):
                 self._reset_in_flight = True
                 self.output.flush()
                 try:
-                    await asyncio.to_thread(
-                        self._reset_rollout,
+                    self._reset_rollout(
                         selected_input,
                         self.state.prompt,
                         self.state._seed,
@@ -534,7 +532,7 @@ class ABotWorld(ReactorPipeline):
             prompt = self.state.prompt
             self._chunk_in_flight = True
             try:
-                frames = await asyncio.to_thread(self._generate_chunk, prompt, action)
+                frames = self._generate_chunk(prompt, action)
             finally:
                 self._chunk_in_flight = False
             self._sampled_keys = sampled
