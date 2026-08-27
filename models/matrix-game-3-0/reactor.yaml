@@ -1,0 +1,44 @@
+$schema: reactor/v1
+
+model:
+  name: matrix-game-3-0-distilled
+  version: v0.0.1
+  description: |
+    Explore a memory-augmented autoregressive world from an image, a prompt,
+    player movement, and pitch/yaw view controls.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "4"
+      limit: "8"
+    memory:
+      request: 16Gi
+      limit: 64Gi
+
+runtime:
+  import: matrix_game_3_0:MatrixGame30
+  config: matrix_game_3_0.yaml
+
+build:
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    - ffmpeg
+    - git
+    - libgl1
+    - libglib2.0-0
+
+recording:
+  enabled: true
+  chunk_seconds: 4
+  clip_max_seconds: 300
+  video_track: main_video
+  video:
+    codec: h264
+    preset: veryfast
+    crf: 23

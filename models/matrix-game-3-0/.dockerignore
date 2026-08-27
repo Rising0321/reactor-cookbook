@@ -1,0 +1,22 @@
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local environments and editor state
+.venv/
+venv/
+.vscode/
+.idea/
+*.swp
+
+# Source-control metadata and local build definitions
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+
+# Model weights and downloaded source stay in the CLI-mounted weights cache.
+weights/

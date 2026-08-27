@@ -1,0 +1,9 @@
+# Generated Python and test state.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Local Reactor weights and downloaded upstream source.
+weights/
