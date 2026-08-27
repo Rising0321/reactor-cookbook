@@ -89,15 +89,10 @@ configure that storage on the large volume when the system disk is small.
   trajectory shaped `(F, 4, 4)` for exact upstream-compatible replay.
 - `use_interactive_controls` leaves finite trajectory playback and returns to
   held live controls on a fresh rollout.
-- `set_paused(paused)` stops or resumes automatic chunk generation. Pausing
-  releases held controls.
-- `step` queues exactly one 24-frame chunk while paused.
 - `reset(seed)` clears the incremental caches and optionally changes the seed.
 
-A session starts paused without selecting an image. `set_image` and
-`random_image` both remain paused but automatically queue the first chunk, so
-conditioning produces visible output without temporarily enabling continuous
-generation. Subsequent `step` calls advance one chunk at a time.
+A session starts unpaused without selecting an image. `set_image` and
+`random_image` start continuous generation from the selected first frame.
 
 When uploaded intrinsics are omitted, the pinned public Pi3X model estimates
 camera calibration through the same path used by SANA-WM. Arbitrary images are
@@ -134,12 +129,11 @@ storage while allowing the Runtime process to remain long-lived.
 Commands return typed, command-correlated messages for the client timeline:
 
 - `image_selected` identifies the uploaded or built-in image, effective prompt,
-  calibration source, and automatic first step.
+  calibration source, and first generated chunk.
 - `prompt_changed`, `control_changed`, `controls_released`,
-  `trajectory_selected`, and `pause_changed` confirm their resulting state and
+  and `trajectory_selected` confirm their resulting state and
   affected chunk.
-- `step_queued` and `rollout_reset_queued` identify the queued chunk or fresh
-  rollout.
+- `rollout_reset_queued` identifies the fresh rollout.
 - `trajectory_exhausted` reports the end of finite trajectory playback.
 - `state_update` is a complete snapshot of image, calibration, prompt, camera
   mode, held controls, seed, pause state, generation state, and chunk position.

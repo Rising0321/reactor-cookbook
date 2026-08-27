@@ -190,7 +190,7 @@ class SanaWM(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize an empty shared world in the paused state."""
+        """Initialize an empty shared world for continuous generation."""
         self._selected_image = None
         self._image_source = None
         self._intrinsics_input = None
@@ -203,7 +203,7 @@ class SanaWM(ReactorPipeline):
         self._reset_in_flight = False
         self._chunk_in_flight = False
         self.state.prompt = ""
-        self.state.paused = True
+        self.state.paused = False
         self.state._held_controls = set()
         self.state._step_requested = False
         self.state._reset_requested = False
@@ -231,8 +231,8 @@ class SanaWM(ReactorPipeline):
     @event(
         name="set_image",
         description=(
-            "Select an uploaded first frame and queue exactly one initial 24-frame chunk while "
-            "remaining paused. An optional native intrinsics .npy avoids Pi3X estimation. "
+            "Select an uploaded first frame and begin continuous 24-frame chunk generation. "
+            "An optional native intrinsics .npy avoids Pi3X estimation. "
             "Emits `image_selected` and `state_update` on success, or `command_error` when an "
             "upload is empty, too large, undecodable, or has an unsupported calibration shape."
         ),
@@ -261,7 +261,7 @@ class SanaWM(ReactorPipeline):
             ),
         ),
     ) -> ImageSelected:
-        """Validate uploads and queue a fresh paused world plus its first chunk."""
+        """Validate uploads and queue a fresh continuously generated world."""
         _validate_image(image)
         if intrinsics is not None:
             _validate_intrinsics(intrinsics)
@@ -275,7 +275,7 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self.state.prompt = effective_prompt
-        self.state.paused = True
+        self.state.paused = False
         self._queue_reset(auto_step=True)
         message = ImageSelected(
             source="uploaded",
@@ -291,7 +291,7 @@ class SanaWM(ReactorPipeline):
         name="random_image",
         description=(
             "Select a different built-in SANA-WM first frame and prompt, then queue exactly "
-            "one initial 24-frame chunk while remaining paused. Emits `image_selected` and "
+            "continuous 24-frame chunk generation. Emits `image_selected` and "
             "`state_update` on success, or `command_error` if the selected example has no prompt."
         ),
     )
@@ -317,7 +317,7 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self.state.prompt = prompt
-        self.state.paused = True
+        self.state.paused = False
         self._queue_reset(auto_step=True)
         message = ImageSelected(
             source="built_in",
@@ -508,18 +508,11 @@ class SanaWM(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next expensive chunk or resume continuous generation. Pausing "
-            "releases held controls and cancels a queued manual step. Valid at any time and "
-            "emits `pause_changed` and `state_update`."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description="True pauses before the next chunk; false generates continuously.",
         ),
     ) -> PauseChanged:
@@ -533,15 +526,7 @@ class SanaWM(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one 24-frame chunk while paused. Requires a selected image and no "
-            "already queued step. Emits `step_queued` and `state_update` on success, or "
-            "`command_error` when an image is missing, generation is resumed, or a step is "
-            "already queued."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Queue one and only one paused autoregressive turn."""
         self._require_image()
@@ -562,7 +547,7 @@ class SanaWM(ReactorPipeline):
         name="reset",
         description=(
             "Restart generation from the selected first frame and current prompt. An optional "
-            "non-negative seed replaces the active seed, and the paused state is preserved. "
+            "non-negative seed replaces the active seed, and continuous generation resumes. "
             "Emits `rollout_reset_queued` and `state_update` on success, or `command_error` "
             "before an image is selected."
         ),
@@ -581,6 +566,7 @@ class SanaWM(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
+        self.state.paused = False
         self._queue_reset(auto_step=False)
         message = RolloutResetQueued(
             trigger="manual", seed=self._seed, replaced_chunks=replaced

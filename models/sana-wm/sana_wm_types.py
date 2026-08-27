@@ -89,16 +89,20 @@ class SanaWMState(InputState):
             "when its autoregressive caches are initialized."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether generation stops before the next 24-frame chunk. Image selection queues "
-            "one chunk without changing this value."
-        ),
-    )
+    _paused: bool = False
     _held_controls: set[str] = field(default_factory=set)
     _step_requested: bool = False
     _reset_requested: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether automatic chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether automatic chunk generation is paused."""
+        self._paused = value
 
 
 class StateUpdate(ModelMessage):
