@@ -1,0 +1,26 @@
+source:
+  # Relative paths are resolved below REACTOR_WEIGHTS_PATH. Set
+  # MATRIX_GAME_2_PATH to reuse an existing Matrix-Game-2 source directory.
+  path: Matrix-Game
+  url: https://github.com/SkyworkAI/Matrix-Game.git
+  revision: 71c3cd7f741311f8100f6cf9cde942b6c1378d11
+
+model:
+  # The universal distilled checkpoint has the broadest control and image
+  # coverage while retaining the fastest official three-step denoising path.
+  repo_id: Skywork/Matrix-Game-2.0
+  revision: f1729d99a80e0f07993a77d7dad4a3190e23c2c8
+  checkpoint_file: base_distilled_model/base_distill.safetensors
+
+inference:
+  seed: 0
+  # This is the official streaming default: 360 latent frames, grouped into
+  # 120 native three-latent chunks. Keep it unchanged for memory evaluation.
+  max_latent_frames: 360
+
+inputs:
+  random_images:
+    - demo_images/universal/0000.png
+    - demo_images/universal/0002.png
+    - demo_images/universal/0011.png
+    - demo_images/universal/0016.png
