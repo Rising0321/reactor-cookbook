@@ -176,10 +176,10 @@ def test_durable_control_change_broadcasts_a_state_snapshot() -> None:
     ]
 
 
-def test_playout_holds_one_complete_generation_turn() -> None:
-    """Use measured inference timing without queuing stale controls."""
-    assert "fps" not in Diamond.__dict__
-    assert Diamond.buffer_size == 1
+def test_playout_uses_fixed_rate_with_short_buffer() -> None:
+    """Play at DIAMOND's native rate with enough frames to absorb brief stalls."""
+    assert Diamond.fps == 15
+    assert Diamond.buffer_size == 4
 
 
 def test_reconnect_preserves_the_session_world(monkeypatch: pytest.MonkeyPatch) -> None:

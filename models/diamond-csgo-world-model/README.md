@@ -136,9 +136,9 @@ clips up to five minutes.
   player policy.
 - Keyboard keys and mouse buttons are held until released. `mouse_move`
   contains relative deltas that are consumed by exactly one inference step.
-- Playback adapts to measured inference throughput with one complete generated
-  frame in the output queue, so held controls do not run ahead of the displayed
-  world.
+- Playback runs at DIAMOND's native 15 FPS with a four-frame output buffer,
+  smoothing brief inference variation without letting held controls run far
+  ahead of the displayed world.
 - The frontend owns keyboard, pointer, touch, and gamepad mappings. The backend
   exposes DIAMOND's native action semantics without prescribing a control
   layout or sensitivity.
