@@ -5,9 +5,8 @@ as an interactive Reactor backend. Use this recipe when a client needs to start
 from an official spawn or an uploaded CSGO frame, apply native keyboard and
 mouse actions, stream generated video, and record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-the Reactor integration; the Docker build fetches a pinned, unmodified DIAMOND
-source snapshot into the model image.
+The adapter uses a pinned DIAMOND source snapshot and calls its public CSGO
+inference components directly.
 
 ## Prerequisites
 
@@ -23,19 +22,19 @@ source snapshot into the model image.
   a CPU for functional but slow inference.
 - About 1.4 GB of free cache space for the pinned checkpoint and spawn bundle.
 
-The Dockerfile pins DIAMOND source revision
-`851cefb497733d27f1b85c804104638765860fca` and sets `DIAMOND_PATH` inside the
-image. On the first run, the adapter downloads the pinned checkpoint,
-configuration, and official spawn data into Reactor's mounted weights cache;
-later containers reuse those files.
+The [`build` block](https://docs.reactor.inc/deploy/platform/build) in
+`reactor.yaml` pins DIAMOND source revision
+`851cefb497733d27f1b85c804104638765860fca`, installs it outside the adapter, and
+sets `DIAMOND_PATH` inside the image. On the first run, the adapter downloads the
+pinned checkpoint, configuration, and official spawn data into Reactor's
+mounted weights cache; later containers reuse those files.
 
 ## Run
 
-This directory is a `reactor` workspace: `reactor.yaml` names the model, the
-`Dockerfile` builds the image, and `requirements.txt` pins Runtime 3.1.2
-alongside DIAMOND's serving dependencies. The CLI builds the image with the
-runtime inside and runs it — nothing to install on your host but the CLI and
-Docker.
+This directory is a `reactor` workspace: `reactor.yaml` names the model and
+controls its Reactor Runtime 3.2.3 image, while `requirements.txt` lists
+DIAMOND's serving dependencies. The host needs the CLI and Docker from the
+prerequisites above.
 
 ```sh
 cd models/diamond-csgo-world-model
@@ -94,7 +93,6 @@ helpers. These files remain independent from the upstream checkout.
 - `set_mouse_button_state(button, pressed)` holds or releases fire or scope.
 - `mouse_move(delta_x, delta_y)` supplies native relative movement for one step.
 - `set_controller(controller)` selects human input or the recorded spawn replay.
-- `set_paused(paused)` stops model inference; `step` advances once while paused.
 - `reset` starts from another spawn state.
 
 Control events return an `ActionChanged` message containing the acknowledged
@@ -138,8 +136,9 @@ clips up to five minutes.
   player policy.
 - Keyboard keys and mouse buttons are held until released. `mouse_move`
   contains relative deltas that are consumed by exactly one inference step.
-- Generation advances at DIAMOND's native 15 FPS with a one-frame output
-  buffer, so held controls do not run ahead of the displayed world.
+- Playback runs at DIAMOND's native 15 FPS with a four-frame output buffer,
+  smoothing brief inference variation without letting held controls run far
+  ahead of the displayed world.
 - The frontend owns keyboard, pointer, touch, and gamepad mappings. The backend
   exposes DIAMOND's native action semantics without prescribing a control
   layout or sensitivity.

@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 from reactor_runtime.interface.model.contract import ModelContract
 from reactor_runtime.manifest import load_config
 
@@ -175,10 +176,10 @@ def test_durable_control_change_broadcasts_a_state_snapshot() -> None:
     ]
 
 
-def test_playout_matches_upstream_game_timing() -> None:
-    """Advance the world at its native rate without queuing stale controls."""
+def test_playout_uses_fixed_rate_with_short_buffer() -> None:
+    """Play at DIAMOND's native rate with enough frames to absorb brief stalls."""
     assert Diamond.fps == 15
-    assert Diamond.buffer_size == 1
+    assert Diamond.buffer_size == 4
 
 
 def test_reconnect_preserves_the_session_world(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,12 +267,34 @@ def test_paused_scene_upload_emits_without_a_model_step(
     assert world.actions == []
 
 
-def test_manifest_and_runtime_pin_match_the_package_entrypoint() -> None:
-    """Keep the manifest entrypoint and public Runtime pin reproducible."""
-    config = load_config(EXAMPLE_DIR / "reactor.yaml")
+def test_scene_reset_flushes_pending_media(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Discard frames queued by the world that a scene reset replaces."""
+    model = _ready_model()
+    flushes: list[None] = []
+    monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
+
+    model._queue_scene_reset()
+
+    assert flushes == [None]
+
+
+def test_manifest_defines_the_runtime_entrypoint_and_generated_image() -> None:
+    """Keep the entrypoint and generated image inputs reproducible."""
+    manifest_path = EXAMPLE_DIR / "reactor.yaml"
+    config = load_config(manifest_path)
+    manifest = yaml.safe_load(manifest_path.read_text())
+    build = manifest["build"]
 
     assert config.model_ref == "diamond:Diamond"
-    assert "reactor-runtime==3.1.2" in (EXAMPLE_DIR / "requirements.txt").read_text()
+    assert build["runtime_version"] == "3.2.3"
+    assert build["python_requirements"] == "requirements.txt"
+    assert build["cuda_version"] == "12.8.1"
+    assert build["python_version"] == "3.12"
+    assert build["system_packages"] == ["git"]
+    assert build["runtime_env"]["DIAMOND_PATH"] == "/opt/diamond"
+    assert "851cefb497733d27f1b85c804104638765860fca" in build["run"][0]
+    assert not (EXAMPLE_DIR / "Dockerfile").exists()
+    assert "reactor-runtime" not in (EXAMPLE_DIR / "requirements.txt").read_text()
 
 
 def test_model_download_uses_the_runtime_weights_mount(

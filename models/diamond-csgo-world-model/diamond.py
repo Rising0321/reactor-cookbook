@@ -54,6 +54,8 @@ from diamond_types import (
 
 logger = get_logger(__name__)
 
+PLAYBACK_FPS = 15
+PLAYBACK_BUFFER_FRAMES = 4
 _SPAWN_IMAGE_FIELD = InputField(
     description=(
         "Image uploaded through the Reactor upload protocol. Must contain decodable image "
@@ -70,8 +72,8 @@ def _weights_cache_path() -> Path:
 class Diamond(ReactorPipeline):
     """Stream one shared Counter-Strike world controlled by native game inputs."""
 
-    fps = 15
-    buffer_size = 1
+    fps = PLAYBACK_FPS
+    buffer_size = PLAYBACK_BUFFER_FRAMES
     state: DiamondState
 
     def __init__(self) -> None:
@@ -331,21 +333,12 @@ class Diamond(ReactorPipeline):
                 self._pending_scene = None
             self._controller = controller
             self.state.controller = controller
-            self.state._step_requested = False
-            self._reset_requested = True
-            self._clear_controls()
+            self._queue_scene_reset()
         message = self._action_changed()
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next model step or resume continuous generation, releasing all "
-            "held controls in either case. Available throughout an active session. Emits "
-            "`action_changed` and broadcasts `state_update` on success."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
@@ -365,14 +358,7 @@ class Diamond(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one generated frame while continuous generation is paused. When "
-            "generation is running, the command is acknowledged without effect. Emits no "
-            "model message."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     def step(self) -> None:
         """Request one inference step without leaving paused mode."""
         if self.state is not None and self._paused:
@@ -603,6 +589,7 @@ class Diamond(ReactorPipeline):
 
     def _queue_scene_reset(self) -> None:
         """Reset controls and request application of the queued scene."""
+        self.output.flush()
         self._reset_requested = True
         self.state._step_requested = False
         self._replay_step = 0

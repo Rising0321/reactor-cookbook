@@ -72,10 +72,22 @@ runtime:
   config: diamond.yaml
 
 build:
-  # The reactor-runtime release this workspace is built against. The install
-  # pin is the `reactor-runtime==<version>` line in requirements.txt; bump it
-  # there and here together to upgrade.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    - git
+  runtime_env:
+    DIAMOND_PATH: /opt/diamond
+  run:
+    - >-
+      git init /opt/diamond &&
+      git -C /opt/diamond remote add origin https://github.com/eloialonso/diamond.git &&
+      git -C /opt/diamond fetch --depth 1 origin 851cefb497733d27f1b85c804104638765860fca &&
+      git -C /opt/diamond checkout --detach FETCH_HEAD &&
+      rm -rf /opt/diamond/.git
 
 # Session recording. The runtime records the named video track in chunks and
 # serves clips up to `clip_max_seconds`. DIAMOND emits no audio.
