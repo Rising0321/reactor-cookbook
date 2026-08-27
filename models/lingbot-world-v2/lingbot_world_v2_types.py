@@ -13,7 +13,7 @@ from reactor_runtime import (
 
 
 class LingBotWorldV2Output(Output):
-    """Carry one generated LingBot-World-V2 RGB frame."""
+    """Carry one generated LingBot-World-V2 RGB frame batch."""
 
     main_video: Video
 

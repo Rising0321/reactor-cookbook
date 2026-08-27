@@ -542,10 +542,7 @@ class LingBotWorldV2(ReactorPipeline):
                 )
             await self.send(self._state_update())
 
-            for frame in frames:
-                if self.state._reset_requested:
-                    break
-                yield LingBotWorldV2Output(main_video=frame)
+            yield LingBotWorldV2Output(main_video=frames)
 
     def _camera_changed(self) -> CameraMotionChanged:
         """Return the complete camera state for a successful mutation."""
@@ -570,6 +567,7 @@ class LingBotWorldV2(ReactorPipeline):
 
     def _request_reset(self) -> None:
         """Queue a fresh rollout and clear controls, progress, and limit state."""
+        self.output.flush()
         self._clear_camera()
         self.state._step_requested = False
         self.state._reset_requested = True
