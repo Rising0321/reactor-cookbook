@@ -45,7 +45,7 @@ def _model() -> MatrixGame35:
     return model
 
 
-def test_session_starts_paused_without_selecting_an_image() -> None:
+def test_session_starts_unpaused_without_selecting_an_image() -> None:
     """Wait for the viewer's anchor instead of generating from the demo image."""
     model = _model()
 
@@ -55,20 +55,17 @@ def test_session_starts_paused_without_selecting_an_image() -> None:
     assert model._selected_input is None
     assert state.image_source == "none"
     assert state.image_name == ""
-    assert state.paused is True
+    assert state.paused is False
     assert state.step_queued is False
     assert state.completed_chunks == 0
     assert state.next_chunk is None
-    paused_field = (
-        ModelContract.of(MatrixGame35)
-        .commands["set_paused"]
-        .command.__command_fields__["paused"]
-    )
-    assert paused_field.info.default is True
+    commands = ModelContract.of(MatrixGame35).commands
+    assert "set_paused" not in commands
+    assert "step" not in commands
 
 
-def test_first_upload_queues_one_chunk_and_keeps_generation_paused() -> None:
-    """Provide visual upload confirmation without enabling continuous rollout."""
+def test_first_upload_starts_continuous_generation() -> None:
+    """Start continuous generation from the uploaded anchor."""
     model = _model()
     model.on_session_started()
 
@@ -76,8 +73,8 @@ def test_first_upload_queues_one_chunk_and_keeps_generation_paused() -> None:
 
     assert state.image_source == "upload"
     assert state.image_name == "anchor.png"
-    assert state.paused is True
-    assert state.step_queued is True
+    assert state.paused is False
+    assert state.step_queued is False
     assert state.completed_chunks == 0
     assert state.next_chunk == 1
     assert state.prompt == GENERIC_PROMPT

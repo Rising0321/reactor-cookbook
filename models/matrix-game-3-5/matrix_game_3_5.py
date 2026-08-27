@@ -177,7 +177,7 @@ class MatrixGame35(ReactorPipeline):
         self.state.prompt = self._default_prompt
         self._seed = config.seed
         self._clear_controls()
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._restart_requested = True
         self.state._limit_reached = False
@@ -198,7 +198,7 @@ class MatrixGame35(ReactorPipeline):
                 backend.end_session()
         finally:
             self._clear_controls()
-            self.state.paused = True
+            self.state.paused = False
             self.state._step_requested = False
             self.state._restart_requested = True
             self.state._limit_reached = False
@@ -279,9 +279,9 @@ class MatrixGame35(ReactorPipeline):
             raise CommandError("prompt_required", "Matrix-Game-3.5 requires a prompt.")
         self._selected_input = image
         self.state.prompt = normalized
-        self.state.paused = True
+        self.state.paused = False
         self._request_restart()
-        self.state._step_requested = True
+        self.state._step_requested = False
         return self._state_update()
 
     @event(
@@ -446,19 +446,11 @@ class MatrixGame35(ReactorPipeline):
         self.state.roll = roll
         return self._state_update()
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause continuous generation before the next 12-frame chunk, or resume it. Pausing "
-            "is valid at any time; resuming requires an available chunk. Either choice releases "
-            "all camera axes and cancels a queued `step`. Returns `state_update` on success, or "
-            "`command_error` with `rollout_limit_reached` when resuming at the limit."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "Set to true to pause before the next chunk, or false to resume continuous "
                 "generation. Takes effect after any in-flight chunk and releases all camera "
@@ -474,15 +466,7 @@ class MatrixGame35(ReactorPipeline):
         self._clear_controls()
         return self._state_update()
 
-    @event(
-        name="step",
-        description=(
-            "Queue one 12-frame `main_video` chunk without leaving paused mode. Valid only "
-            "while generation is paused and a chunk remains available. Returns `state_update` "
-            "on success, or `command_error` when continuous generation is running or the "
-            "rollout limit has been reached."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     def step(self) -> StateUpdate:
         """Queue one paused chunk and return the complete shared world state."""
         self._require_available_rollout()
@@ -498,7 +482,7 @@ class MatrixGame35(ReactorPipeline):
         description=(
             "Restart from the selected anchor image and active prompt. Valid when an image is "
             "selected; the reset applies before the next generated chunk, clears progress and "
-            "the rollout limit, releases all camera axes, and preserves paused mode. Returns "
+            "the rollout limit, releases all camera axes, and resumes generation. Returns "
             "`state_update` on success, or `command_error` when no image is selected."
         ),
     )
@@ -519,6 +503,7 @@ class MatrixGame35(ReactorPipeline):
             raise CommandError("image_required", "Select an image before resetting.")
         if seed >= 0:
             self._seed = seed
+        self.state.paused = False
         self._request_restart()
         return self._state_update()
 

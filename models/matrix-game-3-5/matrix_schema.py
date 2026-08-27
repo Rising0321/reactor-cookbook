@@ -197,14 +197,17 @@ class MatrixGame35State(InputState):
             "until the camera axes are changed or released."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether continuous generation pauses before the next chunk. New sessions start "
-            "paused while waiting for an anchor upload. Changes preserve the current world "
-            "and release all camera axes plus a queued `step`."
-        ),
-    )
+    _paused: bool = False
     _step_requested: bool = False
     _restart_requested: bool = True
     _limit_reached: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value

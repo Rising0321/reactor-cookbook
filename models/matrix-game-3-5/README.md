@@ -21,9 +21,8 @@ keeps each interactive request at one native chunk.
 
 The anchor image initializes Matrix's causal visual state, so `set_image` starts
 a fresh rollout at chunk 1 while keeping model weights loaded. A new session
-starts paused and waits for an image. Each successful upload queues exactly one
-chunk while keeping continuous generation paused, so the client receives visual
-confirmation before choosing whether to step again or resume. Text conditioning
+starts unpaused and waits for an image. Each successful upload starts continuous
+generation. Text conditioning
 is sampled per causal chunk. `set_prompt` re-encodes only the text context for
 the next chunk while retaining the current camera pose, rolling KV cache,
 dynamic visual context, and Patch Memory. As the rolling window advances,
@@ -121,7 +120,7 @@ image.
 ## Controls
 
 - `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes plus an optional
-  prompt, then starts a fresh paused rollout and automatically generates its
+  prompt, then starts a fresh continuous rollout and generates its
   first 12-frame chunk. An empty prompt uses the generic default from
   `matrix_game_3_5.yaml`.
 - `set_prompt` applies a new non-empty text condition at the next chunk boundary
@@ -151,14 +150,8 @@ control boundary, and configured limit. A joining viewer receives the same
 snapshot, and the model broadcasts another after every completed chunk. Clients
 can consume each complete snapshot directly.
 
-Additional commands:
-
-- `set_paused` stops before another expensive chunk starts and holds playback.
-  It is enabled by default; resuming requires an uploaded image.
-- `step` generates and plays one complete 12-frame chunk while paused. Calling it
-  while running returns `pause_required`.
-- `reset` restores the selected anchor and prompt; an optional non-negative `seed`
-  selects the next reproducible rollout.
+The `reset` command restores the selected anchor and prompt; an optional
+non-negative `seed` selects the next reproducible rollout.
 
 Camera axes are sampled at a chunk boundary and apply to the next 12 camera slots,
 or 0.75 seconds at 16 FPS. Commands received during inference or playback affect
@@ -168,8 +161,8 @@ disconnect take effect when inference returns to Runtime.
 `stream.max_chunks` bounds the preallocated PRoPE camera timeline. The default
 512 chunks cover 6.4 minutes. After the final chunk, generation pauses and emits
 `RolloutLimitReached` followed by a `StateUpdate` with `limit_reached: true` and
-`next_chunk: null`. Camera, resume, and step commands then return
-`rollout_limit_reached` until `reset` or `set_image` starts a fresh timeline.
+`next_chunk: null`. Camera commands then return `rollout_limit_reached` until
+`reset` or `set_image` starts a fresh timeline.
 Reset releases the prior KV and memory state while preserving loaded weights.
 
 Ending a session also releases its rollout caches and request workspace while
@@ -184,10 +177,8 @@ its returned URL, and sends the resulting upload reference with the command. A
 schema-driven frontend can render a file picker while the upload channel carries
 the binary data.
 
-Each session waits for `set_image`. A successful upload keeps the session
-paused, queues one chunk, and broadcasts completion after its 12 frames have
-been generated. This provides immediate visual confirmation while continuous
-generation stays paused.
+Each session waits for `set_image`. A successful upload starts continuous
+generation and broadcasts completion after each 12-frame chunk.
 
 A ready-to-upload copy of the public first-person demo input lives in
 [`example_image`](example_image).
