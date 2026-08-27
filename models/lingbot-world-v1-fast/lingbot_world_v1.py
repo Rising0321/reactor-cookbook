@@ -140,13 +140,13 @@ class LingBotWorldV1(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize one paused shared world and queue its preview chunk."""
+        """Initialize one unpaused shared world and queue its first chunk."""
         config = self._require_config()
         sample = config.samples[0]
         self._select_sample(sample)
         self._seed = config.seed
         self._clear_controls()
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = True
         self.state._restart_requested = True
         self.state._limit_reached = False
@@ -187,7 +187,7 @@ class LingBotWorldV1(ReactorPipeline):
         name="set_image",
         description=(
             "Replace the anchor image and queue the fresh world's first `main_video` chunk. "
-            "Valid at any time; generation remains paused, progress and camera axes reset, and "
+            "Valid at any time; generation runs continuously, progress and camera axes reset, and "
             "the upload is decoded before the command succeeds. Returns `state_update`, or "
             "`command_error` for invalid image bytes, media type, dimensions, or an empty prompt."
         ),
@@ -209,14 +209,14 @@ class LingBotWorldV1(ReactorPipeline):
             ),
         ),
     ) -> StateUpdate:
-        """Select an upload, remain paused, and queue one preview chunk."""
+        """Select an upload and begin a fresh continuous rollout."""
         validate_uploaded_image(image)
         normalized = prompt.strip() or self.state.prompt.strip() or self._default_prompt
         if not normalized:
             raise CommandError("prompt_required", "LingBot-World requires a prompt.")
         self._selected_input = image
         self.state.prompt = normalized
-        self.state.paused = True
+        self.state.paused = False
         self._request_restart(auto_step=True)
         return self._state_update()
 
@@ -225,14 +225,14 @@ class LingBotWorldV1(ReactorPipeline):
         description=(
             "Select one public LingBot demo image and its matching prompt and calibration, then "
             "queue the fresh world's first `main_video` chunk. Valid at any time; generation "
-            "remains paused and progress resets. Returns the complete `state_update`."
+            "runs continuously and progress resets. Returns the complete `state_update`."
         ),
     )
     def random_image(self) -> StateUpdate:
-        """Select a built-in sample and queue one paused preview chunk."""
+        """Select a built-in sample and begin a fresh continuous rollout."""
         sample = random.choice(self._require_config().samples)
         self._select_sample(sample)
-        self.state.paused = True
+        self.state.paused = False
         self._request_restart(auto_step=True)
         return self._state_update()
 
@@ -406,18 +406,11 @@ class LingBotWorldV1(ReactorPipeline):
         """Set roll and return the complete shared state."""
         return self._set_axis("roll", roll)
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next chunk or resume continuous generation. Valid at any time, "
-            "except that resuming requires an available rollout; either choice releases camera "
-            "axes and cancels a queued manual step. Returns `state_update` or `command_error`."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "True waits before the next chunk; false generates continuously. The change "
                 "takes effect after an in-flight chunk and releases all six camera axes."
@@ -432,14 +425,7 @@ class LingBotWorldV1(ReactorPipeline):
         self._clear_controls()
         return self._state_update()
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one native `main_video` chunk without leaving paused mode. Valid only "
-            "while paused and before the rollout limit. Returns `state_update`, or "
-            "`command_error` when continuous generation is active or a reset is required."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     def step(self) -> StateUpdate:
         """Queue one paused chunk and return the complete shared state."""
         self._require_available_rollout()

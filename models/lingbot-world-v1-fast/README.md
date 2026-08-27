@@ -71,9 +71,8 @@ curl -s localhost:8080/schema
 
 ## Controls
 
-Generation starts paused. Session startup, `set_image`, `random_image`, and a
-paused `reset` automatically queue one preview chunk so the current world is
-visible without enabling continuous generation.
+Generation starts continuously from the built-in sample. `set_image` and
+`random_image` begin fresh continuous rollouts.
 
 - `set_image(image, prompt)` starts a fresh world from an uploaded image and
   optionally replaces the prompt.
@@ -82,9 +81,6 @@ visible without enabling continuous generation.
   boundary without clearing visual self-KV history.
 - `set_forward`, `set_strafe`, and `set_vertical` control translation.
 - `set_pitch`, `set_yaw`, and `set_roll` control rotation.
-- `set_paused(false)` starts continuous one-chunk-at-a-time generation;
-  `set_paused(true)` stops before the next chunk.
-- `step` generates exactly one chunk while paused.
 - `reset(seed)` starts the selected image and prompt again without reloading
   model weights.
 
@@ -174,8 +170,8 @@ clips up to five minutes. The model emits video without audio.
 
 ## Notes
 
-- `stream.context_latents: 21` preserves the upstream Fast memory length;
-  `step` still requests only one native three-latent chunk.
+- `stream.context_latents: 21` preserves the upstream Fast memory length; each
+  inference turn requests one native three-latent chunk.
 - `stream.max_chunks: 320` keeps absolute RoPE positions inside the upstream
   1024-latent table. A fresh image or reset starts another timeline without
   reloading the checkpoint.
