@@ -9,7 +9,6 @@ six-axis controls.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import secrets
 import time
@@ -492,8 +491,7 @@ class LingBotWorldV2(ReactorPipeline):
                         "LingBot-World-V2 requires a prompt before reset"
                     )
                 self.state._reset_requested = False
-                await asyncio.to_thread(
-                    backend.reset,
+                backend.reset(
                     image=image,
                     prompt=prompt,
                     seed=self._seed,
@@ -529,8 +527,7 @@ class LingBotWorldV2(ReactorPipeline):
             self._chunk_in_flight = True
             started = time.perf_counter()
             try:
-                frames = await asyncio.to_thread(
-                    backend.generate_chunk,
+                frames = backend.generate_chunk(
                     prompt=sampled_prompt,
                     relative_poses=relative_poses,
                 )
