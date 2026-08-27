@@ -22,7 +22,7 @@ weights cache and calls its streaming inference components directly.
 This directory is a `reactor` workspace. `reactor.yaml` controls its Reactor
 Runtime 3.2.3, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
 `requirements.txt` contains the model's inference dependencies. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 Validate the workspace, build the image, and expose one GPU to the container:
