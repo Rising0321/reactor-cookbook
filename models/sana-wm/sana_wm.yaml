@@ -1,0 +1,60 @@
+source:
+  path: SANA
+  url: https://github.com/NVlabs/SANA.git
+  revision: 5498e5b2070ef8c808ee7eab7f7c7707b53cd8ea
+  config: configs/sana_wm/sana_wm_streaming_1600m_720p.yaml
+
+assets:
+  streaming:
+    repo_id: Efficient-Large-Model/SANA-WM_streaming
+    revision: c7694938c854b1fcc29468e9514f1ea2d0c4ba8e
+  stage1_text_encoder:
+    repo_id: Efficient-Large-Model/gemma-2-2b-it
+    revision: 569d9809d0c8b6722d4d31b5a77a2ec7a400650a
+  pi3x:
+    source_url: https://github.com/yyfz/Pi3.git
+    source_revision: 9fa3ddb3f8d53041f8b2738df404f62223bbaa7b
+    model:
+      repo_id: yyfz233/Pi3X
+      revision: bb1deea4d7423de5b30691739cb451a3f57dc1d5
+
+inference:
+  seed: 42
+  # Upstream streaming defaults. Keep these values for memory evaluation.
+  num_cached_blocks: 2
+  refiner_kv_max_frames: 11
+  # One bounded rollout covers 12,288 generated frames (12.8 minutes at 16 FPS).
+  max_chunks: 512
+
+motion:
+  # Native per-pixel-frame magnitudes from SANA-WM camera_control.py.
+  translation_speed: 0.025
+  rotation_speed_degrees: 0.6
+  pitch_limit_degrees: 60.0
+
+scenes:
+  - name: demo_0
+    image: asset/sana_wm/demo_0.png
+    prompt: asset/sana_wm/demo_0.txt
+    intrinsics: asset/sana_wm/demo_0_intrinsics.npy
+    trajectory: asset/sana_wm/demo_0_pose.npy
+  - name: demo_1
+    image: asset/sana_wm/demo_1.png
+    prompt: asset/sana_wm/demo_1.txt
+    intrinsics: asset/sana_wm/demo_1_intrinsics.npy
+    trajectory: asset/sana_wm/demo_1_pose.npy
+  - name: demo_2
+    image: asset/sana_wm/demo_2.png
+    prompt: asset/sana_wm/demo_2.txt
+    intrinsics: asset/sana_wm/demo_2_intrinsics.npy
+    trajectory: asset/sana_wm/demo_2_pose.npy
+  - name: demo_3
+    image: asset/sana_wm/demo_3.png
+    prompt: asset/sana_wm/demo_3.txt
+    intrinsics: asset/sana_wm/demo_3_intrinsics.npy
+    trajectory: asset/sana_wm/demo_3_pose.npy
+  - name: demo_4
+    image: asset/sana_wm/demo_4.png
+    prompt: asset/sana_wm/demo_4.txt
+    intrinsics: asset/sana_wm/demo_4_intrinsics.npy
+    trajectory: asset/sana_wm/demo_4_pose.npy
