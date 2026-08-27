@@ -153,7 +153,7 @@ class Evoke(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize a paused built-in i2v world before its first viewer connects."""
+        """Initialize an unpaused built-in i2v world before its first viewer connects."""
         config = self._require_config()
         self._mode = "i2v"
         self._media = config.default_image
@@ -162,7 +162,7 @@ class Evoke(ReactorPipeline):
         self._input_name = config.default_image.name
         self._pose_name = ""
         self.state.prompt = config.stability_prompt
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._restart_requested = True
         self._seed = config.seed
@@ -535,18 +535,11 @@ class Evoke(ReactorPipeline):
         """Queue roll motion and confirm the complete camera state."""
         return await self._set_axis("roll", roll)
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next expensive chunk or resume continuous generation. Either "
-            "choice releases all camera axes and cancels a queued step. Emits `command_applied` "
-            "and broadcasts `state_update`; an in-flight CUDA chunk finishes first."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description="True pauses before the next chunk; false resumes continuous generation.",
         ),
     ) -> CommandApplied:
@@ -561,15 +554,7 @@ class Evoke(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one native EVOKE chunk without leaving paused mode. Valid only while "
-            "paused and when no step is already queued. Emits `command_applied` and broadcasts "
-            "`state_update` on success, or `command_error` when continuous generation is "
-            "running or a step is pending."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> CommandApplied:
         """Queue one paused chunk and confirm its one-based position."""
         if not self.state.paused:

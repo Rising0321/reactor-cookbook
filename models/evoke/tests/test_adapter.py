@@ -103,7 +103,6 @@ def test_contract_documents_commands_messages_and_video_track() -> None:
         "reset",
         "set_forward",
         "set_image",
-        "set_paused",
         "set_pitch",
         "set_prompt",
         "set_reference_video",
@@ -112,7 +111,6 @@ def test_contract_documents_commands_messages_and_video_track() -> None:
         "set_vertical",
         "set_yaw",
         "start_text",
-        "step",
     }
     assert all(
         getattr(contract.lifecycle, hook) is not None

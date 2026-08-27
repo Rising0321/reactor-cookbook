@@ -122,8 +122,6 @@ The commands cover all three upstream conditioning modes:
   `[-1, 1]`.
 - `set_prompt` changes the text condition at the next native chunk boundary
   without clearing visual history.
-- `set_paused` gates generation before the next expensive chunk.
-- `step` generates exactly one native chunk while remaining paused.
 - `reset` starts a fresh rollout from the current conditioning media and
   prompt without reloading weights.
 
@@ -144,10 +142,6 @@ queue holds one complete 36-frame chunk.
 the upload path. Upload it through the client, then invoke `set_image` with its
 upload reference and an optional prompt. Arbitrary images are accepted, but
 images far outside the model's distribution may produce unstable rollouts.
-
-Uploading an image while paused queues its first native chunk automatically.
-The world remains paused after that preview, so the viewer can see the new
-rollout before stepping or resuming continuous generation.
 
 When user text is empty, the adapter selects this documented, scene-neutral
 condition:

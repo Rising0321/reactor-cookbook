@@ -230,12 +230,16 @@ class EvokeState(InputState):
             "and held until changed or released. Valid only in camera-controlled modes."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether generation pauses before the next chunk. Changing it preserves the world "
-            "and releases all six camera axes plus a queued `step`."
-        ),
-    )
+    _paused: bool = False
     _step_requested: bool = False
     _restart_requested: bool = True
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value
