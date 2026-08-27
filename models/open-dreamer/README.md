@@ -70,12 +70,11 @@ curl -s localhost:8080/health
 - `set_demo(demo)` starts from one reproducible dataset window.
 - `random_demo` starts from a randomly selected dataset window.
 - `set_conditioning_image(image)` starts from one uploaded Minecraft frame.
-- `set_paused(paused)` stops or resumes model inference.
 - `reset(seed)` clears the incremental caches and optionally changes the seed.
 
 Keyboard keys and mouse buttons remain held until released. Mouse movement and
-wheel input are consumed after one successful generation step. Pausing and
-ending the session release all controls.
+wheel input are consumed after one successful generation step. Ending the
+session releases all controls.
 
 ## Start from a dataset demo
 

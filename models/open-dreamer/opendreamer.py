@@ -543,14 +543,7 @@ class OpenDreamer(ReactorPipeline):
             return self._action_changed(control="mouse_wheel", wheel_delta=delta)
         return self._action_changed(control="mouse_wheel")
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause or resume Minecraft frame generation immediately while preserving the "
-            "current world. Valid any time during a session and clears all held and one-frame "
-            "controls. Emits `action_changed` and `state_update` on success."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(

@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 from reactor_runtime import (
-    InputField,
     InputState,
     MessageField,
     ModelMessage,
@@ -199,14 +198,7 @@ class StateUpdate(ModelMessage):
 class OpenDreamerState(InputState):
     """Expose the controls shared by one playable OpenDreamer world."""
 
-    paused: bool = InputField(
-        default=False,
-        description=(
-            "Whether `main_video` generation is paused. `set_paused` applies the value "
-            "immediately, preserves the current world, and clears all held and one-frame "
-            "controls."
-        ),
-    )
+    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _pressed_mouse_buttons: frozenset[str] = frozenset()
     _delta_x: float = 0.0
@@ -214,3 +206,13 @@ class OpenDreamerState(InputState):
     _wheel_delta: int = 0
     _reset_requested: bool = True
     _seed: int = 0
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous frame generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous frame generation is paused."""
+        self._paused = value
