@@ -40,7 +40,7 @@ class MatrixGame2Config:
 
 
 class MatrixGame2Output(Output):
-    """Stream one generated Matrix-Game-2.0 RGB frame on `main_video`."""
+    """Stream one generated Matrix-Game-2.0 RGB frame batch on `main_video`."""
 
     main_video: Video
 

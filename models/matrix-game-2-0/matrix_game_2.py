@@ -419,13 +419,11 @@ class MatrixGame2(ReactorPipeline):
             )
             await self.send(self._state_update())
 
-            for frame in frames:
-                if self.state._restart_requested:
-                    break
-                yield MatrixGame2Output(main_video=frame)
+            yield MatrixGame2Output(main_video=frames)
 
     def _request_restart(self, *, auto_step: bool) -> None:
         """Queue fresh image conditioning and release current controls and progress."""
+        self.output.flush()
         self._clear_controls()
         self.state._restart_requested = True
         self.state._step_requested = auto_step
