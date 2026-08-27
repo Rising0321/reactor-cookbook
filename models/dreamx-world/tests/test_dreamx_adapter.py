@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -70,17 +71,66 @@ def test_key_state_is_retained_for_next_chunk(monkeypatch: MonkeyPatch) -> None:
     assert [message.pressed_keys for message in state_updates] == [["w"], []]
 
 
-def test_image_selection_starts_unpaused() -> None:
+def test_image_selection_starts_unpaused(monkeypatch: MonkeyPatch) -> None:
     """Start continuous generation after image selection."""
     world = dreamx_world.DreamXWorld()
     world.state = dreamx_types.DreamXWorldState()
+    flushes: list[None] = []
+    monkeypatch.setattr(world.output, "flush", lambda: flushes.append(None))
 
     world._select_image(Path("selected.jpg"), "uploaded", "A coherent world")
 
+    assert flushes == [None]
     assert world.state.paused is False
     assert world.state._reset_requested is True
     assert world.state._step_requested is False
     assert world._chunk_index == 0
+
+
+def test_rollout_reset_flushes_pending_media(monkeypatch: MonkeyPatch) -> None:
+    """Discard frames queued by the world that a reset replaces."""
+    world = dreamx_world.DreamXWorld()
+    world.state = dreamx_types.DreamXWorldState()
+    flushes: list[None] = []
+    monkeypatch.setattr(world.output, "flush", lambda: flushes.append(None))
+    world._select_image(Path("selected.jpg"), "uploaded", "A coherent world")
+    flushes.clear()
+
+    asyncio.run(world.reset(-1))
+
+    assert flushes == [None]
+
+
+def test_inference_emits_one_complete_frame_batch(monkeypatch: MonkeyPatch) -> None:
+    """Preserve chunk timing by emitting every decoded frame in one turn."""
+
+    class Backend:
+        def reset(self, _seed: int, _image: Path) -> None:
+            return None
+
+        def generate_chunk(
+            self, _prompt: str, _pressed_keys: frozenset[str]
+        ) -> np.ndarray:
+            return np.zeros((9, 8, 8, 3), dtype=np.uint8)
+
+    world = dreamx_world.DreamXWorld()
+    world.state = dreamx_types.DreamXWorldState()
+    world._backend = Backend()
+    world._config = SimpleNamespace(max_chunks_per_rollout=512)
+
+    async def discard(_message: Any) -> None:
+        return None
+
+    monkeypatch.setattr(world, "send", discard)
+    world._select_image(Path("selected.jpg"), "uploaded", "A coherent world")
+
+    async def generate_first_chunk() -> Any:
+        return await anext(world.inference())
+
+    output = asyncio.run(generate_first_chunk())
+
+    assert isinstance(output, dreamx_types.DreamXWorldOutput)
+    assert output.main_video.shape == (9, 8, 8, 3)
 
 
 def test_config_keeps_source_and_weights_under_runtime_root(

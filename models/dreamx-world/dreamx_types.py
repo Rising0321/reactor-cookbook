@@ -48,7 +48,7 @@ class DreamXConfig:
 
 
 class DreamXWorldOutput(Output):
-    """Stream one generated RGB frame on `main_video`."""
+    """Stream one generated RGB frame batch on `main_video`."""
 
     main_video: Video
 

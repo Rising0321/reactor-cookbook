@@ -453,10 +453,7 @@ class DreamXWorld(ReactorPipeline):
                 )
             )
             await self.send(self._state_update())
-            for frame in frames:
-                if self.state._reset_requested or selected is not self._selected_input:
-                    break
-                yield DreamXWorldOutput(main_video=frame)
+            yield DreamXWorldOutput(main_video=frames)
 
             if (
                 self._chunk_index >= config.max_chunks_per_rollout
@@ -493,6 +490,7 @@ class DreamXWorld(ReactorPipeline):
 
     def _request_reset(self) -> None:
         """Queue a fresh backend rollout and clear controls consumed by the old one."""
+        self.output.flush()
         self._clear_controls()
         self.state._step_requested = False
         self.state._reset_requested = True
