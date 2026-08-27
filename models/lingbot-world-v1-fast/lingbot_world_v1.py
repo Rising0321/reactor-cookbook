@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import random
 import time
@@ -167,12 +166,12 @@ class LingBotWorldV1(ReactorPipeline):
         await self.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release causal caches while retaining loaded weights."""
         backend = self._backend
         try:
             if backend is not None:
-                await asyncio.to_thread(backend.end_session)
+                backend.end_session()
         finally:
             self._clear_controls()
             self.state._step_requested = False
@@ -497,8 +496,7 @@ class LingBotWorldV1(ReactorPipeline):
                 if not prompt:
                     raise RuntimeError("LingBot-World requires a non-empty prompt")
                 self.state._restart_requested = False
-                await asyncio.to_thread(
-                    backend.reset,
+                backend.reset(
                     self._seed,
                     selected,
                     intrinsics,
@@ -528,8 +526,7 @@ class LingBotWorldV1(ReactorPipeline):
             self._chunk_in_flight = True
             started = time.perf_counter()
             try:
-                frames = await asyncio.to_thread(
-                    backend.generate_chunk,
+                frames = backend.generate_chunk(
                     camera,
                     self.state.prompt,
                 )
