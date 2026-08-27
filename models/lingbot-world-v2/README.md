@@ -27,7 +27,7 @@ before running or redistributing the model.
 This directory is a `reactor` workspace. Its `reactor.yaml` names the model,
 controls its Reactor Runtime 3.2.3, CUDA and Python image, and points Runtime at
 the model adapter and configuration. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 Build the image, expose one GPU, and start Runtime:
