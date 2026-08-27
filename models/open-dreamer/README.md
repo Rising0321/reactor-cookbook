@@ -32,12 +32,10 @@ cd models/open-dreamer
 reactor run --gpus device=0
 ```
 
-On the first run, the CLI builds the model image with Reactor Runtime 3.2.3 and
-the model dependencies, including the pinned OpenDreamer source and public
-demo. It then downloads the pinned `reactor-team/open-dreamer` checkpoint into
-the CLI-mounted weights cache. Later runs reuse both the local image and cached
-checkpoint. The model compiles its JAX generation and conditioning paths before
-reporting ready on `http://localhost:8080`.
+The first run builds the image and downloads the model weights, so it takes a
+while. Once the model is ready it serves at `http://localhost:8080`, and later
+runs start faster because they reuse the built image and the downloaded
+weights.
 
 Use `reactor build` when you want to build without starting the service, or to
 rebuild after editing anything baked into the image:
