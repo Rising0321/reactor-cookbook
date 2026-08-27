@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -183,12 +182,12 @@ class Evoke(ReactorPipeline):
         await self.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release rollout caches and session-owned uploads while retaining model weights."""
         backend = self._backend
         try:
             if backend is not None:
-                await asyncio.to_thread(backend.end_session)
+                backend.end_session()
         finally:
             self._clear_controls()
             self.state._step_requested = False
@@ -627,8 +626,7 @@ class Evoke(ReactorPipeline):
             if backend is None or planner is None:
                 raise RuntimeError("EVOKE was not loaded")
             if self.state._restart_requested:
-                await asyncio.to_thread(
-                    backend.reset,
+                backend.reset(
                     mode=self._mode,
                     media=self._media,
                     pose=self._pose,
@@ -657,8 +655,7 @@ class Evoke(ReactorPipeline):
             self.state._step_requested = False
             self._chunk_in_flight = True
             try:
-                frames = await asyncio.to_thread(
-                    backend.generate_chunk,
+                frames = backend.generate_chunk(
                     trajectory,
                     seed=self._seed,
                     prompt=self.state.prompt,
