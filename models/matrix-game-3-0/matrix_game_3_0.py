@@ -441,6 +441,10 @@ class MatrixGame30(ReactorPipeline):
                 backend.reset(prompt, self._seed, selected)
                 self._chunk_index = 0
 
+            if self._selected_input is None:
+                yield Idle
+                continue
+
             if self.state._limit_reached:
                 yield Idle
                 continue

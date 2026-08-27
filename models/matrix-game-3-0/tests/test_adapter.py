@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 from PIL import Image
-from reactor_runtime import UploadedFile
+from reactor_runtime import Idle, UploadedFile
 
 from matrix_game_3_0 import MatrixGame30
 from matrix_game_3_0_backend import MatrixGame30Backend, action_from_controls
@@ -42,8 +42,20 @@ def test_session_waits_unpaused_for_explicit_image_selection() -> None:
     model.state = MatrixGame30State()
     model._config = SimpleNamespace(seed=42, max_chunks=12)
 
+    class Backend:
+        def generate_chunk(self, _action: object) -> np.ndarray:
+            raise AssertionError("generation must wait for image selection")
+
+    model._backend = Backend()
+
     model.on_session_started()
     message = model._state_update()
+
+    async def first_turn() -> object:
+        generator = model.inference()
+        output = await anext(generator)
+        await generator.aclose()
+        return output
 
     assert model._selected_input is None
     assert model.state.paused is False
@@ -52,6 +64,7 @@ def test_session_waits_unpaused_for_explicit_image_selection() -> None:
     assert message.image_source == "none"
     assert message.next_chunk is None
     assert message.next_chunk_frames is None
+    assert asyncio.run(first_turn()) is Idle
 
 
 def test_uploaded_image_and_prompt_start_a_fresh_rollout(tmp_path: Path) -> None:
