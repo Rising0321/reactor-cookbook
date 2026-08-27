@@ -43,7 +43,7 @@ class WorkerSettings:
     da3_dir: Path
     anchor_image: Path
     default_camera: Path
-    prompt_file: Path
+    default_prompt: str
     seed: int
     max_chunks: int
 
@@ -97,7 +97,7 @@ class MatrixWorkerBackend:
             da3_dir=str(settings.da3_dir),
             anchor_image=str(settings.anchor_image),
             default_camera=str(settings.default_camera),
-            prompt_file=str(settings.prompt_file),
+            default_prompt=settings.default_prompt,
             runtime_root=str(self._root / "worker"),
             seed=settings.seed,
             max_chunks=settings.max_chunks,
@@ -115,7 +115,11 @@ class MatrixWorkerBackend:
             suffix = _UPLOAD_SUFFIXES.get(anchor_image.mime_type.lower())
             if suffix is None:
                 candidate = Path(anchor_image.name).suffix.lower()
-                suffix = candidate if candidate in set(_UPLOAD_SUFFIXES.values()) else ".image"
+                suffix = (
+                    candidate
+                    if candidate in set(_UPLOAD_SUFFIXES.values())
+                    else ".image"
+                )
             upload_path = self._root / f"anchor_{self._request_id + 1}{suffix}"
             upload_path.write_bytes(anchor_image.data)
             image_path = upload_path
@@ -188,7 +192,9 @@ class MatrixWorkerBackend:
         if process.poll() is None:
             try:
                 assert process.stdin is not None
-                process.stdin.write(json.dumps({"id": -1, "command": "shutdown"}) + "\n")
+                process.stdin.write(
+                    json.dumps({"id": -1, "command": "shutdown"}) + "\n"
+                )
                 process.stdin.flush()
                 process.wait(timeout=5)
             except (BrokenPipeError, subprocess.TimeoutExpired):
@@ -218,7 +224,9 @@ class MatrixWorkerBackend:
                 line = process.stdout.readline()
                 if not line:
                     detail = "\n".join(self._recent_output)
-                    raise RuntimeError(f"Matrix worker exited with code {process.poll()}\n{detail}")
+                    raise RuntimeError(
+                        f"Matrix worker exited with code {process.poll()}\n{detail}"
+                    )
                 line = line.rstrip()
                 if not line.startswith(_RESPONSE_PREFIX):
                     self._recent_output.append(line)
@@ -258,7 +266,9 @@ def _validate_camera_trajectory(value: np.ndarray) -> np.ndarray:
     """Validate one anchor plus one chunk of generated camera poses."""
     trajectory = np.asarray(value, dtype=np.float32)
     if trajectory.ndim != 3 or trajectory.shape[1:] != (4, 4):
-        raise ValueError(f"camera trajectory must have shape (N, 4, 4), got {trajectory.shape}")
+        raise ValueError(
+            f"camera trajectory must have shape (N, 4, 4), got {trajectory.shape}"
+        )
     expected = _RGB_FRAMES_PER_CHUNK + 1
     if int(trajectory.shape[0]) != expected:
         raise ValueError(

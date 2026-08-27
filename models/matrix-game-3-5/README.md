@@ -2,9 +2,9 @@
 
 Serve the public Matrix-Game-3.5 distilled first-person model through Reactor
 Runtime. Matrix is conditioned on an anchor image, a text prompt, and camera
-trajectories rather than keyboard tokens. This adapter exposes the image and
-prompt through Runtime commands and expands normalized six-axis camera motion
-into the camera-to-world matrices consumed by the model.
+trajectories. This adapter exposes the image and prompt through Runtime commands
+and expands normalized six-axis camera motion into the camera-to-world matrices
+consumed by the model.
 
 ## Runtime boundary
 
@@ -17,29 +17,33 @@ one native three-latent causal chunk, equivalent to 12 RGB camera slots, and
 receives 12 decoded frames. The rollout preserves its rolling KV cache, absolute
 RoPE/PRoPE timeline, generated dynamic visual context, and FrustumHandler Patch
 Memory across requests. `context_chunks: 7` remains the rolling KV window; it
-does not force seven chunks into one interactive request.
+keeps each interactive request at one native chunk.
 
 The anchor image initializes Matrix's causal visual state, so `set_image` starts
-a fresh rollout at chunk 1 without reloading model weights. Text conditioning is
-sampled per causal chunk. `set_prompt` re-encodes only the text context for the
-next chunk while retaining the current camera pose, rolling KV cache, dynamic
-visual context, and Patch Memory. As the rolling window advances, chunks made
-under the new prompt naturally replace older cached chunks. The worker retains
-only the active encoded prompt, so repeated prompt changes do not accumulate GPU
-text contexts over a long session.
+a fresh rollout at chunk 1 while keeping model weights loaded. A new session
+starts unpaused and waits for an image. Each successful upload starts continuous
+generation. Text conditioning
+is sampled per causal chunk. `set_prompt` re-encodes only the text context for
+the next chunk while retaining the current camera pose, rolling KV cache,
+dynamic visual context, and Patch Memory. As the rolling window advances,
+chunks made under the new prompt naturally replace older cached chunks. The
+worker retains one active encoded prompt across repeated prompt changes.
 
-The adapter emits each finished chunk with single-frame backpressure. WebRTC
-playout and session recording consume the same complete 16 FPS sequence, while
-camera axes are sampled again before the next expensive chunk begins.
+The adapter submits each finished chunk as one 12-frame batch. Playback adapts
+to measured inference throughput, and the output queue holds one complete chunk
+while camera axes are sampled again before the next expensive turn begins.
 
 ## Run with the Reactor CLI
 
-This directory is a `reactor` workspace, described in
-[Build your own model](https://docs.reactor.inc/deploy/overview). The host needs
-only the
+This directory is a `reactor` workspace. The manifest names the model and its
+B200 resource, and its `build` block defines the complete Python 3.12 serving
+image with Reactor Runtime 3.2.3. `requirements.txt` contains the model
+dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires
-Linux, CUDA, and approximately 40 GB of VRAM at 704x1280.
+Linux, CUDA, and approximately 40 GB of VRAM at 704x1280. See Reactor's
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
+supported fields.
 
 Build the Python 3.12 serving image, expose one GPU, and start Runtime:
 
@@ -51,16 +55,17 @@ reactor run --gpus device=0
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 inside the
 container; `--gpus all` exposes every GPU. The manifest requests one B200 when
-the workspace is deployed. `reactor run` reuses the built image and serves on
-`http://localhost:8080`. Rebuild after changing code or dependencies. To use a
-different port:
+the workspace is deployed. `reactor run` reuses the configured image and builds
+one on the first run when no local image exists. It serves WebRTC signaling on
+`http://localhost:8080` by default. Rebuild after changing code or dependencies.
+To use a different port:
 
 ```sh
 reactor build && reactor run --gpus device=0 --port 18011
 ```
 
 The model repositories are public. If Hugging Face requests authentication,
-forward a host token without putting its value on the Docker command line:
+forward a host token while keeping its value out of the container command line:
 
 ```sh
 export HF_TOKEN=hf_your_read_token
@@ -68,18 +73,15 @@ reactor run --gpus device=0 -e HF_TOKEN
 ```
 
 Startup waits for the Matrix worker to prepare its assets and load the weights.
-Once it is ready:
+Check readiness using the port passed to `reactor run`:
 
 ```sh
 curl -s localhost:8080/health
 curl -s localhost:8080/schema
-curl -s -X POST localhost:8080/start_session \
-  -H 'content-type: application/json' -d '{}'
 ```
 
-A WebRTC client consumes the `main_video` track at 16 FPS. Recording is enabled
-for that video track. Connect using a client built with the
-[Reactor SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk).
+A Reactor client consumes the `main_video` WebRTC track. Recording is enabled
+for that video track.
 
 ## Public source and model assets
 
@@ -101,8 +103,7 @@ The patch adds the resumable chunk boundary used by the worker. The upstream
 model forward pass, scheduler, cache policy, memory queries, and registration
 logic remain in Matrix. Later starts verify and reuse the checkout, environment,
 and completed snapshots. Interrupted Hugging Face downloads resume on the next
-start. An existing checkout at a different revision fails clearly rather than
-being rewritten.
+start. Startup reports a clear revision mismatch for any other checkout.
 
 Allow roughly 48 GB for checkpoints, plus the worker environment and download
 cache. `source.path` in `matrix_game_3_5.yaml` is relative to the CLI weights
@@ -110,14 +111,18 @@ mount; every worker, model, tokenizer, inference, and sample path is derived fro
 that one root. To relocate everything, change only `runtime.weights_path` in
 `reactor.yaml`.
 
-The default first-person image, prompt, intrinsics, and camera pose arrive in
-the pinned source checkout. They are session fallbacks rather than a
-restriction: a client can upload its own anchor image and prompt at runtime.
+The adapter provides a scene-neutral generic default prompt, so users can leave
+the prompt empty. The default intrinsics and camera pose arrive in the pinned
+source checkout. The demo image is copied into `example_image` for convenient
+manual upload. Every new session waits for the client to upload its anchor
+image.
 
 ## Controls
 
 - `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes plus an optional
-  prompt, then starts a fresh rollout from that image.
+  prompt, then starts a fresh continuous rollout and generates its
+  first 12-frame chunk. An empty prompt uses the generic default from
+  `matrix_game_3_5.yaml`.
 - `set_prompt` applies a new non-empty text condition at the next chunk boundary
   without resetting visual history. `StateUpdate.next_chunk` identifies that
   boundary.
@@ -143,15 +148,10 @@ Every command returns `StateUpdate`, a complete snapshot containing the prompt,
 anchor image, seed, pause and step state, six axes, completed chunk count, next
 control boundary, and configured limit. A joining viewer receives the same
 snapshot, and the model broadcasts another after every completed chunk. Clients
-therefore do not need to reconstruct shared state from partial messages.
+can consume each complete snapshot directly.
 
-Additional commands:
-
-- `set_paused` stops before another expensive chunk starts and holds playback.
-- `step` generates and plays one complete 12-frame chunk while paused. Calling it
-  while running returns `pause_required`.
-- `reset` restores the selected anchor and prompt; an optional non-negative `seed`
-  selects the next reproducible rollout.
+The `reset` command restores the selected anchor and prompt; an optional
+non-negative `seed` selects the next reproducible rollout.
 
 Camera axes are sampled at a chunk boundary and apply to the next 12 camera slots,
 or 0.75 seconds at 16 FPS. Commands received during inference or playback affect
@@ -161,8 +161,8 @@ disconnect take effect when inference returns to Runtime.
 `stream.max_chunks` bounds the preallocated PRoPE camera timeline. The default
 512 chunks cover 6.4 minutes. After the final chunk, generation pauses and emits
 `RolloutLimitReached` followed by a `StateUpdate` with `limit_reached: true` and
-`next_chunk: null`. Camera, resume, and step commands then return
-`rollout_limit_reached` until `reset` or `set_image` starts a fresh timeline.
+`next_chunk: null`. Camera commands then return `rollout_limit_reached` until
+`reset` or `set_image` starts a fresh timeline.
 Reset releases the prior KV and memory state while preserving loaded weights.
 
 Ending a session also releases its rollout caches and request workspace while
@@ -174,8 +174,11 @@ a live session releases held camera axes but preserves the shared world.
 The `set_image` command declares an `UploadedFile` parameter in Runtime's
 schema. A Reactor client reserves a session upload slot, writes the raw bytes to
 its returned URL, and sends the resulting upload reference with the command. A
-schema-driven frontend can therefore render a file picker without embedding
-binary data in a command message.
+schema-driven frontend can render a file picker while the upload channel carries
+the binary data.
+
+Each session waits for `set_image`. A successful upload starts continuous
+generation and broadcasts completion after each 12-frame chunk.
 
 A ready-to-upload copy of the public first-person demo input lives in
 [`example_image`](example_image).

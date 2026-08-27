@@ -32,7 +32,6 @@ DEPTH_PATH = Path("checkpoints/DA3NESTED-GIANT-LARGE-1.1")
 DEFAULT_SAMPLE = Path("samples/first_person/case_0")
 ANCHOR_IMAGE = DEFAULT_SAMPLE / "input.png"
 CAMERA = DEFAULT_SAMPLE / "camera.npz"
-PROMPT_FILE = DEFAULT_SAMPLE / "prompt.txt"
 SNAPSHOT_MARKER = ".reactor-snapshot.json"
 WORKER_ENV_MARKER = ".reactor-worker-environment.json"
 WORKER_ENV_VERSION = 1
@@ -80,7 +79,7 @@ class MatrixConfig:
     depth: MatrixAsset
     anchor_image: Path
     camera: Path
-    prompt_file: Path
+    default_prompt: str
     seed: int
     max_chunks: int
     translation_meters_per_second: float
@@ -119,6 +118,9 @@ def read_config(config_path: Path | None) -> MatrixConfig:
     max_chunks = int(stream.get("max_chunks", 512))
     if max_chunks < 8:
         raise ValueError("stream.max_chunks must be at least 8")
+    default_prompt = str(inference.get("default_prompt", "")).strip()
+    if not default_prompt:
+        raise ValueError("inference.default_prompt must be non-empty")
 
     return MatrixConfig(
         worker_python=source_path / WORKER_PYTHON,
@@ -132,7 +134,7 @@ def read_config(config_path: Path | None) -> MatrixConfig:
         depth=depth,
         anchor_image=source_path / ANCHOR_IMAGE,
         camera=source_path / CAMERA,
-        prompt_file=source_path / PROMPT_FILE,
+        default_prompt=default_prompt,
         seed=int(inference.get("seed", 3407)),
         max_chunks=max_chunks,
         translation_meters_per_second=translation_speed,
@@ -168,29 +170,45 @@ def ensure_source_checkout(config: MatrixConfig) -> None:
         ) as temporary:
             checkout = Path(temporary) / "checkout"
             _run_git(
-                ["clone", "--filter=blob:none", "--no-checkout", config.source_url, str(checkout)]
+                [
+                    "clone",
+                    "--filter=blob:none",
+                    "--no-checkout",
+                    config.source_url,
+                    str(checkout),
+                ]
             )
-            _run_git(["-C", str(checkout), "checkout", "--detach", config.source_revision])
+            _run_git(
+                ["-C", str(checkout), "checkout", "--detach", config.source_revision]
+            )
             with suppress(FileExistsError):
                 checkout.rename(source_path)
     if not (source_path / ".git").exists():
         raise RuntimeError(f"Matrix source at {source_path} must be a Git checkout")
     actual = _run_git(["-C", str(source_path), "rev-parse", "HEAD"]).stdout.strip()
     if actual != config.source_revision:
-        raise RuntimeError(f"Matrix source revision is {actual}; expected {config.source_revision}")
+        raise RuntimeError(
+            f"Matrix source revision is {actual}; expected {config.source_revision}"
+        )
     _ensure_stateful_patch(source_path)
 
 
 def _ensure_stateful_patch(source_path: Path) -> None:
     """Apply the adapter's stateful rollout patch exactly once."""
     patch = Path(__file__).with_name("stateful_rollout.patch")
-    reverse = _check_git(["-C", str(source_path), "apply", "--reverse", "--check", str(patch)])
+    reverse = _check_git(
+        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
+    )
     if reverse.returncode == 0:
         return
     forward = _check_git(["-C", str(source_path), "apply", "--check", str(patch)])
     if forward.returncode != 0:
-        detail = forward.stderr.strip() or reverse.stderr.strip() or "patch check failed"
-        raise RuntimeError(f"Matrix source is incompatible with the stateful patch: {detail}")
+        detail = (
+            forward.stderr.strip() or reverse.stderr.strip() or "patch check failed"
+        )
+        raise RuntimeError(
+            f"Matrix source is incompatible with the stateful patch: {detail}"
+        )
     logger.info("applying Matrix stateful rollout patch", source=str(source_path))
     _run_git(["-C", str(source_path), "apply", str(patch)])
 
@@ -213,7 +231,9 @@ def ensure_worker_environment(config: MatrixConfig) -> None:
         raise RuntimeError("uv is required to prepare the Matrix worker environment")
     requirements = config.source_path / "requirements.txt"
     if not requirements.is_file():
-        raise FileNotFoundError(f"Matrix requirements file does not exist: {requirements}")
+        raise FileNotFoundError(
+            f"Matrix requirements file does not exist: {requirements}"
+        )
     environment_dir = config.worker_python.parents[1]
     cache_root = config.source_path.parent / ".reactor-uv"
     uv_environment = os.environ.copy()
@@ -229,7 +249,14 @@ def ensure_worker_environment(config: MatrixConfig) -> None:
         destination=str(environment_dir),
     )
     _run_uv(
-        [uv, "venv", "--python", WORKER_PYTHON_VERSION, "--clear", str(environment_dir)],
+        [
+            uv,
+            "venv",
+            "--python",
+            WORKER_PYTHON_VERSION,
+            "--clear",
+            str(environment_dir),
+        ],
         uv_environment,
     )
     _run_uv(
@@ -284,7 +311,9 @@ def _mapping(value: object, name: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def _asset(source_path: Path, value: object, name: str, relative_path: Path) -> MatrixAsset:
+def _asset(
+    source_path: Path, value: object, name: str, relative_path: Path
+) -> MatrixAsset:
     """Return one pinned public asset under the Matrix source root."""
     document = _mapping(value, name)
     repo_id = str(document.get("repo_id", ""))
@@ -371,15 +400,21 @@ def _run_uv(command: list[str], environment: dict[str, str]) -> None:
     try:
         subprocess.run(command, check=True, env=environment)
     except FileNotFoundError as error:
-        raise RuntimeError("uv is required to prepare the Matrix worker environment") from error
+        raise RuntimeError(
+            "uv is required to prepare the Matrix worker environment"
+        ) from error
     except subprocess.CalledProcessError as error:
-        raise RuntimeError("Unable to prepare the Matrix Python 3.10 worker environment") from error
+        raise RuntimeError(
+            "Unable to prepare the Matrix Python 3.10 worker environment"
+        ) from error
 
 
 def _restore_default_sample(config: MatrixConfig) -> None:
     """Restore missing default inputs from the pinned public source revision."""
-    relative_paths = (ANCHOR_IMAGE, CAMERA, PROMPT_FILE)
-    missing = [path for path in relative_paths if not (config.source_path / path).is_file()]
+    relative_paths = (ANCHOR_IMAGE, CAMERA)
+    missing = [
+        path for path in relative_paths if not (config.source_path / path).is_file()
+    ]
     if not missing:
         return
     logger.info(
@@ -402,7 +437,9 @@ def _restore_default_sample(config: MatrixConfig) -> None:
         raise RuntimeError(
             "Unable to restore the default Matrix sample from the pinned source checkout"
         ) from error
-    unresolved = [str(path) for path in missing if not (config.source_path / path).is_file()]
+    unresolved = [
+        str(path) for path in missing if not (config.source_path / path).is_file()
+    ]
     if unresolved:
         raise RuntimeError(f"Matrix default sample remains incomplete: {unresolved}")
 
@@ -440,7 +477,9 @@ def _ensure_model_assets(config: MatrixConfig) -> None:
         config.depth,
         name="Depth-Anything-3 model",
         local_dir=config.depth.path,
-        required_files=tuple(config.depth.path / path for path in _DEPTH_REQUIRED_FILES),
+        required_files=tuple(
+            config.depth.path / path for path in _DEPTH_REQUIRED_FILES
+        ),
     )
 
 
@@ -492,7 +531,9 @@ def _ensure_hf_snapshot(
         ) from error
     unresolved = [str(path) for path in required_files if not _is_nonempty_file(path)]
     if unresolved:
-        raise RuntimeError(f"{name} download is incomplete; missing files: {unresolved}")
+        raise RuntimeError(
+            f"{name} download is incomplete; missing files: {unresolved}"
+        )
     if not snapshot_marker_matches(local_dir, asset):
         raise RuntimeError(f"{name} download did not record its pinned revision")
 
@@ -510,7 +551,6 @@ def _validate_runtime_paths(config: MatrixConfig) -> None:
         "distilled checkpoint": config.checkpoint.path,
         "anchor image": config.anchor_image,
         "camera trajectory": config.camera,
-        "prompt file": config.prompt_file,
     }
     directories = {
         "Matrix source": config.source_path,

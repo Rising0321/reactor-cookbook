@@ -1,7 +1,7 @@
-# Public Runtime API version validated by this example. The model's upstream
-# packages are installed into an isolated Python 3.10 worker environment at
-# model load, keeping the Python 3.12 serving environment independent.
-reactor-runtime==3.1.2
+# Python dependencies installed into the model image in the same resolution as
+# Reactor Runtime. `build.runtime_version` in reactor.yaml owns
+# the Runtime version; Matrix's upstream packages remain isolated in the
+# Python 3.10 worker environment prepared at model load.
 
 # Image validation and normalization in the serving process.
 Pillow>=10.1

@@ -16,6 +16,10 @@ assets:
 
 inference:
   seed: 3407
+  default_prompt: >-
+    An immersive first-person view that faithfully continues the input scene,
+    preserving its existing environment, objects, geometry, materials, lighting,
+    and visual style as the camera moves naturally through it.
 
 stream:
   # 512 chunks provide 6.4 minutes at 16 FPS while bounding camera metadata.

@@ -58,7 +58,9 @@ class _InteractiveSession:
     def __init__(self, max_chunks: int) -> None:
         self.max_chunks = max_chunks
         self._cameras: queue.Queue[_CameraChunk | _Stop] = queue.Queue(maxsize=1)
-        self._results: queue.Queue[_GeneratedChunk | BaseException] = queue.Queue(maxsize=1)
+        self._results: queue.Queue[_GeneratedChunk | BaseException] = queue.Queue(
+            maxsize=1
+        )
         self._stop = _Stop()
 
     def camera_for_chunk(
@@ -69,7 +71,9 @@ class _InteractiveSession:
     ) -> tuple[np.ndarray, np.ndarray, str]:
         """Wait for the camera and prompt conditions for the next model chunk."""
         if frames_per_chunk * 4 != _RGB_FRAMES_PER_CHUNK:
-            raise RuntimeError("Matrix interactive rollout expects three latent frames per chunk")
+            raise RuntimeError(
+                "Matrix interactive rollout expects three latent frames per chunk"
+            )
         value = self._cameras.get()
         if isinstance(value, _Stop):
             raise _InteractiveStopError
@@ -124,10 +128,9 @@ class MatrixRuntime:
         self._runtime_root = Path(settings["runtime_root"]).resolve()
         self._runtime_root.mkdir(parents=True, exist_ok=True)
         self._default_anchor = Path(settings["anchor_image"]).resolve()
-        self._prompt_file = Path(settings["prompt_file"]).resolve()
-        self._default_prompt = self._prompt_file.read_text(encoding="utf-8").strip()
+        self._default_prompt = str(settings["default_prompt"]).strip()
         if not self._default_prompt:
-            raise ValueError(f"prompt file is empty: {self._prompt_file}")
+            raise ValueError("default_prompt must not be empty")
         self._counter = 0
         self._max_chunks = int(settings["max_chunks"])
         self._session: _InteractiveSession | None = None
@@ -143,9 +146,13 @@ class MatrixRuntime:
 
         accelerate = importlib.import_module("accelerate")
         torch = importlib.import_module("torch")
-        load_inference_config = importlib.import_module("distilled_config").load_inference_config
+        load_inference_config = importlib.import_module(
+            "distilled_config"
+        ).load_inference_config
         infer = importlib.import_module("infer")
-        build_model = importlib.import_module("tools.run_distilled_inference").build_model
+        build_model = importlib.import_module(
+            "tools.run_distilled_inference"
+        ).build_model
         build_runtime_args = importlib.import_module(
             "examples.wanvideo.pipeline.mosaic.causal_config"
         ).build_runtime_args
@@ -163,7 +170,10 @@ class MatrixRuntime:
         self._build_runtime_args = build_runtime_args
         self._build_dataset = build_mosaic_validation_dataset
         self._run_inference = run_distilled_inference
-        if "interactive_session" not in inspect.signature(run_distilled_inference).parameters:
+        if (
+            "interactive_session"
+            not in inspect.signature(run_distilled_inference).parameters
+        ):
             raise RuntimeError(
                 "Matrix source is missing the Reactor stateful rollout patch; "
                 "apply the patch documented in models/matrix-game-3-5/README.md"
@@ -195,7 +205,9 @@ class MatrixRuntime:
         anchor_image = anchor_image.resolve()
         prompt = prompt.strip()
         if not anchor_image.is_file():
-            raise FileNotFoundError(f"Matrix anchor image does not exist: {anchor_image}")
+            raise FileNotFoundError(
+                f"Matrix anchor image does not exist: {anchor_image}"
+            )
         if not prompt:
             raise ValueError("Matrix prompt must not be empty")
         self._stop_session()
@@ -384,7 +396,9 @@ def _intrinsic_matrices(value: np.ndarray, frame_count: int) -> np.ndarray:
     if intrinsics.ndim != 3 or intrinsics.shape[1:] != (3, 3):
         raise ValueError(f"unsupported Matrix intrinsics shape: {intrinsics.shape}")
     if int(intrinsics.shape[0]) < frame_count:
-        tail = np.repeat(intrinsics[-1:], frame_count - int(intrinsics.shape[0]), axis=0)
+        tail = np.repeat(
+            intrinsics[-1:], frame_count - int(intrinsics.shape[0]), axis=0
+        )
         intrinsics = np.concatenate([intrinsics, tail], axis=0)
     return np.ascontiguousarray(intrinsics[:frame_count], dtype=np.float32)
 
@@ -392,7 +406,8 @@ def _intrinsic_matrices(value: np.ndarray, frame_count: int) -> np.ndarray:
 def _respond(request_id: int, *, ok: bool, **payload: object) -> None:
     """Write one correlated protocol response."""
     print(
-        _RESPONSE_PREFIX + json.dumps({"id": request_id, "ok": ok, **payload}, ensure_ascii=False),
+        _RESPONSE_PREFIX
+        + json.dumps({"id": request_id, "ok": ok, **payload}, ensure_ascii=False),
         flush=True,
     )
 
