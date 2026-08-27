@@ -175,7 +175,7 @@ class ABotWorld(ReactorPipeline):
         """Initialize one shared world before its first viewer connects."""
         config = self._require_config()
         self.state.prompt = DEFAULT_PROMPT
-        self.state.paused = True
+        self.state.paused = False
         self.state._seed = config.seed
         self.state._step_requested = False
         self.state._reset_requested = False
@@ -311,9 +311,8 @@ class ABotWorld(ReactorPipeline):
     @event(
         name="set_image",
         description=(
-            "Select an uploaded starting frame and queue a fresh rollout without changing the "
-            "current pause state. When paused, chunk 1 is generated automatically and the world "
-            "remains paused afterward. Valid at any time; the upload is checked before replacing "
+            "Select an uploaded starting frame and begin a fresh continuous rollout. Valid at "
+            "any time; the upload is checked before replacing "
             "the active world. Emits `image_selected` and broadcasts `state_update` on success, "
             "or `command_error` when the file is too large, mislabeled, or undecodable."
         ),
@@ -343,6 +342,7 @@ class ABotWorld(ReactorPipeline):
         self._image_source = "uploaded"
         self._image_name = image.name
         self.state.prompt = normalized
+        self.state.paused = False
         initial_chunk_queued = self.state.paused
         self._queue_fresh_rollout(generate_initial_chunk=True)
         message = ImageSelected(
@@ -358,9 +358,8 @@ class ABotWorld(ReactorPipeline):
     @event(
         name="random_image",
         description=(
-            "Select a built-in ABot-World starting frame and its matching prompt, then queue a "
-            "fresh rollout without changing the current pause state. When paused, chunk 1 is "
-            "generated automatically and the world remains paused afterward. Valid when examples "
+            "Select a built-in ABot-World starting frame and its matching prompt, then begin a "
+            "fresh continuous rollout. Valid when examples "
             "are configured. Emits `image_selected` and broadcasts `state_update` on success, "
             "or `command_error` with `image_unavailable` when no built-in image exists."
         ),
@@ -382,6 +381,7 @@ class ABotWorld(ReactorPipeline):
         self._image_source = "built_in"
         self._image_name = scene.image.name
         self.state.prompt = scene.prompt
+        self.state.paused = False
         initial_chunk_queued = self.state.paused
         self._queue_fresh_rollout(generate_initial_chunk=True)
         message = ImageSelected(
@@ -394,22 +394,14 @@ class ABotWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause or resume chunk generation while preserving the causal world. Valid unless "
-            "resuming a rollout at its limit; either value releases every native key and queued "
-            "tap. Emits `pause_changed` and broadcasts `state_update` on success, or "
-            "`command_error` with `rollout_limit_reached` when reset is required."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "Set true to stop before the next chunk or false to resume continuously. New "
-                "sessions default to true. The current world and upstream KV cache are retained; "
+                "sessions default to false. The current world and upstream KV cache are retained; "
                 "all key controls are cleared."
             ),
         ),
@@ -424,15 +416,7 @@ class ABotWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one autoregressive chunk while paused. Valid after an image is "
-            "selected, while `paused` is true, and before the rollout limit. Emits `step_queued` "
-            "and broadcasts `state_update` on success, or `command_error` when those conditions "
-            "are not met."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Queue one paused chunk using the latest prompt and sampled key state."""
         if self._selected_input is None:
@@ -462,8 +446,8 @@ class ABotWorld(ReactorPipeline):
         name="reset",
         description=(
             "Restart the selected starting image as a fresh causal world. Valid after an image "
-            "is selected; the reset applies at the next inference boundary, preserves pause "
-            "state and prompt, and clears controls and the rollout limit. Emits "
+            "is selected; the reset applies at the next inference boundary, resumes continuous "
+            "generation, preserves the prompt, and clears controls and the rollout limit. Emits "
             "`rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` "
             "when no image is selected or the seed is out of range."
         ),
@@ -488,6 +472,7 @@ class ABotWorld(ReactorPipeline):
         replaced_chunks = self._chunk_index
         if seed >= 0:
             self.state._seed = seed
+        self.state.paused = False
         self._queue_fresh_rollout()
         message = RolloutResetQueued(
             seed=self.state._seed,

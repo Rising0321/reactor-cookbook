@@ -42,18 +42,15 @@ downloads persist across image rebuilds. A liveness check is available at
 
 ## Controls
 
-- `set_image` uploads a JPEG, PNG, WebP, or BMP first frame and starts a fresh world without changing the current pause state.
-- `random_image` selects one of the bundled upstream example scenes without changing the current pause state.
+- `set_image` uploads a JPEG, PNG, WebP, or BMP first frame and starts a fresh continuous world.
+- `random_image` selects one of the bundled upstream example scenes and starts continuous generation.
 - `set_prompt` applies new text conditioning at the next chunk without resetting KV cache.
 - `set_key_state` holds or releases W/A/S/D movement and I/J/K/L view keys. Combined keys support diagonal movement and simultaneous view changes; short taps survive until the next chunk sample.
 - `release_controls` returns every action channel to neutral.
-- `set_paused` preserves the world while stopping generation; `step` generates one chunk while paused.
 - `reset` restarts the selected image with the current prompt and an optional new seed.
 
-Sessions start paused. Selecting an uploaded or built-in image preserves that
-state while automatically generating chunk 1 as a visual acknowledgement. The
-world remains paused after that chunk; subsequent chunks require `step` or an
-explicit resume.
+Sessions start unpaused. Selecting an uploaded or built-in image starts
+continuous generation from chunk 1.
 
 The public messages report the accepted action, the chunk it will affect, the
 last sampled keys, prompt application, rollout progress, and reset or limit

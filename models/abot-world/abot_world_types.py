@@ -260,17 +260,20 @@ class ABotWorldState(InputState):
             "rejected by `set_prompt`."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether continuous chunk generation is paused. New sessions start paused; "
-            "`set_paused` applies immediately at a chunk boundary and clears all native key "
-            "controls."
-        ),
-    )
+    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _activated_keys: frozenset[str] = frozenset()
     _step_requested: bool = False
     _reset_requested: bool = False
     _limit_reached: bool = False
     _seed: int = 0
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value
