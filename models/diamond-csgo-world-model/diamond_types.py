@@ -148,16 +148,19 @@ class DiamondState(InputState):
             "actions. Changing it queues a fresh world and releases held controls."
         ),
     )
-    paused: bool = InputField(
-        default=False,
-        description=(
-            "Whether continuous generation pauses before the next model step while preserving "
-            "the world. `step` can request one frame while paused; changing this value releases "
-            "held controls."
-        ),
-    )
+    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _pressed_mouse_buttons: frozenset[str] = frozenset()
     _delta_x: float = 0.0
     _delta_y: float = 0.0
     _step_requested: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous model generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous model generation is paused."""
+        self._paused = value

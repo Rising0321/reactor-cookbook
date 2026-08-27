@@ -93,7 +93,6 @@ helpers. These files remain independent from the upstream checkout.
 - `set_mouse_button_state(button, pressed)` holds or releases fire or scope.
 - `mouse_move(delta_x, delta_y)` supplies native relative movement for one step.
 - `set_controller(controller)` selects human input or the recorded spawn replay.
-- `set_paused(paused)` stops model inference; `step` advances once while paused.
 - `reset` starts from another spawn state.
 
 Control events return an `ActionChanged` message containing the acknowledged

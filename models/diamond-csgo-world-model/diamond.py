@@ -338,14 +338,7 @@ class Diamond(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next model step or resume continuous generation, releasing all "
-            "held controls in either case. Available throughout an active session. Emits "
-            "`action_changed` and broadcasts `state_update` on success."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
@@ -365,14 +358,7 @@ class Diamond(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one generated frame while continuous generation is paused. When "
-            "generation is running, the command is acknowledged without effect. Emits no "
-            "model message."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     def step(self) -> None:
         """Request one inference step without leaving paused mode."""
         if self.state is not None and self._paused:
