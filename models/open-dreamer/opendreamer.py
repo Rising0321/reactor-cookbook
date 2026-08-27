@@ -584,8 +584,7 @@ class OpenDreamer(ReactorPipeline):
         """Restart the rollout and report the seed and starting scene it will use."""
         if seed >= 0:
             self.state._seed = seed
-        self.state._reset_requested = True
-        self._clear_controls()
+        self._queue_rollout_reset()
         await self._send_state_update()
         return RolloutReset(
             seed=self.state._seed,
@@ -618,8 +617,7 @@ class OpenDreamer(ReactorPipeline):
             raise CommandError("demo_unavailable", f"{demo} is not configured.")
         self._conditioning_source = demo
         if self.state is not None:
-            self.state._reset_requested = True
-            self._clear_controls()
+            self._queue_rollout_reset()
         await self._send_state_update()
         return ConditioningChanged(source="demo", selection=demo)
 
@@ -637,8 +635,7 @@ class OpenDreamer(ReactorPipeline):
         demo = self._random_demo_name()
         self._conditioning_source = demo
         if self.state is not None:
-            self.state._reset_requested = True
-            self._clear_controls()
+            self._queue_rollout_reset()
         await self._send_state_update()
         logger.info("selected random conditioning demo", demo=demo)
         return ConditioningChanged(source="demo", selection=demo)
@@ -683,10 +680,15 @@ class OpenDreamer(ReactorPipeline):
         )
         self._conditioning_source = "uploaded"
         if self.state is not None:
-            self.state._reset_requested = True
-            self._clear_controls()
+            self._queue_rollout_reset()
         await self._send_state_update()
         return ConditioningChanged(source="upload", selection=image.name)
+
+    def _queue_rollout_reset(self) -> None:
+        """Queue fresh autoregressive state and discard pending media."""
+        self.output.flush()
+        self.state._reset_requested = True
+        self._clear_controls()
 
     def inference(self) -> Iterator[OpenDreamerOutput | _IdleType]:
         """Generate Minecraft frames from the current starting scene and player controls."""
