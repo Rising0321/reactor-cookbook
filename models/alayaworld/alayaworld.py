@@ -8,7 +8,6 @@ paths. Prompt updates and camera controls are sampled at chunk boundaries.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import secrets
 import time
@@ -681,7 +680,7 @@ class AlayaWorld(ReactorPipeline):
         return message
 
     async def inference(self) -> AsyncGenerator[Any, None]:
-        """Generate chunks off-loop and emit their RGB frames at 24 FPS."""
+        """Generate chunks and emit their RGB frames at 24 FPS."""
         while True:
             selected_input = self._selected_input
             if selected_input is None:
@@ -718,8 +717,7 @@ class AlayaWorld(ReactorPipeline):
                 # being replaced never play after the new one starts.
                 self.output.flush()
                 try:
-                    await asyncio.to_thread(
-                        self._reset_rollout,
+                    self._reset_rollout(
                         self.state.prompt,
                         self._seed,
                         selected_input,
@@ -745,8 +743,7 @@ class AlayaWorld(ReactorPipeline):
             roll = self.state.roll
             self._chunk_in_flight = True
             try:
-                frames = await asyncio.to_thread(
-                    self._generate_chunk,
+                frames = self._generate_chunk(
                     prompt,
                     strafe,
                     vertical,
