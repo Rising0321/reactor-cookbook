@@ -22,7 +22,7 @@ inference components directly.
   a CPU for functional but slow inference.
 - About 1.4 GB of free cache space for the pinned checkpoint and spawn bundle.
 
-The [`build` block](https://deploy-docs.reactor.inc/platform/build) in
+The [`build` block](https://docs.reactor.inc/deploy/platform/build) in
 `reactor.yaml` pins DIAMOND source revision
 `851cefb497733d27f1b85c804104638765860fca`, installs it outside the adapter, and
 sets `DIAMOND_PATH` inside the image. On the first run, the adapter downloads the
