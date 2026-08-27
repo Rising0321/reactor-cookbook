@@ -26,7 +26,7 @@ reactor run --gpus device=0 --port 8080
 
 The `build:` block in `reactor.yaml` configures CUDA 12.8, Python 3.12,
 FlashAttention 2.8.1, Git, and FFmpeg. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields. Run `reactor build` again after changing model code,
 requirements, or build configuration.
 
