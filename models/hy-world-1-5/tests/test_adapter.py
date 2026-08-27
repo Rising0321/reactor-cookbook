@@ -80,8 +80,6 @@ def test_contract_is_atomic_and_documents_command_results() -> None:
         "set_prompt",
         "set_camera",
         "release_camera",
-        "set_paused",
-        "step",
         "reset",
         "set_image",
         "random_image",
@@ -150,15 +148,15 @@ def test_model_layout_links_remain_valid_after_weights_root_moves() -> None:
         assert all(not Path(path.readlink()).is_absolute() for path in destinations)
 
 
-def test_image_selection_preserves_pause_and_queues_visible_first_chunk() -> None:
-    """Generate the initial preview once without enabling continuous playback."""
+def test_image_selection_starts_unpaused_and_queues_first_chunk() -> None:
+    """Generate continuously after queueing the initial preview chunk."""
     model, backend = _ready_model()
 
     reply = asyncio.run(model.set_image(_image_upload(), "A quiet road"))
 
-    assert reply.paused is True
+    assert reply.paused is False
     assert reply.first_chunk_queued is True
-    assert model.state.paused is True
+    assert model.state.paused is False
     assert model.state._step_requested is True
 
     async def generate_first_frame() -> Any:
@@ -168,7 +166,7 @@ def test_image_selection_preserves_pause_and_queues_visible_first_chunk() -> Non
     assert isinstance(output, HYWorld15Output)
     assert backend.resets == [("A quiet road", 1)]
     assert len(backend.calls) == 1
-    assert model.state.paused is True
+    assert model.state.paused is False
     assert model.state._step_requested is False
     assert model._chunk_index == 1
 
@@ -186,6 +184,7 @@ def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
 
     asyncio.run(drain_first_chunk())
     asyncio.run(model.set_prompt("Second prompt"))
+    asyncio.run(model.set_paused(True))
     asyncio.run(model.step())
 
     async def generate_next_frame() -> Any:

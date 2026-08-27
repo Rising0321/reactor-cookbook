@@ -118,12 +118,12 @@ class HYWorld15(ReactorPipeline):
             "HY-World 1.5 model ready",
             examples=len(self._examples),
             max_chunks=config.max_chunks,
-            paused_by_default=True,
+            paused_by_default=False,
         )
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize an empty shared world in paused mode."""
+        """Initialize an empty shared world for continuous generation."""
         config = self._require_config()
         self._selected_input = None
         self._image_source = None
@@ -133,7 +133,7 @@ class HYWorld15(ReactorPipeline):
         self._active_prompt = None
         self._generating = False
         self.state.prompt = ""
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._restart_requested = False
         self.state._limit_reached = False
@@ -264,19 +264,11 @@ class HYWorld15(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next chunk or resume continuous generation. Either choice releases "
-            "camera motion and cancels an ordinary queued step. Resuming requires an available "
-            "world. Emits `pause_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when resuming without an image or after the rollout limit."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "True stops before the next chunk; false enables continuous chunks. The current "
                 "in-flight chunk, if any, can finish."
@@ -294,15 +286,7 @@ class HYWorld15(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one causal video chunk without leaving paused mode. Requires a "
-            "selected image, `paused=true`, and an available chunk. Chunk 1 produces 13 frames; "
-            "later chunks produce 16. Emits `step_queued` and broadcasts `state_update` on "
-            "success, or `command_error` when a precondition is missing."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Queue one paused chunk and report its expected frame count."""
         self._require_image()
@@ -323,7 +307,7 @@ class HYWorld15(ReactorPipeline):
         description=(
             "Queue a fresh world from the selected image and current prompt. Requires a selected "
             "image. Clears progress, geometric memory, KV cache, and camera motion while "
-            "preserving paused mode. Emits `rollout_reset_queued` and broadcasts `state_update` "
+            "resuming continuous generation. Emits `rollout_reset_queued` and broadcasts `state_update` "
             "on success, or `command_error` when no image is selected."
         ),
     )
@@ -344,6 +328,7 @@ class HYWorld15(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
+        self.state.paused = False
         self._request_restart(auto_step=False)
         message = RolloutResetQueued(
             seed=self._seed,
@@ -356,9 +341,9 @@ class HYWorld15(ReactorPipeline):
     @event(
         name="set_image",
         description=(
-            "Select an uploaded reference image and queue a fresh world. Preserves paused mode "
-            "and always queues the initial 13-frame chunk so the selected image produces visible "
-            "output even while paused. Emits `image_selected` and broadcasts `state_update` on "
+            "Select an uploaded reference image and queue a fresh continuously generated world. "
+            "The selected image queues an initial 13-frame chunk. Emits `image_selected` and "
+            "broadcasts `state_update` on "
             "success, or `command_error` for an invalid upload."
         ),
     )
@@ -387,6 +372,7 @@ class HYWorld15(ReactorPipeline):
         self.state.prompt = (
             prompt.strip() or self.state.prompt.strip() or _DEFAULT_UPLOAD_PROMPT
         )
+        self.state.paused = False
         self._request_restart(auto_step=True)
         message = ImageSelected(
             source="uploaded",
@@ -401,8 +387,8 @@ class HYWorld15(ReactorPipeline):
     @event(
         name="random_image",
         description=(
-            "Select an official built-in image and its matching prompt, preserving paused mode "
-            "and queueing the initial 13-frame chunk. Emits `image_selected` and broadcasts "
+            "Select an official built-in image and its matching prompt, begin continuous "
+            "generation, and queue the initial 13-frame chunk. Emits `image_selected` and broadcasts "
             "`state_update` on success, or `command_error` when no example is available."
         ),
     )
@@ -419,6 +405,7 @@ class HYWorld15(ReactorPipeline):
         self._image_source = "built_in"
         self._image_name = selected.path.name
         self.state.prompt = selected.prompt
+        self.state.paused = False
         self._request_restart(auto_step=True)
         message = ImageSelected(
             source="built_in",

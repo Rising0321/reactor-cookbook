@@ -5,7 +5,7 @@ Serve the public
 autoregressive image-to-video model through Reactor Runtime. The adapter keeps
 HY-World's upstream denoising, text and visual KV caches, dual action
 representation, causal latent history, and Reconstituted Context Memory intact
-while exposing image, prompt, camera, pause, and step controls to Reactor
+while exposing image, prompt, and camera controls to Reactor
 clients.
 
 HY-World predicts four causal latents per turn at 480p. The first turn decodes
@@ -13,11 +13,9 @@ to 13 RGB frames because its first latent is the image anchor; every later turn
 decodes to 16 frames. Playback on `main_video` adapts to measured inference
 throughput, with one complete model turn in the 16-frame output queue.
 
-A new session starts paused and without choosing a scene for the user. Upload
+A new session starts unpaused and without choosing a scene for the user. Upload
 an image with `set_image`, or invoke `random_image` to select an official
-example. Either command preserves the pause setting but automatically queues
-the first chunk, so the initialized world becomes visible without enabling
-continuous generation.
+example. Either command starts continuous generation from the first chunk.
 
 ## Run
 
@@ -81,7 +79,7 @@ reactor model deploy
 The [Reactor Sandbox](https://reactor-sandbox.vercel.app/) can connect to the
 local endpoint with **Local (Direct)**. The generated controls include a real
 file picker for `set_image`, the built-in `random_image` action, prompt and
-camera inputs, pause, step, and reset. The model-message timeline reports every
+camera inputs, and reset. The model-message timeline reports every
 accepted state change and completed chunk.
 
 ## Public source and model assets
@@ -160,10 +158,8 @@ Additional commands:
 - `set_prompt` replaces text conditioning at the next chunk boundary without
   discarding generated latent or geometric memory.
 - `release_camera` returns all four camera values to zero.
-- `set_paused` pauses or resumes continuous generation and releases the camera.
-- `step` generates exactly one chunk while paused.
 - `reset` rebuilds the world from the selected image and prompt while
-  preserving paused mode; its optional seed selects a reproducible rollout.
+  resuming continuous generation; its optional seed selects a reproducible rollout.
 
 Commands received during an in-flight CUDA turn apply at the next chunk
 boundary. Every successful control returns a typed confirmation and broadcasts

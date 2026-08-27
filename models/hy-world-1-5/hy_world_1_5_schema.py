@@ -195,7 +195,7 @@ class RolloutResetQueued(ModelMessage):
     replaced_chunks: int = MessageField(
         description="Number of completed chunks discarded by the reset."
     )
-    paused: bool = MessageField(description="Pause state preserved across the reset.")
+    paused: bool = MessageField(description="Pause state after the reset.")
 
 
 class ChunkCompleted(ModelMessage):
@@ -243,13 +243,7 @@ class HYWorld15State(InputState):
             "change it after selecting an image."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether continuous generation pauses before the next chunk. Image selection "
-            "preserves this value while automatically queuing the initial chunk."
-        ),
-    )
+    _paused: bool = False
     _forward: float = 0.0
     _strafe: float = 0.0
     _pitch: float = 0.0
@@ -257,3 +251,13 @@ class HYWorld15State(InputState):
     _step_requested: bool = False
     _restart_requested: bool = False
     _limit_reached: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value
