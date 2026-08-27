@@ -7,7 +7,6 @@ advances those three persistent states once and emits one 24-frame video chunk.
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -221,11 +220,11 @@ class SanaWM(ReactorPipeline):
         await self.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release per-world caches while retaining startup-owned model weights."""
         backend = self._backend
         if backend is not None:
-            await asyncio.to_thread(backend.end_session)
+            backend.end_session()
         self._selected_image = None
         self._clear_controls()
 
@@ -624,8 +623,7 @@ class SanaWM(ReactorPipeline):
                 self.output.flush()
                 await self._send_state_update()
                 try:
-                    await asyncio.to_thread(
-                        backend.reset,
+                    backend.reset(
                         self._selected_image,
                         self.state.prompt,
                         self._seed,
@@ -652,7 +650,7 @@ class SanaWM(ReactorPipeline):
             await self._send_state_update()
             trajectory_exhausted = False
             try:
-                frames = await asyncio.to_thread(backend.generate_chunk, controls)
+                frames = backend.generate_chunk(controls)
             except TrajectoryCompleteError:
                 trajectory_exhausted = True
             finally:
