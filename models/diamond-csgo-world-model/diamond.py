@@ -331,9 +331,7 @@ class Diamond(ReactorPipeline):
                 self._pending_scene = None
             self._controller = controller
             self.state.controller = controller
-            self.state._step_requested = False
-            self._reset_requested = True
-            self._clear_controls()
+            self._queue_scene_reset()
         message = self._action_changed()
         await self._send_state_update()
         return message
@@ -589,6 +587,7 @@ class Diamond(ReactorPipeline):
 
     def _queue_scene_reset(self) -> None:
         """Reset controls and request application of the queued scene."""
+        self.output.flush()
         self._reset_requested = True
         self.state._step_requested = False
         self._replay_step = 0

@@ -267,6 +267,17 @@ def test_paused_scene_upload_emits_without_a_model_step(
     assert world.actions == []
 
 
+def test_scene_reset_flushes_pending_media(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Discard frames queued by the world that a scene reset replaces."""
+    model = _ready_model()
+    flushes: list[None] = []
+    monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
+
+    model._queue_scene_reset()
+
+    assert flushes == [None]
+
+
 def test_manifest_defines_the_runtime_entrypoint_and_generated_image() -> None:
     """Keep the entrypoint and generated image inputs reproducible."""
     manifest_path = EXAMPLE_DIR / "reactor.yaml"
