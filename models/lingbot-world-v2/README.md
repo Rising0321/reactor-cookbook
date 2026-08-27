@@ -97,9 +97,6 @@ execution is eager and model loading happens once during startup.
   six held axes for forthcoming chunks. Each value is in `[-1, 1]` and remains
   active until changed or released.
 - `release_camera` returns all six axes to neutral.
-- `set_paused(paused)` pauses before the next expensive chunk or resumes
-  continuous generation. Either transition releases camera motion.
-- `step` generates exactly one chunk while paused.
 - `reset(seed)` starts again from the selected image and prompt, optionally
   using another non-negative seed.
 
@@ -114,9 +111,7 @@ chunk. An in-flight GPU chunk finishes before pause, reset, or disconnect takes
 effect. Disconnecting releases held camera motion while preserving the shared
 world.
 
-Sessions start paused. Selecting an image while paused automatically queues
-chunk one as a visible preview and leaves the session paused after the preview
-finishes. Image selection while running preserves continuous playback.
+Sessions start unpaused. Selecting an image begins continuous playback.
 
 ## Image uploads
 

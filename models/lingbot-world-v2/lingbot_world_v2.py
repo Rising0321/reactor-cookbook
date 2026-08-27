@@ -148,7 +148,7 @@ class LingBotWorldV2(ReactorPipeline):
         """Initialize an empty shared world before its first viewer connects."""
         config = self._require_loaded()
         self.state.prompt = ""
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._reset_requested = False
         self._clear_camera()
@@ -296,19 +296,11 @@ class LingBotWorldV2(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next chunk or resume continuous generation, releasing all held "
-            "camera motion and canceling a queued step. Pausing is always valid; resuming requires "
-            "a selected image and an available chunk. Emits `pause_changed` and broadcasts "
-            "`state_update` on success, or `command_error` when resuming is unavailable."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "True pauses before the next chunk; false resumes continuous generation. Both "
                 "values release all held camera axes and cancel a queued step."
@@ -326,14 +318,7 @@ class LingBotWorldV2(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one chunk without leaving paused mode. Requires a selected image, "
-            "`paused=true`, and an available chunk. Emits `step_queued` and broadcasts "
-            "`state_update` on success, or `command_error` when any precondition is missing."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Queue one paused chunk and report its rollout position."""
         self._require_selected()

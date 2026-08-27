@@ -253,13 +253,7 @@ class LingBotWorldV2State(InputState):
             "next chunk boundary and preserves the current causal world."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether continuous generation pauses before the next chunk. Changing it releases "
-            "all held camera axes and cancels a queued step."
-        ),
-    )
+    _paused: bool = False
     _forward: float = 0.0
     _strafe: float = 0.0
     _vertical: float = 0.0
@@ -268,3 +262,13 @@ class LingBotWorldV2State(InputState):
     _roll: float = 0.0
     _step_requested: bool = False
     _reset_requested: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value
