@@ -509,13 +509,11 @@ class HYWorld15(ReactorPipeline):
                 )
             await self._send_state_update()
 
-            for frame in frames:
-                if self.state._restart_requested:
-                    break
-                yield HYWorld15Output(main_video=frame)
+            yield HYWorld15Output(main_video=frames)
 
     def _request_restart(self, *, auto_step: bool) -> None:
         """Queue a fresh causal world while preserving public playback state."""
+        self.output.flush()
         self._release_camera()
         self.state._step_requested = auto_step
         self.state._restart_requested = True

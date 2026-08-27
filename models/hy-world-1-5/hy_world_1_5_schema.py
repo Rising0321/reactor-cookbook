@@ -15,7 +15,7 @@ from reactor_runtime import (
 
 
 class HYWorld15Output(Output):
-    """Carry one generated HY-World 1.5 RGB frame."""
+    """Carry one generated HY-World 1.5 RGB frame batch."""
 
     main_video: Video
 

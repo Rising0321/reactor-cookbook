@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
+from pytest import MonkeyPatch
 from reactor_runtime import UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
@@ -148,9 +149,13 @@ def test_model_layout_links_remain_valid_after_weights_root_moves() -> None:
         assert all(not Path(path.readlink()).is_absolute() for path in destinations)
 
 
-def test_image_selection_starts_unpaused_and_queues_first_chunk() -> None:
+def test_image_selection_starts_unpaused_and_queues_first_chunk(
+    monkeypatch: MonkeyPatch,
+) -> None:
     """Generate continuously after queueing the initial preview chunk."""
     model, backend = _ready_model()
+    flushes: list[None] = []
+    monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
 
     reply = asyncio.run(model.set_image(_image_upload(), "A quiet road"))
 
@@ -159,16 +164,31 @@ def test_image_selection_starts_unpaused_and_queues_first_chunk() -> None:
     assert model.state.paused is False
     assert model.state._step_requested is True
 
-    async def generate_first_frame() -> Any:
+    async def generate_first_chunk() -> Any:
         return await anext(model.inference())
 
-    output = asyncio.run(generate_first_frame())
+    output = asyncio.run(generate_first_chunk())
     assert isinstance(output, HYWorld15Output)
+    assert output.main_video.shape == (13, 8, 8, 3)
+    assert flushes == [None]
     assert backend.resets == [("A quiet road", 1)]
     assert len(backend.calls) == 1
     assert model.state.paused is False
     assert model.state._step_requested is False
     assert model._chunk_index == 1
+
+
+def test_rollout_reset_flushes_pending_media(monkeypatch: MonkeyPatch) -> None:
+    """Discard frames queued by the world that a reset replaces."""
+    model, _backend = _ready_model()
+    flushes: list[None] = []
+    monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
+    asyncio.run(model.set_image(_image_upload(), "A quiet road"))
+    flushes.clear()
+
+    asyncio.run(model.reset(-1))
+
+    assert flushes == [None]
 
 
 def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
@@ -178,8 +198,7 @@ def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
 
     async def drain_first_chunk() -> None:
         stream = model.inference()
-        for _ in range(13):
-            await anext(stream)
+        await anext(stream)
         await stream.aclose()
 
     asyncio.run(drain_first_chunk())
@@ -187,11 +206,12 @@ def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
     asyncio.run(model.set_paused(True))
     asyncio.run(model.step())
 
-    async def generate_next_frame() -> Any:
+    async def generate_next_chunk() -> Any:
         return await anext(model.inference())
 
-    output = asyncio.run(generate_next_frame())
+    output = asyncio.run(generate_next_chunk())
     assert isinstance(output, HYWorld15Output)
+    assert output.main_video.shape == (16, 8, 8, 3)
     assert [prompt for _, prompt in backend.calls] == ["First prompt", "Second prompt"]
     assert model._chunk_index == 2
     assert model.state.paused is True
