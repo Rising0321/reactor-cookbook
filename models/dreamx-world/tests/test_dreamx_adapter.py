@@ -47,8 +47,8 @@ def test_camera_composes_native_movement_and_view_keys() -> None:
     assert not np.isclose(chunk.poses[-1, -1], -0.45)
 
 
-def test_paused_key_state_is_retained_for_step(monkeypatch: MonkeyPatch) -> None:
-    """Retain pressed and released keys while paused for the next step."""
+def test_key_state_is_retained_for_next_chunk(monkeypatch: MonkeyPatch) -> None:
+    """Retain pressed and released keys for the next chunk."""
     world = dreamx_world.DreamXWorld()
     world.state = dreamx_types.DreamXWorldState()
     world._selected_input = Path("selected.jpg")
@@ -60,7 +60,7 @@ def test_paused_key_state_is_retained_for_step(monkeypatch: MonkeyPatch) -> None
     monkeypatch.setattr(world, "send", capture)
 
     pressed = asyncio.run(world.set_key_state("w", True))
-    assert pressed.paused is True
+    assert pressed.paused is False
     assert pressed.pressed_keys == ["w"]
     assert world.state._pressed_keys == frozenset({"w"})
 
@@ -70,16 +70,16 @@ def test_paused_key_state_is_retained_for_step(monkeypatch: MonkeyPatch) -> None
     assert [message.pressed_keys for message in state_updates] == [["w"], []]
 
 
-def test_image_selection_queues_one_preview_chunk_while_paused() -> None:
-    """Queue chunk 1 after image selection without resuming continuous generation."""
+def test_image_selection_starts_unpaused() -> None:
+    """Start continuous generation after image selection."""
     world = dreamx_world.DreamXWorld()
     world.state = dreamx_types.DreamXWorldState()
 
     world._select_image(Path("selected.jpg"), "uploaded", "A coherent world")
 
-    assert world.state.paused is True
+    assert world.state.paused is False
     assert world.state._reset_requested is True
-    assert world.state._step_requested is True
+    assert world.state._step_requested is False
     assert world._chunk_index == 0
 
 

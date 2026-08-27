@@ -240,13 +240,17 @@ class DreamXWorldState(InputState):
             "image; whitespace-only values are rejected by `set_prompt`."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether automatic generation is paused before the next native chunk. "
-            "`set_paused` applies the value at a chunk boundary and releases held keys."
-        ),
-    )
+    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _step_requested: bool = False
     _reset_requested: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether automatic chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether automatic chunk generation is paused."""
+        self._paused = value

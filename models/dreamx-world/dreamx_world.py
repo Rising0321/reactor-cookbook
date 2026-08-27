@@ -135,7 +135,7 @@ class DreamXWorld(ReactorPipeline):
         """Wait for an uploaded or randomly selected image before generating."""
         config = self._require_config()
         self.state.prompt = ""
-        self.state.paused = True
+        self.state.paused = False
         self._clear_controls()
         self.state._step_requested = False
         self.state._reset_requested = False
@@ -177,9 +177,9 @@ class DreamXWorld(ReactorPipeline):
     @event(
         name="set_image",
         description=(
-            "Select an uploaded image and queue a fresh paused world. Valid at any time; the "
-            "image applies to an automatically generated preview chunk 1, clears rollout "
-            "progress, releases held keys, and remains paused after that chunk. Emits "
+            "Select an uploaded image and queue a fresh world. Valid at any time; the image "
+            "applies to chunk 1, clears rollout progress, releases held keys, and starts "
+            "continuous generation. Emits "
             "`image_selected`, `state_update`, and then `chunk_generated` on success, or "
             "`command_error` when the upload is invalid."
         ),
@@ -224,10 +224,10 @@ class DreamXWorld(ReactorPipeline):
     @event(
         name="random_image",
         description=(
-            "Select one configured upstream demo image and queue a fresh paused world. Valid "
-            "at any time; the paired upstream prompt applies to an automatically generated "
-            "preview chunk 1, progress is cleared, held keys are released, and generation "
-            "remains paused afterward. Emits `image_selected`, `state_update`, and then "
+            "Select one configured upstream demo image and queue a fresh world. Valid at any "
+            "time; the paired upstream prompt applies to chunk 1, progress is cleared, held "
+            "keys are released, and generation starts continuously. Emits `image_selected`, "
+            "`state_update`, and then "
             "`chunk_generated`; configured images are validated while the model loads."
         ),
     )
@@ -324,19 +324,11 @@ class DreamXWorld(ReactorPipeline):
             ],
         )
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next native chunk or resume continuous generation. Resuming "
-            "requires a selected image; either value releases all held camera keys and cancels "
-            "a queued step. Emits `pause_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when resuming without an image."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "True pauses before the next native chunk; false resumes continuous chunk "
                 "generation. The command takes effect after any in-flight chunk."
@@ -353,15 +345,7 @@ class DreamXWorld(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one native three-latent-frame chunk without leaving paused mode. "
-            "Valid only while paused after an image is selected. Emits `step_queued` and "
-            "broadcasts `state_update` on success, or `command_error` while continuous "
-            "generation is running or no image is selected."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Queue one paused chunk and confirm its one-based rollout position."""
         self._require_selected_image()
@@ -377,7 +361,7 @@ class DreamXWorld(ReactorPipeline):
         description=(
             "Restart from the selected image and queued prompt. Valid after image selection; "
             "the reset applies before the next native chunk, clears every autoregressive and "
-            "VAE cache, releases held keys, and preserves paused mode. Emits "
+            "VAE cache, releases held keys, and resumes continuous generation. Emits "
             "`rollout_reset_queued` and broadcasts `state_update` on success, or "
             "`command_error` when no image is selected."
         ),
@@ -399,6 +383,7 @@ class DreamXWorld(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         completed = self._chunk_index
+        self.state.paused = False
         self._request_reset()
         message = RolloutResetQueued(
             trigger="manual",
@@ -496,13 +481,13 @@ class DreamXWorld(ReactorPipeline):
         source: ImageSource,
         prompt: str,
     ) -> None:
-        """Queue one selected image and prompt as a fresh paused rollout."""
+        """Queue one selected image and prompt as a fresh continuous rollout."""
         self._selected_input = image
         self._image_source = source
         self.state.prompt = prompt
-        self.state.paused = True
+        self.state.paused = False
         self._request_reset()
-        self.state._step_requested = True
+        self.state._step_requested = False
         self._chunk_index = 0
         self._active_prompt = ""
 

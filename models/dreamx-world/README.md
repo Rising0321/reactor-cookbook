@@ -15,11 +15,10 @@ measured inference throughput, and the output queue holds one complete 12-frame
 chunk. Prompt and held-key state are sampled at the chunk boundary, so a command
 received during an in-flight turn applies to the following one.
 
-A new session starts paused without choosing a scene. Upload an image with
+A new session starts unpaused without choosing a scene. Upload an image with
 `set_image`, or call `random_image` to select one of the public DreamX examples.
-Either command resets the autoregressive state, automatically generates preview
-chunk 1, and then remains paused so the first result is visible before play
-continues.
+Either command resets the autoregressive state and starts continuous generation
+from chunk 1.
 
 ## Prerequisites
 
@@ -106,25 +105,21 @@ retain the terms published by their source repositories.
 ## Controls
 
 - `set_image(image, prompt)` accepts an uploaded image and optional prompt,
-  resets the world, generates preview chunk 1, and remains paused. A blank
+  resets the world, and starts continuous generation. A blank
   prompt uses the active prompt or configured upload default.
 - `random_image()` selects one configured upstream example with its original
-  evaluation prompt, generates preview chunk 1, and remains paused.
+  evaluation prompt and starts continuous generation.
 - `set_prompt(prompt)` changes the cross-attention condition at the next chunk
   boundary without discarding visual KV history.
 - `set_key_state(key, pressed)` holds or releases one native camera key. `W`/`S`
   move forward/backward, `A`/`D` strafe left/right, `I`/`K` tilt up/down, and
   `J`/`L` pan left/right.
-- `set_paused(paused)` pauses or resumes before the next native chunk and
-  releases every held key.
-- `step()` generates exactly one native chunk while remaining paused.
 - `reset(seed)` restarts from the selected image and prompt, clearing the
   autoregressive, cross-attention, camera, and streaming VAE caches. `-1`
   retains the active seed.
 
 Key states persist until released, and translation plus view keys compose at
-chunk boundaries. Keys can be changed while paused so a client can prepare an
-action before `step`.
+chunk boundaries.
 
 ## Start from an image
 
@@ -150,8 +145,7 @@ Commands return typed, command-correlated messages for the client timeline:
   it.
 - `action_changed` contains the originating control, pause state, and complete
   held-key set.
-- `pause_changed`, `step_queued`, and `rollout_reset_queued` confirm playback
-  and rollout transitions before inference consumes them.
+- `rollout_reset_queued` confirms rollout transitions before inference consumes them.
 - `chunk_generated` reports the sampled prompt and keys, frame count, chunk
   number, and wall-clock inference time.
 - `state_update` is a complete snapshot of image, prompt, pause state, held
