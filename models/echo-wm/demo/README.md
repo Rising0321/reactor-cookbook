@@ -82,12 +82,12 @@ default for the new scene. `ReactorView` combines the `main_video` and
 
 The model broadcasts a complete state snapshot after each observable change.
 The UI uses that snapshot as its source of truth for camera meters, prompt,
-pause state, and chunk progress:
+generation state, and chunk progress:
 
 ```tsx
 useEchoWmFlashStateUpdate((state) => {
   state.forward;
-  state.queued_steps;
+  state.generating;
   state.next_chunk;
 });
 ```
@@ -104,6 +104,6 @@ The schema-derived client lives in [`lib/echo_wm/`](./lib/echo_wm).
 | `components/Workspace.tsx`    | Subscribes to state and lays out the demo         |
 | `components/CameraBar.tsx`    | Four-axis camera and field-of-view controls       |
 | `components/ScenePanel.tsx`   | Random scene, upload, and prompt controls         |
-| `components/RolloutPanel.tsx` | Pause, step, seed, reset, and chunk state         |
+| `components/RolloutPanel.tsx` | Seed, reset, progress, and generation state       |
 | `lib/controls.ts`             | Keyboard bindings and atomic velocity calculation |
 | `lib/echo_wm/`                | Schema-derived typed client and React hooks       |

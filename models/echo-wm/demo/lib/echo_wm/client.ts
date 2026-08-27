@@ -39,10 +39,6 @@ export interface EchoWmFlashSetFovParams {
   fov_degrees?: number;
 }
 
-export interface EchoWmFlashSetPausedParams {
-  paused?: boolean;
-}
-
 export interface EchoWmFlashResetParams {
   seed?: number;
 }
@@ -95,18 +91,6 @@ export interface EchoWmFlashCameraMotionChangedMessage {
   applies_to_chunk: number | null;
 }
 
-export interface EchoWmFlashPauseChangedMessage {
-  type: "pause_changed";
-  paused: boolean;
-  next_chunk: number | null;
-}
-
-export interface EchoWmFlashStepQueuedMessage {
-  type: "step_queued";
-  applies_to_chunk: number;
-  expected_video_frames: number;
-}
-
 export interface EchoWmFlashRolloutResetQueuedMessage {
   type: "rollout_reset_queued";
   seed: number;
@@ -144,8 +128,6 @@ export type EchoWmFlashMessage =
   | EchoWmFlashImageSelectedMessage
   | EchoWmFlashPromptQueuedMessage
   | EchoWmFlashCameraMotionChangedMessage
-  | EchoWmFlashPauseChangedMessage
-  | EchoWmFlashStepQueuedMessage
   | EchoWmFlashRolloutResetQueuedMessage
   | EchoWmFlashChunkCompletedMessage
   | EchoWmFlashAutomaticResetQueuedMessage;
@@ -202,14 +184,6 @@ export class EchoWmFlashModel extends Reactor {
 
   async setFov(params: EchoWmFlashSetFovParams): Promise<void> {
     await this.sendCommand("set_fov", params);
-  }
-
-  async setPaused(params: EchoWmFlashSetPausedParams): Promise<void> {
-    await this.sendCommand("set_paused", params);
-  }
-
-  async step(): Promise<void> {
-    await this.sendCommand("step", {});
   }
 
   async reset(params: EchoWmFlashResetParams): Promise<void> {

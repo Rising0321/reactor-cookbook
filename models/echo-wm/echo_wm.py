@@ -152,7 +152,7 @@ class EchoWM(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize an empty paused world before the first viewer connects."""
+        """Initialize an empty continuous world before the first viewer connects."""
         config = self._require_loaded()
         self.state.prompt = ""
         self.state.paused = False
@@ -197,9 +197,9 @@ class EchoWM(ReactorPipeline):
     @event(
         name="set_image",
         description=(
-            "Select an uploaded first frame and queue a fresh audiovisual world. The command "
-            "preserves paused mode and queues two preview chunks while paused. Supply a prompt "
-            "or leave it blank to use the configured image-neutral default. Emits "
+            "Select an uploaded first frame and start a fresh audiovisual world with continuous "
+            "generation. Supply a prompt or leave it blank to use the configured image-neutral "
+            "default. Emits "
             "`image_selected` and broadcasts `state_update` on success, or `command_error` "
             "when the upload is invalid."
         ),
@@ -253,8 +253,8 @@ class EchoWM(ReactorPipeline):
         name="random_image",
         description=(
             "Select a different public Echo-WM example with its matching prompt, field of "
-            "view, and seed. The command preserves paused mode and queues two preview chunks "
-            "while paused. Emits `image_selected` and broadcasts `state_update` on success, "
+            "view, and seed, then start continuous generation from it. Emits `image_selected` "
+            "and broadcasts `state_update` on success, "
             "or `command_error` when no example is configured."
         ),
     )
@@ -291,8 +291,8 @@ class EchoWM(ReactorPipeline):
         name="set_prompt",
         description=(
             "Replace the text condition and queue a fresh rollout from the selected image. "
-            "The new prompt begins at chunk one; paused mode is preserved and one preview "
-            "chunk is queued while paused. Emits `prompt_queued` and broadcasts "
+            "The new prompt begins at chunk one and continuous generation resumes from the "
+            "fresh world. Emits `prompt_queued` and broadcasts "
             "`state_update` on success, or `command_error` before image selection or for empty "
             "text."
         ),
@@ -407,15 +407,7 @@ class EchoWM(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next chunk or resume continuous generation. The command releases "
-            "held camera motion and cancels a queued step without changing the selected image. "
-            "Emits `pause_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when resuming before image selection."
-        ),
-    )
+    # Pause remains an internal control and is excluded from the public schema.
     async def set_paused(
         self,
         paused: bool = InputField(
@@ -433,15 +425,7 @@ class EchoWM(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one native synchronized audio-video chunk without leaving paused "
-            "mode. Requires a selected image and `paused=true`. Emits `step_queued` and "
-            "broadcasts `state_update` on success, or `command_error` when either precondition "
-            "is unmet."
-        ),
-    )
+    # Single-step generation remains internal and is excluded from the public schema.
     async def step(self) -> StepQueued:
         """Queue one paused causal block and report its rollout position."""
         self._require_selected()
@@ -462,9 +446,9 @@ class EchoWM(ReactorPipeline):
         name="reset",
         description=(
             "Queue a fresh bounded rollout from the selected image and current prompt. The "
-            "command preserves paused mode, releases camera motion, and queues one preview "
-            "chunk while paused. Emits `rollout_reset_queued` and broadcasts `state_update` on "
-            "success, or `command_error` before image selection."
+            "command releases camera motion and continues generation from chunk one. Emits "
+            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
+            "`command_error` before image selection."
         ),
     )
     async def reset(

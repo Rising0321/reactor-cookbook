@@ -29,7 +29,7 @@ class EchoWMOutput(Output):
 
 
 class EchoWMState(InputState):
-    """Expose shared scene, camera, and playback controls for one world."""
+    """Expose shared scene and camera controls for one world."""
 
     prompt: str = InputField(
         default="",
@@ -40,13 +40,7 @@ class EchoWMState(InputState):
             "selected image because one prompt conditions an entire rollout."
         ),
     )
-    paused: bool = InputField(
-        default=False,
-        description=(
-            "Whether automatic generation stops before the next chunk. Image selection "
-            "queues two preview chunks while this remains true."
-        ),
-    )
+    _paused: bool = False
     _forward: float = 0.0
     _strafe: float = 0.0
     _pitch: float = 0.0
@@ -54,6 +48,16 @@ class EchoWMState(InputState):
     _fov_degrees: float = 70.0
     _queued_steps: int = 0
     _reset_requested: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value
 
 
 class StateUpdate(ModelMessage):

@@ -102,18 +102,14 @@ revision:
 
 ## Interaction contract
 
-A session starts in running mode and waits for an image. `set_image` accepts a
-JPEG, PNG, WebP, or BMP upload plus an optional prompt and seed. A blank prompt
+A session starts in continuous mode and waits for an image. `set_image` accepts
+a JPEG, PNG, WebP, or BMP upload plus an optional prompt and seed. A blank prompt
 uses the image-neutral `inference.default_upload_prompt` from `echo_wm.yaml`,
 independent of every previously selected image. `random_image` selects one of
 the pinned upstream causal examples with its paired prompt. Selecting an image
 starts a fresh rollout without reloading model weights.
 
-When the session is running, image selection begins continuous generation. When
-the session is paused, image selection preserves the pause state and queues two
-preview chunks so a client can display the new world before another command.
-`set_paused(true)` stops before the next unqueued chunk, and `step` queues one
-chunk while remaining paused.
+Image selection begins continuous generation from the first native chunk.
 
 `set_camera_motion` updates Echo-WM's four native pure-camera inputs atomically:
 
@@ -129,15 +125,15 @@ pointer, touch, or gamepad controls.
 
 Echo-WM fixes its text cross-attention KV for one rollout. `set_prompt` therefore
 starts a fresh rollout from the selected image so chunk one is conditioned by
-the acknowledged prompt; paused mode queues that first chunk as a preview.
-`reset` also starts from the selected image and can retain or replace the seed.
+the acknowledged prompt. `reset` also starts from the selected image and can
+retain or replace the seed.
 
 Every successful mutation emits a specific model message and a full
 `state_update`. `chunk_completed` reports the sampled prompt and camera state,
 media counts, wall latency, and CUDA timings for denoising, cache commit, video
 decode, and audio decode. The rollout automatically starts fresh from the same
 image after 512 chunks while retaining the prompt, seed, field of view, camera
-state, and pause mode.
+state, and continuous playback.
 
 ## Inference performance
 

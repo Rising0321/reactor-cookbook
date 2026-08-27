@@ -56,8 +56,7 @@ function FovControl({ model, value }: { model: Model; value: number }) {
  * Echo-WM's four camera axes, kept under the video where their effect is visible.
  *
  * The meters read from the model's own snapshot rather than from local key
- * state, so they show the velocity the next chunk will actually use — including
- * the zeroes the model applies on its own when playback pauses.
+ * state, so they show the velocity the next chunk will actually use.
  */
 export function CameraBar({
   model,

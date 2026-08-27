@@ -23,7 +23,6 @@ import {
   type EchoWmFlashImageSelectedMessage,
   type EchoWmFlashMessage,
   type EchoWmFlashOptions,
-  type EchoWmFlashPauseChangedMessage,
   type EchoWmFlashPromptQueuedMessage,
   type EchoWmFlashRecvTrackName,
   type EchoWmFlashResetParams,
@@ -31,10 +30,8 @@ import {
   type EchoWmFlashSetCameraMotionParams,
   type EchoWmFlashSetFovParams,
   type EchoWmFlashSetImageParams,
-  type EchoWmFlashSetPausedParams,
   type EchoWmFlashSetPromptParams,
   type EchoWmFlashStateUpdateMessage,
-  type EchoWmFlashStepQueuedMessage,
 } from "./client";
 
 function unwrapMessage<T>(raw: unknown): T {
@@ -119,9 +116,6 @@ export function useEchoWmFlash() {
     releaseCamera: (): Promise<void> => sendCommand("release_camera", {}),
     setFov: (params: EchoWmFlashSetFovParams): Promise<void> =>
       sendCommand("set_fov", params),
-    setPaused: (params: EchoWmFlashSetPausedParams): Promise<void> =>
-      sendCommand("set_paused", params),
-    step: (): Promise<void> => sendCommand("step", {}),
     reset: (params: EchoWmFlashResetParams): Promise<void> =>
       sendCommand("reset", params),
   };
@@ -165,18 +159,6 @@ export function useEchoWmFlashCameraMotionChanged(
   handler: (message: EchoWmFlashCameraMotionChangedMessage) => void,
 ): void {
   useMessageType("camera_motion_changed", handler);
-}
-
-export function useEchoWmFlashPauseChanged(
-  handler: (message: EchoWmFlashPauseChangedMessage) => void,
-): void {
-  useMessageType("pause_changed", handler);
-}
-
-export function useEchoWmFlashStepQueued(
-  handler: (message: EchoWmFlashStepQueuedMessage) => void,
-): void {
-  useMessageType("step_queued", handler);
 }
 
 export function useEchoWmFlashRolloutResetQueued(

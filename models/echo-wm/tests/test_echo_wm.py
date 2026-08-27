@@ -31,9 +31,7 @@ def test_public_contract_is_atomic_and_audiovisual() -> None:
         "set_camera_motion",
         "set_fov",
         "set_image",
-        "set_paused",
         "set_prompt",
-        "step",
     }
     assert EchoWM.fps == 24
     assert EchoWM.buffer_size == 24
@@ -206,8 +204,8 @@ def test_inference_yields_one_synchronized_native_chunk(tmp_path: Path) -> None:
     assert model.state.paused is True
 
 
-def test_paused_image_reset_queues_two_preview_chunks() -> None:
-    """Queue two chunks for visual confirmation when an image changes while paused."""
+def test_rollout_reset_flushes_pending_media() -> None:
+    """Discard queued media when a fresh rollout replaces the active world."""
 
     class FakeOutput:
         def __init__(self) -> None:
@@ -218,13 +216,12 @@ def test_paused_image_reset_queues_two_preview_chunks() -> None:
 
     model = EchoWM()
     model.state = EchoWMState()
-    model.state.paused = True
     output = FakeOutput()
     model.output = cast(Any, output)
 
-    model._request_reset(preview_steps=2)
+    model._request_reset(preview_steps=0)
 
-    assert model.state._queued_steps == 2
+    assert model.state._queued_steps == 0
     assert model.state._reset_requested is True
     assert output.flushes == 1
 
