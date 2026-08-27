@@ -42,7 +42,7 @@ dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires
 Linux, CUDA, and approximately 40 GB of VRAM at 704x1280. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 Build the Python 3.12 serving image, expose one GPU, and start Runtime:
