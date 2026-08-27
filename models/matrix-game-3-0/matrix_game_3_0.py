@@ -8,7 +8,6 @@ latents, full action and pose history, denoising state, and streaming VAE cache.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -157,12 +156,12 @@ class MatrixGame30(ReactorPipeline):
         await self.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release autoregressive state owned by the completed session."""
         backend = self._backend
         try:
             if backend is not None:
-                await asyncio.to_thread(backend.end_session)
+                backend.end_session()
         finally:
             self._selected_input = None
             self._chunk_index = 0
@@ -451,7 +450,7 @@ class MatrixGame30(ReactorPipeline):
                     continue
                 prompt = self.state.prompt.strip()
                 self.state._restart_requested = False
-                await asyncio.to_thread(backend.reset, prompt, self._seed, selected)
+                backend.reset(prompt, self._seed, selected)
                 self._chunk_index = 0
 
             if self.state._limit_reached:
@@ -469,7 +468,7 @@ class MatrixGame30(ReactorPipeline):
                 self.state.yaw,
             )
             chunk_index = self._chunk_index
-            frames = await asyncio.to_thread(backend.generate_chunk, action)
+            frames = backend.generate_chunk(action)
             frames = normalize_output_frames(frames, chunk_index)
             self._chunk_index += 1
             if self._chunk_index >= config.max_chunks:
