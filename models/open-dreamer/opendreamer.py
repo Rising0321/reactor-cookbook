@@ -108,6 +108,7 @@ _BUTTON_TO_VPT_NAME = {
 }
 _CAMERA_DELTA_MIN = -200.0
 _CAMERA_DELTA_MAX = 200.0
+FRAMES_PER_CHUNK = 1
 
 
 class OpenDreamer(ReactorPipeline):
@@ -115,6 +116,7 @@ class OpenDreamer(ReactorPipeline):
 
     state: OpenDreamerState
     output: OpenDreamerOutput
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -541,14 +543,7 @@ class OpenDreamer(ReactorPipeline):
             return self._action_changed(control="mouse_wheel", wheel_delta=delta)
         return self._action_changed(control="mouse_wheel")
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause or resume Minecraft frame generation immediately while preserving the "
-            "current world. Valid any time during a session and clears all held and one-frame "
-            "controls. Emits `action_changed` and `state_update` on success."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
@@ -589,8 +584,7 @@ class OpenDreamer(ReactorPipeline):
         """Restart the rollout and report the seed and starting scene it will use."""
         if seed >= 0:
             self.state._seed = seed
-        self.state._reset_requested = True
-        self._clear_controls()
+        self._queue_rollout_reset()
         await self._send_state_update()
         return RolloutReset(
             seed=self.state._seed,
@@ -623,8 +617,7 @@ class OpenDreamer(ReactorPipeline):
             raise CommandError("demo_unavailable", f"{demo} is not configured.")
         self._conditioning_source = demo
         if self.state is not None:
-            self.state._reset_requested = True
-            self._clear_controls()
+            self._queue_rollout_reset()
         await self._send_state_update()
         return ConditioningChanged(source="demo", selection=demo)
 
@@ -642,8 +635,7 @@ class OpenDreamer(ReactorPipeline):
         demo = self._random_demo_name()
         self._conditioning_source = demo
         if self.state is not None:
-            self.state._reset_requested = True
-            self._clear_controls()
+            self._queue_rollout_reset()
         await self._send_state_update()
         logger.info("selected random conditioning demo", demo=demo)
         return ConditioningChanged(source="demo", selection=demo)
@@ -688,10 +680,15 @@ class OpenDreamer(ReactorPipeline):
         )
         self._conditioning_source = "uploaded"
         if self.state is not None:
-            self.state._reset_requested = True
-            self._clear_controls()
+            self._queue_rollout_reset()
         await self._send_state_update()
         return ConditioningChanged(source="upload", selection=image.name)
+
+    def _queue_rollout_reset(self) -> None:
+        """Queue fresh autoregressive state and discard pending media."""
+        self.output.flush()
+        self.state._reset_requested = True
+        self._clear_controls()
 
     def inference(self) -> Iterator[OpenDreamerOutput | _IdleType]:
         """Generate Minecraft frames from the current starting scene and player controls."""

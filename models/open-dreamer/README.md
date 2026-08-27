@@ -5,13 +5,13 @@ as an interactive Minecraft Reactor backend. Use this recipe when a client
 needs to start from a dataset demo or uploaded Minecraft frame, apply native
 keyboard and mouse actions, stream generated video, and record the session.
 
-The adapter and upstream implementation remain separate. This directory owns
-only the Reactor integration; its Dockerfile fetches the exact tested
-OpenDreamer revision into the model image and never edits its tracked files.
+The adapter uses an exact tested OpenDreamer revision in the model image and
+calls its public inference components directly.
 
 ## Prerequisites
 
-- The `reactor` CLI and Docker.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and
+  Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported.
 - About 8 GB in Reactor's weights cache for the checkpoint, plus Docker image
@@ -19,30 +19,30 @@ OpenDreamer revision into the model image and never edits its tracked files.
 
 ## Run
 
-This directory is a `reactor` workspace: `reactor.yaml` names the model, the
-`Dockerfile` builds its CUDA-capable image, and `requirements.txt` pins the
-runtime and inference dependencies. The CLI installs everything inside the
-model image; the host only needs the CLI, Docker, and the NVIDIA prerequisites
-listed above. Build the image, then expose one GPU to the container:
+This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
+runtime, recording, and complete CUDA-capable image build. `requirements.txt`
+contains only the model's Python dependencies. See Reactor's
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
+supported YAML fields.
+
+Run the workspace and expose one GPU to the container:
 
 ```sh
 cd models/open-dreamer
-reactor build
 reactor run --gpus device=0
 ```
 
-`reactor build` installs Reactor Runtime 3.1.2 and the model dependencies,
-then fetches the pinned OpenDreamer source and public demo. `reactor run`
-reuses that image, building it automatically if none exists, and downloads the
-pinned `reactor-team/open-dreamer` checkpoint into the CLI-mounted weights
-cache on first use. Later runs reuse the cached checkpoint. The model then
-compiles its JAX generation and conditioning paths before reporting ready on
-`http://localhost:8080`.
+The first run builds the image and downloads the model weights, so it takes a
+while. Once the model is ready it serves at `http://localhost:8080`, and later
+runs start faster because they reuse the built image and the downloaded
+weights.
 
-Rebuild after editing anything baked into the image:
+Use `reactor build` when you want to build without starting the service, or to
+rebuild after editing anything baked into the image:
 
 ```sh
-reactor build && reactor run --gpus device=0
+reactor build
+reactor run --gpus device=0
 ```
 
 Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
@@ -68,12 +68,11 @@ curl -s localhost:8080/health
 - `set_demo(demo)` starts from one reproducible dataset window.
 - `random_demo` starts from a randomly selected dataset window.
 - `set_conditioning_image(image)` starts from one uploaded Minecraft frame.
-- `set_paused(paused)` stops or resumes model inference.
 - `reset(seed)` clears the incremental caches and optionally changes the seed.
 
 Keyboard keys and mouse buttons remain held until released. Mouse movement and
-wheel input are consumed after one successful generation step. Pausing and
-ending the session release all controls.
+wheel input are consumed after one successful generation step. Ending the
+session releases all controls.
 
 ## Start from a dataset demo
 
@@ -82,9 +81,8 @@ Each session selects one of three dataset demos at random. Each demo is a
 `set_demo` selects `demo_1`, `demo_2`, or `demo_3`; `random_demo`
 chooses another window randomly. Both reset the model's incremental KV caches.
 
-The Docker build downloads the paired MP4 and JSONL into the isolated upstream
-checkout. They are internal dataset conditioning assets; clients do not upload
-them.
+The model image includes the paired MP4 and JSONL in the upstream checkout.
+They are internal dataset conditioning assets; clients do not upload them.
 
 ## Start from an image
 
@@ -122,6 +120,9 @@ Commands return typed, command-correlated messages for the client timeline:
 
 Message delivery stays outside the synchronous inference loop.
 
+Each autoregressive turn emits one RGB frame. Playback adapts to measured
+inference throughput, and the output queue holds that complete one-frame turn.
+
 ## Recording
 
 `reactor.yaml` records `main_video` by default in four-second chunks and
@@ -131,8 +132,8 @@ does not emit audio.
 ## Notes
 
 - `opendreamer.yaml` pins the upstream source, checkpoint, sampling schedule,
-  and demo offsets. The Dockerfile installs the same source revision under
-  `/opt/open-dreamer` and sets `OPENDREAMER_PATH` inside the image.
+  and demo offsets. The `reactor.yaml` build installs the same source revision
+  under `/opt/open-dreamer` and sets `OPENDREAMER_PATH` inside the image.
 - The adapter follows the upstream CUDA 12 dependency lock and keeps
   training-only packages out of the runtime environment.
 - Selecting the same demo and reset seed reproduces the same rollout. The

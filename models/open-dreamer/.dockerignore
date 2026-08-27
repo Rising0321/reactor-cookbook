@@ -25,6 +25,5 @@ Thumbs.db
 .git/
 .gitignore
 
-# Docker config — already consumed by `docker build`, no need to ship.
-Dockerfile
+# Build config — already consumed by `reactor build`, no need to ship.
 .dockerignore
