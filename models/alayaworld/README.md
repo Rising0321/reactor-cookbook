@@ -13,25 +13,25 @@ to the following chunk.
 A turn takes longer to compute than the video it produces, and how much longer
 depends on how far the camera moves, so the adapter declares no fixed frame rate
 and emits each chunk with the time it took. Frames then play at the rate they
-were produced instead of draining in 1.33 seconds and leaving the stream with
-nothing to show. `buffer_size` bounds the queue at one chunk, which is as low as
-it goes — the runtime never applies a bound below a single chunk — so a camera
-change is answered by the next turn generated rather than waiting behind frames
-already queued.
+were produced, keeping the stream populated while the next turn runs.
+`buffer_size` bounds the queue at one chunk, so a camera change is answered by
+the next generated turn.
 
-A new session starts paused without choosing a scene for the user. Upload an
+A new session starts unpaused without choosing a scene for the user. Upload an
 image with `set_image`, or invoke `random_image` to select one of the public
 AlayaWorld examples. Either command initializes the autoregressive cache and
 starts generation.
 
-## Run
+## Run with the Reactor CLI
 
 This directory is a `reactor` workspace. The manifest names the model and its
-B200 resource, the Dockerfile builds a Python 3.12 image with the CUDA 12.8
-PyTorch wheels, and `requirements.txt` pins Reactor Runtime alongside the model
-dependencies. The host needs only the
+B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
+12.8 image with Reactor Runtime 3.2.3. `requirements.txt` contains the model
+dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
-the NVIDIA Container Toolkit, and a compatible NVIDIA GPU.
+the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
+supported fields.
 
 Gemma is gated. Accept its Hugging Face license, export a read token, then build
 the image and expose one GPU to the container:
@@ -49,10 +49,10 @@ the Docker command line. `--gpus device=3` selects host GPU 3 and presents it as
 device 0 inside the container; `--gpus all` exposes every GPU. The manifest
 requests one B200 when the same workspace is deployed.
 
-`reactor run` reuses the image produced by `reactor build`, and builds one on
-the first run when no local image exists. It serves WebRTC signaling on
+`reactor run` reuses the configured image and builds one on the first run when
+no local image exists. It serves WebRTC signaling on
 `http://localhost:8080` by default. Rebuild after changing code or
-dependencies. A different port is applied to both Docker and Runtime:
+dependencies. A different port is applied to both the container and Runtime:
 
 ```sh
 reactor build && reactor run --gpus device=0 -e HF_TOKEN --port 18080
@@ -113,10 +113,9 @@ separate sample dataset is required.
 
 The TAEHV checkout supplies the tiny decoder that `inference.bank_taehv` uses for
 spatial-memory pixels. Its `taeltx2_3_wide` weights are the larger LTX-2.3
-variant, published on a branch of the upstream repository rather than its default
-one, which is why `assets.taehv_source` pins a revision that a plain clone would
-not reach. Setting `bank_taehv: false` skips the decoder without removing the
-checkout; dropping `assets.taehv_source` skips the download too.
+variant published on a dedicated upstream branch. `assets.taehv_source` pins
+that branch revision. Setting `bank_taehv: false` skips the decoder; dropping
+`assets.taehv_source` also skips the download.
 
 `source.path` in `alayaworld.yaml` is relative to the mounted weights root.
 Every other relative model, configuration, and playground path is then resolved
@@ -126,16 +125,13 @@ from that source checkout. To place the cache elsewhere, change only
 Model loading reports preparation progress in the container log. A failed
 download keeps health unavailable and names the public repository; gated model
 errors point to Hugging Face authentication. An existing source checkout must
-match the configured immutable revision, so startup never rewrites a different
-developer revision.
+match the configured immutable revision; startup reports any mismatch.
 
-The adapter imports DA3 directly from its pinned source checkout. Its optional
-visualization and export dependency set is outside the inference image because
-those paths are not used for serving.
+The adapter imports DA3's inference modules directly from its pinned source
+checkout.
 
 AlayaWorld and its weights use the LTX-2 Community License for academic and
-non-commercial use. Gemma and Depth-Anything-3 retain their own terms. The
-example does not redistribute their source or checkpoints.
+non-commercial use. Gemma and Depth-Anything-3 retain their own terms.
 
 ## Controls
 
@@ -152,10 +148,6 @@ example does not redistribute their source or checkpoints.
   one-based chunk expected to consume it.
 - `set_prompt` changes the text condition for the next chunk and returns a
   `PromptQueued` confirmation with the expected one-based chunk number.
-- `set_paused` stops before another expensive chunk starts and releases camera
-  motion. It returns `PauseChanged` with the resulting pause state.
-- `step` generates and plays exactly one 32-frame chunk while paused and returns
-  `StepQueued` with the chunk number.
 - `reset` rebuilds the autoregressive and spatial-memory state from the initial
   selected image. Its optional non-negative `seed` selects the next reproducible
   rollout, and `RolloutResetQueued` reports the seed and replaced chunk count.
@@ -182,8 +174,8 @@ into the pixel-rate camera-to-world matrices consumed by AlayaWorld.
 The `set_image` command declares an `UploadedFile` parameter in Runtime's
 schema. A Reactor client reserves a session upload slot, writes the raw bytes to
 its returned URL, and sends the resulting upload reference with the command.
-This lets a schema-driven frontend render a real file picker instead of putting
-binary data inside a command message.
+This lets a schema-driven frontend render a real file picker while the upload
+channel carries the binary data.
 
 [`example_images/`](./example_images) contains two licensed upstream still
 images ready for manual upload. These convenience copies are independent of
@@ -211,28 +203,23 @@ dense camera trajectory while allowing the Reactor session to continue.
 `inference.attention_backend` chooses which attention implementation serves the
 model. `flash_attention_4` is the default and needs a Hopper or Blackwell GPU;
 `pytorch` serves anything older, and `upstream` leaves AlayaWorld's own selection
-alone. The adapter substitutes the callable on the loaded attention modules
-rather than patching the pinned source, and masked blocks always fall through to
-the PyTorch implementation, which is the only one that builds the banded mask a
-sliding window needs.
+alone. The adapter binds the callable on the loaded attention modules. Masked
+blocks use the PyTorch implementation that builds the banded sliding-window
+mask.
 
-`inference.bank_taehv` decodes spatial-memory pixels — the depth and warp sources
-the model builds its memory from — with a tiny decoder instead of the full VAE.
-It is lossy for that memory and leaves the frames the client sees untouched. The
-checkpoint comes from the pinned `assets.taehv_source` checkout; its filename
-selects the decoder architecture, so renaming it silently changes the model.
+`inference.bank_taehv` decodes spatial-memory pixels — the depth and warp
+sources the model builds its memory from — with a tiny decoder. Display frames
+continue through the full VAE. The memory decode is lossy. The checkpoint comes
+from the pinned `assets.taehv_source` checkout; its filename selects the
+decoder architecture, so renaming it silently changes the model.
 
-The adapter uses the default `torch.compile` mode so generation keeps
-Inductor-compiled kernels without enabling CUDA Graph Trees, whose thread-local
-execution state is incompatible with Runtime's off-loop chunk generation.
+The adapter uses the default `torch.compile` mode and Inductor-compiled kernels,
+which support Runtime's off-loop chunk generation.
 
-Those kernels are built on the first turn that reaches them rather than when the
-engine is constructed, and the attention backend compiles its own on top, so the
-adapter generates `inference.warmup_chunks` throwaway turns from a built-in scene
-while loading and discards the rollout they build. Health stays unavailable until
-that finishes, which keeps a cost of tens of seconds off the first client's first
-chunk. Set it to `0` to serve sooner and pay the compile on first use; the caches
-live in the container, so a restart compiles again.
+During load, the adapter generates `inference.warmup_chunks` throwaway turns
+from a built-in scene to compile those kernels and the attention backend. Health
+stays unavailable until warmup finishes. Set the value to `0` to compile on
+first use; the caches live in the container, so a restart compiles again.
 
 Autoregressive history remains a 16-latent sliding window. The adapter keeps
 only the latest generated latent outside that window and bounds the spatial
@@ -245,7 +232,6 @@ rollout reset deliberately trades unbounded history for predictable resources.
 ## Streaming decode
 
 The public VAE is non-causal. The adapter decodes each new chunk with six
-latents of left context, which keeps memory bounded and avoids re-decoding the
-whole history. It cannot be pixel-identical to a future-aware offline decode at
-the live edge. Recording captures the same interactive frames sent over
-`main_video` and requires `ffmpeg` on `PATH`.
+latents of left context, which keeps memory bounded. Live-edge frames differ
+from a future-aware offline decode. Recording captures the same interactive
+frames sent over `main_video` and requires `ffmpeg` on `PATH`.

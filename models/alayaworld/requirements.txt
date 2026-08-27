@@ -1,11 +1,8 @@
-# Install the runtime and model dependencies into the image in one pass. The
-# additional index supplies the CUDA 12.8 PyTorch wheels used on Blackwell.
---extra-index-url https://download.pytorch.org/whl/cu128
+# Install model dependencies into the same resolution as Reactor Runtime.
+# `build.runtime_version` owns the Runtime version, while
+# `build.cuda_version` selects the CUDA 12.8 PyTorch index for Blackwell.
 
-reactor-runtime==3.1.2
-
-# B200-compatible replacement for AlayaWorld's upstream PyTorch 2.6/cu124
-# stack.
+# B200-compatible PyTorch stack.
 torch==2.9.1
 torchvision==0.24.1
 torchaudio==2.9.1
@@ -27,9 +24,8 @@ tqdm
 easydict
 huggingface-hub
 
-# Minimal Depth-Anything-3 inference imports. AlayaWorld adds local stubs for
-# DA3's optional export-only packages, so its full application dependency set
-# (including the upstream numpy<2 pin) is intentionally not installed.
+# Depth-Anything-3 inference imports. AlayaWorld supplies local stubs for DA3's
+# optional export modules.
 addict
 imageio
 matplotlib

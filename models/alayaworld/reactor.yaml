@@ -80,10 +80,23 @@ runtime:
   weights_path: ~/.cache/reactor_registry/alayaworld
 
 build:
-  # The reactor-runtime release this workspace is built against. The install
-  # pin is the `reactor-runtime==<version>` line in requirements.txt; bump it
-  # there and here together to upgrade.
-  runtime_version: "3.1.2"
+  # Keep the Runtime release aligned with the adapter's public API usage.
+  runtime_version: "3.2.3"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    # Git prepares the pinned public source checkouts at model load.
+    - git
+    # TorchInductor compiles host-side extensions for the selected GPU.
+    - build-essential
+  runtime_env:
+    PYTORCH_ALLOC_CONF: expandable_segments:True
+  # Install FlashAttention 4 with CuTe, then select Runtime's protobuf wire
+  # version for the completed image.
+  run:
+    - pip install --no-cache-dir "flash-attn-4==4.0.0b26"
+    - pip install --no-cache-dir --no-deps "protobuf==7.35.1"
 
 # Session recording. The runtime records the named video track in chunks and
 # serves clips up to `clip_max_seconds`. AlayaWorld emits no audio.

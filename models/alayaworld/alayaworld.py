@@ -8,7 +8,6 @@ paths. Prompt updates and camera controls are sampled at chunk boundaries.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import secrets
 import time
@@ -285,7 +284,7 @@ class AlayaWorld(ReactorPipeline):
             raise RuntimeError("AlayaWorld was not loaded")
         self.state.prompt = ""
         self._clear_camera_controls()
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._reset_requested = False
         self._seed = config.seed
@@ -513,15 +512,7 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next chunk or resume continuous generation, releasing all camera "
-            "motion in either case. Resuming requires a selected image. Emits `pause_changed` "
-            "and broadcasts `state_update` on success, or `command_error` when resuming without "
-            "an image."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
@@ -542,14 +533,7 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one 32-frame chunk while continuous generation is paused. Requires a "
-            "selected image and `paused=true`. Emits `step_queued` and broadcasts `state_update` "
-            "on success, or `command_error` when either precondition is missing."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Request one complete chunk and report its position in the rollout."""
         self._require_selected_image()
@@ -681,7 +665,7 @@ class AlayaWorld(ReactorPipeline):
         return message
 
     async def inference(self) -> AsyncGenerator[Any, None]:
-        """Generate chunks off-loop and emit their RGB frames at 24 FPS."""
+        """Generate chunks and emit their RGB frames at 24 FPS."""
         while True:
             selected_input = self._selected_input
             if selected_input is None:
@@ -718,8 +702,7 @@ class AlayaWorld(ReactorPipeline):
                 # being replaced never play after the new one starts.
                 self.output.flush()
                 try:
-                    await asyncio.to_thread(
-                        self._reset_rollout,
+                    self._reset_rollout(
                         self.state.prompt,
                         self._seed,
                         selected_input,
@@ -745,8 +728,7 @@ class AlayaWorld(ReactorPipeline):
             roll = self.state.roll
             self._chunk_in_flight = True
             try:
-                frames = await asyncio.to_thread(
-                    self._generate_chunk,
+                frames = self._generate_chunk(
                     prompt,
                     strafe,
                     vertical,
