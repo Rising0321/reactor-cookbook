@@ -22,7 +22,7 @@ example. Either command starts continuous generation from the first chunk.
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
 runtime entry point, Reactor Runtime 3.2.3, CUDA and Python versions, system
 packages, and Python requirements. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 The host needs the
