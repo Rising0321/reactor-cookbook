@@ -1,0 +1,47 @@
+source:
+  path: source/JoyAI-Echo
+  url: https://github.com/jd-opensource/JoyAI-Echo.git
+  revision: c7963031c4425a154a791a46606d3247b2201c2b
+
+assets:
+  cache_dir: cache/huggingface
+  checkpoint:
+    path: weights/echo-wm/echo-wm-flash.safetensors
+    repo_id: Echo-Team/Echo-WM
+    revision: 5f18c27bcc6e9395c120c055c92e294674e7ea91
+    filename: echo-wm-flash.safetensors
+  gemma:
+    path: weights/gemma-3-12b-it-qat-q4_0-unquantized
+    repo_id: google/gemma-3-12b-it-qat-q4_0-unquantized
+    revision: 68f7ee4fbd59087436ada77ed2d62f373fdd4482
+  runtime_dir: runtime
+
+inference:
+  width: 1280
+  height: 704
+  fps: 24
+  seed: 42
+  default_upload_prompt: >-
+    The scene continues naturally from the input image with coherent motion,
+    stable visual details, and matching ambient sound.
+  timesteps: [1000, 750, 500, 250]
+  video_local_attn_size: 19
+  video_sink_size: 7
+  video_chunk_size: 3
+  max_chunks: 512
+  video_decode_context_latents: 7
+  video_decode_tiling: false
+  attention_backend: flash_attention_4
+  attention_benchmark: true
+  warmup_chunks: 1
+  profile_cuda: true
+
+motion:
+  translation_speed: 0.05
+  rotation_speed_degrees: 0.4
+  pitch_speed_degrees: 0.2
+  pitch_limit_degrees: 40.0
+  fov_degrees: 70.0
+
+examples:
+  cases: ["0081", "0104", "0170"]
