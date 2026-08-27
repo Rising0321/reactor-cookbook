@@ -284,7 +284,7 @@ class AlayaWorld(ReactorPipeline):
             raise RuntimeError("AlayaWorld was not loaded")
         self.state.prompt = ""
         self._clear_camera_controls()
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._reset_requested = False
         self._seed = config.seed
@@ -512,15 +512,7 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next chunk or resume continuous generation, releasing all camera "
-            "motion in either case. Resuming requires a selected image. Emits `pause_changed` "
-            "and broadcasts `state_update` on success, or `command_error` when resuming without "
-            "an image."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     async def set_paused(
         self,
         paused: bool = InputField(
@@ -541,14 +533,7 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one 32-frame chunk while continuous generation is paused. Requires a "
-            "selected image and `paused=true`. Emits `step_queued` and broadcasts `state_update` "
-            "on success, or `command_error` when either precondition is missing."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     async def step(self) -> StepQueued:
         """Request one complete chunk and report its position in the rollout."""
         self._require_selected_image()

@@ -351,12 +351,16 @@ class AlayaWorldState(InputState):
             "and held until changed; zero is neutral."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Pause before the next chunk while preserving the current world. `step` can queue "
-            "one chunk while paused; `set_paused` releases all camera motion."
-        ),
-    )
+    _paused: bool = False
     _step_requested: bool = False
     _reset_requested: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value

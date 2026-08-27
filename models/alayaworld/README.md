@@ -17,7 +17,7 @@ were produced, keeping the stream populated while the next turn runs.
 `buffer_size` bounds the queue at one chunk, so a camera change is answered by
 the next generated turn.
 
-A new session starts paused without choosing a scene for the user. Upload an
+A new session starts unpaused without choosing a scene for the user. Upload an
 image with `set_image`, or invoke `random_image` to select one of the public
 AlayaWorld examples. Either command initializes the autoregressive cache and
 starts generation.
@@ -148,10 +148,6 @@ non-commercial use. Gemma and Depth-Anything-3 retain their own terms.
   one-based chunk expected to consume it.
 - `set_prompt` changes the text condition for the next chunk and returns a
   `PromptQueued` confirmation with the expected one-based chunk number.
-- `set_paused` stops before another expensive chunk starts and releases camera
-  motion. It returns `PauseChanged` with the resulting pause state.
-- `step` generates and plays exactly one 32-frame chunk while paused and returns
-  `StepQueued` with the chunk number.
 - `reset` rebuilds the autoregressive and spatial-memory state from the initial
   selected image. Its optional non-negative `seed` selects the next reproducible
   rollout, and `RolloutResetQueued` reports the seed and replaced chunk count.
