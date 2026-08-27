@@ -25,7 +25,7 @@ cache and calls the upstream interactive pipeline directly.
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
 controls its Reactor Runtime 3.2.3, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 Build the image, then expose one GPU to the container:
