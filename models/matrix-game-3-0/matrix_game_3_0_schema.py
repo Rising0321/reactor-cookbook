@@ -191,15 +191,18 @@ class MatrixGame30State(InputState):
             "held until changed or controls are released."
         ),
     )
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether generation pauses before the next native chunk. The session starts "
-            "paused; `step`, image changes, prompt changes, and reset can each queue exactly "
-            "one chunk without changing this value."
-        ),
-    )
+    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _step_requested: bool = False
     _restart_requested: bool = True
     _limit_reached: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value

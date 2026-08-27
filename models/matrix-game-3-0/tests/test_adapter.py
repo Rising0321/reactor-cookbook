@@ -37,7 +37,7 @@ def test_native_chunk_frame_counts_are_enforced() -> None:
     assert normalize_output_frames(later, 1).shape[0] == 40
 
 
-def test_session_waits_for_explicit_image_selection() -> None:
+def test_session_waits_unpaused_for_explicit_image_selection() -> None:
     model = MatrixGame30()
     model.state = MatrixGame30State()
     model._config = SimpleNamespace(seed=42, max_chunks=12)
@@ -46,7 +46,7 @@ def test_session_waits_for_explicit_image_selection() -> None:
     message = model._state_update()
 
     assert model._selected_input is None
-    assert model.state.paused is True
+    assert model.state.paused is False
     assert model.state._restart_requested is False
     assert model.state._step_requested is False
     assert message.image_source == "none"
@@ -54,7 +54,7 @@ def test_session_waits_for_explicit_image_selection() -> None:
     assert message.next_chunk_frames is None
 
 
-def test_uploaded_image_and_prompt_queue_a_fresh_paused_chunk(tmp_path: Path) -> None:
+def test_uploaded_image_and_prompt_start_a_fresh_rollout(tmp_path: Path) -> None:
     model = MatrixGame30()
     model.state = MatrixGame30State(prompt="original")
     model._config = SimpleNamespace(max_chunks=12)
@@ -65,7 +65,7 @@ def test_uploaded_image_and_prompt_queue_a_fresh_paused_chunk(tmp_path: Path) ->
         "replacement",
     )
 
-    assert model.state.paused is True
+    assert model.state.paused is False
     assert model.state._restart_requested is True
     assert model.state._step_requested is True
     assert message.prompt == "replacement"
@@ -73,7 +73,7 @@ def test_uploaded_image_and_prompt_queue_a_fresh_paused_chunk(tmp_path: Path) ->
     assert message.next_chunk_frames == 57
 
 
-def test_uploaded_image_without_prompt_queues_a_fresh_paused_chunk(
+def test_uploaded_image_without_prompt_starts_a_fresh_rollout(
     tmp_path: Path,
 ) -> None:
     model = MatrixGame30()
@@ -86,7 +86,7 @@ def test_uploaded_image_without_prompt_queues_a_fresh_paused_chunk(
         "",
     )
 
-    assert model.state.paused is True
+    assert model.state.paused is False
     assert model.state._restart_requested is True
     assert model.state._step_requested is True
     assert message.prompt == ""

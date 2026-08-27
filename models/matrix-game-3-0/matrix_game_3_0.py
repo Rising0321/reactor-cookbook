@@ -128,7 +128,7 @@ class MatrixGame30(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize an empty paused world that waits for an anchor image."""
+        """Initialize an empty unpaused world that waits for an anchor image."""
         config = self._require_config()
         self._selected_input = None
         self._example_index = -1
@@ -139,7 +139,7 @@ class MatrixGame30(ReactorPipeline):
         self.state._pressed_keys = frozenset()
         self.state.pitch = 0.0
         self.state.yaw = 0.0
-        self.state.paused = True
+        self.state.paused = False
         self.state._restart_requested = False
         self.state._step_requested = False
         self.state._limit_reached = False
@@ -171,8 +171,8 @@ class MatrixGame30(ReactorPipeline):
         description=(
             "Replace the scene prompt and start a fresh rollout from the selected image. "
             "Valid after an image is selected; the prompt is encoded before the next "
-            "57-frame `main_video` chunk, which is queued automatically while playback "
-            "remains paused. Returns `state_update` on success, or `command_error` when "
+            "57-frame `main_video` chunk and resumes continuous generation. Returns "
+            "`state_update` on success, or `command_error` when "
             "`prompt` is empty or no image is selected."
         ),
     )
@@ -197,6 +197,7 @@ class MatrixGame30(ReactorPipeline):
                 "image_required", "Select an image before setting a prompt."
             )
         self.state.prompt = normalized
+        self.state.paused = False
         self._request_fresh_rollout(auto_step=True)
         return self._state_update()
 
@@ -204,8 +205,8 @@ class MatrixGame30(ReactorPipeline):
         name="set_image",
         description=(
             "Replace the anchor image and start a fresh rollout. Valid at any time; the "
-            "uploaded image and optional prompt apply before an automatically queued "
-            "57-frame `main_video` chunk while playback remains paused, and all prior "
+            "uploaded image and optional prompt apply before continuous `main_video` generation, "
+            "and all prior "
             "latents, camera memory, actions, poses, and VAE cache are discarded. Returns "
             "`state_update` on success, or `command_error` for an invalid image."
         ),
@@ -233,6 +234,7 @@ class MatrixGame30(ReactorPipeline):
         normalized = prompt.strip()
         self._selected_input = image
         self.state.prompt = normalized
+        self.state.paused = False
         self._request_fresh_rollout(auto_step=True)
         return self._state_update()
 
@@ -241,8 +243,8 @@ class MatrixGame30(ReactorPipeline):
         description=(
             "Select a configured public example image and its paired prompt at random, then "
             "start a fresh rollout. Valid at any time; a different example is selected when "
-            "more than one is configured, and a 57-frame `main_video` chunk is queued while "
-            "playback remains paused. Returns `state_update` on success."
+            "more than one is configured, and continuous `main_video` generation begins. "
+            "Returns `state_update` on success."
         ),
     )
     def random_image(self) -> StateUpdate:
@@ -258,6 +260,7 @@ class MatrixGame30(ReactorPipeline):
         example = config.examples[self._example_index]
         self._selected_input = example.image
         self.state.prompt = example.prompt
+        self.state.paused = False
         self._request_fresh_rollout(auto_step=True)
         return self._state_update()
 
@@ -357,20 +360,11 @@ class MatrixGame30(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause continuous generation before the next native chunk, or resume it. Valid "
-            "at any time when pausing; resuming requires an available chunk. Either value "
-            "cancels a queued `step`, releases all held controls, and preserves rollout "
-            "memory. Returns `state_update` on success, or `command_error` with "
-            "`rollout_limit_reached` when resuming at the limit."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "Set true to stop before the next chunk, or false to generate continuously. "
                 "An in-progress native chunk and its remaining frames can finish. Both values "
@@ -386,15 +380,7 @@ class MatrixGame30(ReactorPipeline):
         self._clear_controls()
         return self._state_update()
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one native `main_video` chunk without leaving paused mode. Valid "
-            "only while paused and before the 12-chunk limit; the first chunk contains 57 "
-            "frames and later chunks contain 40. Returns `state_update` on success, or "
-            "`command_error` when playback is running or the rollout limit is reached."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     def step(self) -> StateUpdate:
         """Queue one paused native chunk and return the complete shared state."""
         self._require_available_rollout()
@@ -410,7 +396,7 @@ class MatrixGame30(ReactorPipeline):
         description=(
             "Restart from the selected anchor image and active prompt. Valid after an image "
             "is selected; the reset clears all autoregressive memory and held controls, "
-            "preserves paused mode, and queues the fresh 57-frame `main_video` chunk. Returns "
+            "resumes continuous generation, and queues the fresh 57-frame `main_video` chunk. Returns "
             "`state_update` on success, or `command_error` when no image is selected."
         ),
     )
@@ -431,6 +417,7 @@ class MatrixGame30(ReactorPipeline):
             raise CommandError("image_required", "Select an image before resetting.")
         if seed >= 0:
             self._seed = seed
+        self.state.paused = False
         self._request_fresh_rollout(auto_step=True)
         return self._state_update()
 

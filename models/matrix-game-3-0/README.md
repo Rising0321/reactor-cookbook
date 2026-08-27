@@ -69,13 +69,11 @@ curl -s localhost:8080/health
   movement. Perpendicular pairs produce diagonal movement.
 - `set_pitch(pitch)` and `set_yaw(yaw)` set normalized camera axes in
   `[-1, 1]` for the next chunk.
-- `set_paused(paused)` stops or resumes automatic chunk generation.
-- `step` generates exactly one chunk while paused.
 - `reset(seed)` clears rollout memory, optionally changes the seed, and starts
   again from the selected image and prompt.
 
-Keyboard and camera values remain held until changed. Pausing, changing the
-conditioning source, ending a session, and reaching the rollout limit release
+Keyboard and camera values remain held until changed. Changing the conditioning
+source, ending a session, and reaching the rollout limit release
 all controls.
 
 ## Start from an image
@@ -98,9 +96,8 @@ await sendCommand("set_image", {
 });
 ```
 
-Image selection keeps playback paused but automatically queues the first
-57-frame chunk so the client receives an initial result without also calling
-`step`. JPEG, PNG, WebP, and BMP uploads are accepted up to 25 MiB and 100
+Image selection starts continuous playback from the first 57-frame chunk. JPEG,
+PNG, WebP, and BMP uploads are accepted up to 25 MiB and 100
 million pixels. Images close to Matrix-Game's training distribution give the
 most reliable rollouts.
 
