@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import secrets
 import time
@@ -152,11 +151,11 @@ class HYWorld15(ReactorPipeline):
         await self.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release causal session state while retaining loaded model weights."""
         backend = self._backend
         if backend is not None:
-            await asyncio.to_thread(backend.end_session)
+            backend.end_session()
         self._selected_input = None
         self._image_source = None
         self._image_name = None
@@ -449,9 +448,8 @@ class HYWorld15(ReactorPipeline):
                 self._generating = True
                 await self._send_state_update()
                 try:
-                    image = await asyncio.to_thread(load_reference_image, selected)
-                    await asyncio.to_thread(
-                        backend.reset,
+                    image = load_reference_image(selected)
+                    backend.reset(
                         image=image,
                         prompt=prompt,
                         seed=self._seed,
@@ -490,7 +488,7 @@ class HYWorld15(ReactorPipeline):
             await self._send_state_update()
             started = time.perf_counter()
             try:
-                frames = await asyncio.to_thread(backend.generate_chunk, camera, prompt)
+                frames = backend.generate_chunk(camera, prompt)
             finally:
                 self._generating = False
             generation_seconds = time.perf_counter() - started
