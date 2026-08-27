@@ -36,7 +36,7 @@ from chunk 1.
 
 The `build` block in `reactor.yaml` controls the model image: Reactor Runtime
 3.2.3, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
-Reactor's [build configuration](https://deploy-docs.reactor.inc/platform/build)
+Reactor's [build configuration](https://docs.reactor.inc/deploy/platform/build)
 for the supported fields. The host needs only the prerequisites above.
 
 Build the model image, expose one GPU, and choose a free port:
