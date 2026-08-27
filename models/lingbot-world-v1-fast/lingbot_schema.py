@@ -13,7 +13,7 @@ from reactor_runtime import (
 
 
 class LingBotWorldOutput(Output):
-    """Carry one generated LingBot-World RGB frame."""
+    """Carry one generated LingBot-World RGB frame batch."""
 
     main_video: Video
 
@@ -23,14 +23,15 @@ class StateUpdate(ModelMessage):
 
     prompt: str = MessageField(
         description=(
-            "Active scene prompt. A successful `set_prompt` change is encoded for the next "
-            "generated `main_video` chunk while the existing visual self-KV history remains."
+            "Active scene prompt, or an empty string before an image is selected. A successful "
+            "`set_prompt` change is encoded for the next generated `main_video` chunk while the "
+            "existing visual self-KV history remains."
         )
     )
     image_source: str = MessageField(
         description=(
-            "Source of the active anchor image: `built_in` after startup or `random_image`, "
-            "and `upload` after `set_image`."
+            "Source of the active anchor image: `none` before selection, `built_in` after "
+            "`random_image`, and `upload` after `set_image`."
         )
     )
     image_name: str = MessageField(
@@ -75,13 +76,13 @@ class StateUpdate(ModelMessage):
     next_chunk: int | None = MessageField(
         description=(
             "One-based chunk that newly accepted camera or prompt controls will first affect. "
-            "Null after the rollout limit is reached."
+            "Null before image selection or after the rollout limit is reached."
         )
     )
     next_chunk_frames: int | None = MessageField(
         description=(
             "Frames emitted by `next_chunk`: 9 for the first causal chunk, 12 thereafter, and "
-            "null after the rollout limit is reached."
+            "null before image selection or after the rollout limit is reached."
         )
     )
     max_chunks: int = MessageField(

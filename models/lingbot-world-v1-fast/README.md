@@ -71,8 +71,8 @@ curl -s localhost:8080/schema
 
 ## Controls
 
-Generation starts continuously from the built-in sample. `set_image` and
-`random_image` begin fresh continuous rollouts.
+Generation waits for `set_image` or `random_image`, then begins a fresh
+continuous rollout.
 
 - `set_image(image, prompt)` starts a fresh world from an uploaded image and
   optionally replaces the prompt.
@@ -97,10 +97,10 @@ or BMP files up to 25 MiB and 100 million pixels. Uploading an image preserves
 the pause setting and automatically queues its first chunk.
 
 LingBot-World's camera path expects calibrated intrinsics. An uploaded image
-uses the calibration associated with the currently selected built-in scene,
-matching the upstream fixed 480×832 inference path. The public lakeside and
-Great Wall anchors arrive in the pinned source checkout; their locations are
-documented in [`example_image`](example_image).
+uses the first public sample's calibration until `random_image` selects another
+one, matching the upstream fixed 480×832 inference path. The public lakeside
+and Great Wall anchors arrive in the pinned source checkout; their locations
+are documented in [`example_image`](example_image).
 
 ## Runtime boundary
 

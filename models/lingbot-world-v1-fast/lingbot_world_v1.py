@@ -140,14 +140,15 @@ class LingBotWorldV1(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize one unpaused shared world and queue its first chunk."""
+        """Initialize an empty shared world before its first image selection."""
         config = self._require_config()
-        sample = config.samples[0]
-        self._select_sample(sample)
+        self.state.prompt = ""
+        self._selected_input = None
+        self._selected_intrinsics = None
         self._seed = config.seed
         self._clear_controls()
         self.state.paused = False
-        self.state._step_requested = True
+        self.state._step_requested = False
         self.state._restart_requested = True
         self.state._limit_reached = False
         self._chunk_index = 0
@@ -215,6 +216,8 @@ class LingBotWorldV1(ReactorPipeline):
         if not normalized:
             raise CommandError("prompt_required", "LingBot-World requires a prompt.")
         self._selected_input = image
+        if self._selected_intrinsics is None:
+            self._selected_intrinsics = self._require_config().samples[0].intrinsics
         self.state.prompt = normalized
         self.state.paused = False
         self._request_restart(auto_step=True)
@@ -569,6 +572,11 @@ class LingBotWorldV1(ReactorPipeline):
 
     def _require_available_rollout(self) -> None:
         """Reject controls that cannot apply until a fresh rollout starts."""
+        if self._selected_input is None:
+            raise CommandError(
+                "image_required",
+                "Upload an image or select a random image before this command.",
+            )
         if self.state._limit_reached:
             raise CommandError(
                 "rollout_limit_reached",
@@ -592,9 +600,14 @@ class LingBotWorldV1(ReactorPipeline):
         config = self._config
         max_chunks = config.max_chunks if config is not None else 0
         selected = self._selected_input
-        image_source = "upload" if isinstance(selected, UploadedFile) else "built_in"
+        if isinstance(selected, UploadedFile):
+            image_source = "upload"
+        elif selected is None:
+            image_source = "none"
+        else:
+            image_source = "built_in"
         image_name = selected.name if selected is not None else ""
-        if self.state._limit_reached:
+        if selected is None or self.state._limit_reached:
             next_chunk = None
             next_chunk_frames = None
         else:
