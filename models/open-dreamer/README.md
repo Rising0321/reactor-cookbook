@@ -22,7 +22,7 @@ calls its public inference components directly.
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
 runtime, recording, and complete CUDA-capable image build. `requirements.txt`
 contains only the model's Python dependencies. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported YAML fields.
 
 Run the workspace and expose one GPU to the container:
