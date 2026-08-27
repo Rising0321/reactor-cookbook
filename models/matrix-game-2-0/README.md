@@ -29,7 +29,7 @@ This directory is a `reactor` workspace. `reactor.yaml` names the model,
 configures its Reactor Runtime 3.2.3 image, mounts the persistent weights cache,
 and enables recording. `requirements.txt` contains the inference dependencies.
 See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 Check the host, build the image, and expose one free GPU to the container:
