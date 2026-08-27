@@ -1,0 +1,3 @@
+# The Python 3.12 serving process uses Pillow for uploaded image validation.
+# load() prepares the isolated upstream environment from worker-requirements.txt.
+Pillow>=10.1
