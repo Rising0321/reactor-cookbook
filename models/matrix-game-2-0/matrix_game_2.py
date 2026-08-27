@@ -88,12 +88,12 @@ class MatrixGame2(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize a paused shared world before its first viewer connects."""
+        """Initialize an unpaused shared world before its first viewer connects."""
         config = self._require_config()
         self._selected_input = None
         self._image_source = "none"
         self._seed = config.seed
-        self.state.paused = True
+        self.state.paused = False
         self.state._step_requested = False
         self.state._restart_requested = False
         self.state._limit_reached = False
@@ -136,8 +136,8 @@ class MatrixGame2(ReactorPipeline):
         description=(
             "Select an uploaded starting image and initialize a fresh autoregressive world. "
             "Valid at any time; the image is center-cropped to Matrix's 352x640 input, clears "
-            "the prior rollout and controls, and automatically queues one `main_video` chunk "
-            "even while paused. Returns `StateUpdate` on success, or `CommandError` when the "
+            "the prior rollout and controls, and starts continuous `main_video` generation. "
+            "Returns `StateUpdate` on success, or `CommandError` when the "
             "upload is not a valid JPEG, PNG, WebP, or BMP within the size limits."
         ),
     )
@@ -155,6 +155,7 @@ class MatrixGame2(ReactorPipeline):
         validate_uploaded_image(image)
         self._selected_input = image
         self._image_source = "upload"
+        self.state.paused = False
         self._request_restart(auto_step=True)
         return self._state_update()
 
@@ -163,8 +164,8 @@ class MatrixGame2(ReactorPipeline):
         description=(
             "Select one configured public Matrix universal example and initialize a fresh "
             "autoregressive world. Valid at any time; it chooses a different built-in image "
-            "when possible, clears the prior rollout and controls, and automatically queues "
-            "one `main_video` chunk even while paused. Returns `StateUpdate` on success."
+            "when possible, clears the prior rollout and controls, and starts continuous "
+            "`main_video` generation. Returns `StateUpdate` on success."
         ),
     )
     def random_image(self) -> StateUpdate:
@@ -175,6 +176,7 @@ class MatrixGame2(ReactorPipeline):
             choices = [path for path in choices if path != self._selected_input]
         self._selected_input = secrets.choice(choices)
         self._image_source = "built_in"
+        self.state.paused = False
         self._request_restart(auto_step=True)
         return self._state_update()
 
@@ -287,19 +289,11 @@ class MatrixGame2(ReactorPipeline):
         self._clear_controls()
         return self._state_update()
 
-    @event(
-        name="set_paused",
-        description=(
-            "Pause before the next native chunk or resume continuous generation. Pausing is "
-            "valid at any time; resuming requires a selected image and an available chunk. "
-            "Either choice releases held controls and cancels a queued manual step. Returns "
-            "`StateUpdate` on success, or `CommandError` when generation cannot resume."
-        ),
-    )
+    # Keep pause available for future schema re-enablement without exposing it to clients.
     def set_paused(
         self,
         paused: bool = InputField(
-            default=True,
+            default=False,
             description=(
                 "Set true to stop before the next three-latent chunk, or false to generate "
                 "continuously. The change takes effect after any in-flight chunk."
@@ -314,15 +308,7 @@ class MatrixGame2(ReactorPipeline):
         self._clear_controls()
         return self._state_update()
 
-    @event(
-        name="step",
-        description=(
-            "Queue exactly one native three-latent `main_video` chunk without leaving paused "
-            "mode. Valid only while paused, after image selection, and before the rollout "
-            "horizon. Returns `StateUpdate` on success, or `CommandError` when continuous "
-            "generation is running, no image is selected, or a reset is required."
-        ),
-    )
+    # Keep single-step generation available for future schema re-enablement.
     def step(self) -> StateUpdate:
         """Queue one paused chunk and return the complete shared world state."""
         self._require_playable_rollout()
@@ -337,7 +323,7 @@ class MatrixGame2(ReactorPipeline):
         name="reset",
         description=(
             "Restart from the selected image with empty model, keyboard, mouse, cross-attention, "
-            "and causal VAE caches. Valid after image selection; it preserves paused mode, "
+            "and causal VAE caches. Valid after image selection; it resumes continuous generation, "
             "clears controls and progress, and automatically queues one visible chunk. Returns "
             "`StateUpdate` on success, or `CommandError` when no image is selected."
         ),
@@ -361,6 +347,7 @@ class MatrixGame2(ReactorPipeline):
             )
         if seed >= 0:
             self._seed = seed
+        self.state.paused = False
         self._request_restart(auto_step=True)
         return self._state_update()
 

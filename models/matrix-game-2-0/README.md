@@ -65,8 +65,8 @@ reactor build && reactor run --gpus device=0 --port 8080
 
 ## Controls
 
-A session starts paused with no scene selected. Selecting an image automatically
-generates the first chunk even while paused.
+A session starts unpaused with no scene selected. Selecting an image starts
+continuous generation from the first chunk.
 
 - `set_key_state(key, pressed)` holds or releases `w`, `a`, `s`, or `d` for
   forthcoming chunks. Held keys persist and can be combined; W+A and W+D become
@@ -76,16 +76,13 @@ generates the first chunk even while paused.
 - `set_yaw(yaw)` holds normalized turn-left or turn-right velocity in
   `[-1, 1]`.
 - `release_controls` returns keyboard and camera conditions to neutral.
-- `set_paused(false)` begins continuous generation one native chunk at a time;
-  `set_paused(true)` stops before the next chunk.
-- `step` generates exactly one chunk while paused.
 - `reset(seed)` clears every autoregressive cache, rebuilds the selected image
   conditioning, and automatically generates a fresh first chunk. Pass `-1` to
   keep the active seed.
 
 Keyboard and camera values are sampled together at the next chunk boundary.
 Changing a control while one chunk is in flight applies it to the following
-chunk. Pausing or ending the session releases all controls.
+chunk. Ending the session releases all controls.
 
 ## Start from a public demo
 
@@ -107,7 +104,7 @@ their rollout state are session-scoped and released when the session ends.
 ## Autoregressive inference
 
 The adapter loads the official model, image VAE/CLIP encoder, causal VAE decoder,
-and universal distilled checkpoint in the Runtime process. Each `step` advances
+and universal distilled checkpoint in the Runtime process. Each inference turn advances
 the same native three-latent block as upstream `inference_streaming.py` and
 continues its incremental state.
 

@@ -215,13 +215,7 @@ class RolloutLimitReached(ModelMessage):
 class MatrixGame2State(InputState):
     """Expose shared Matrix keyboard, mouse-camera, and playback controls."""
 
-    paused: bool = InputField(
-        default=True,
-        description=(
-            "Whether continuous `main_video` generation is paused before the next chunk. "
-            "Image selection and `reset` still queue one visible chunk while true."
-        ),
-    )
+    _paused: bool = False
     pitch: float = InputField(
         default=0.0,
         ge=-1.0,
@@ -244,3 +238,13 @@ class MatrixGame2State(InputState):
     _step_requested: bool = False
     _restart_requested: bool = False
     _limit_reached: bool = False
+
+    @property
+    def paused(self) -> bool:
+        """Return whether continuous chunk generation is paused."""
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        """Set whether continuous chunk generation is paused."""
+        self._paused = value
