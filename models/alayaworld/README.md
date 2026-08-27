@@ -30,7 +30,7 @@ B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's
-[build configuration](https://deploy-docs.reactor.inc/platform/build) for the
+[build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
 Gemma is gated. Accept its Hugging Face license, export a read token, then build
