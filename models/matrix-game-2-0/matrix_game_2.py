@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 import time
 from collections.abc import AsyncGenerator
@@ -115,12 +114,12 @@ class MatrixGame2(ReactorPipeline):
         await self.send(self._state_update())
 
     @session_ended
-    async def on_session_ended(self) -> None:
+    def on_session_ended(self) -> None:
         """Release image data and causal caches owned by the completed session."""
         backend = self._backend
         try:
             if backend is not None:
-                await asyncio.to_thread(backend.end_rollout)
+                backend.end_rollout()
         finally:
             self._selected_input = None
             self._image_source = "none"
@@ -378,7 +377,7 @@ class MatrixGame2(ReactorPipeline):
                     continue
                 self.state._restart_requested = False
                 image = load_input_image(selected_input)
-                await asyncio.to_thread(backend.reset, image, self._seed)
+                backend.reset(image, self._seed)
                 if self.state._restart_requested:
                     continue
                 self._chunk_index = 0
@@ -402,7 +401,7 @@ class MatrixGame2(ReactorPipeline):
             self._chunk_in_flight = True
             started_at = time.perf_counter()
             try:
-                frames = await asyncio.to_thread(backend.generate_chunk, action)
+                frames = backend.generate_chunk(action)
             finally:
                 self._chunk_in_flight = False
             inference_seconds = time.perf_counter() - started_at
