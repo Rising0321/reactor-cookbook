@@ -1,0 +1,41 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+# The cu130 builds the sparse-attention and FA4 kernels are compiled against.
+# 2.12.0 is what fastvideo 0.2.1 pins. The cu130 index publishes companion
+# builds under the 2.11/0.27 release numbers; these exact versions are the
+# import-compatible set used by the FastH3 stack.
+torch==2.12.0
+torchaudio==2.11.0
+torchvision==0.27.0
+
+# The inference stack: pipelines, the MiniMax-H3 model code, the VSA-H3
+# attention backend, and the VideoGenerator engine.
+fastvideo==0.2.1
+
+# Build the Blackwell sparse-attention kernel for the deployment GPU. The
+# published 0.3.5 wheel's sm_100a binary cannot launch on driver 595, while the
+# same source compiled by CUDA 13.1 runs correctly. The PyPI sdist omits the
+# CUTLASS and ThunderKittens submodules, so the complete Git checkout is needed.
+fastvideo-kernel @ git+https://github.com/hao-ai-lab/FastVideo.git@1aed66737739e1fd6ea7271d3306a615a2a6bd55#subdirectory=fastvideo-kernel
+
+# Reactor Runtime's protocol bindings use protobuf 7. CUTLASS DSL's package
+# metadata caps protobuf below 7, while its runtime code and the FastH3 kernels
+# are compatible with the pinned release used here. reactor.yaml applies this
+# file as uv's absolute override so the verified shared version is resolvable.
+protobuf==7.35.1
+
+# FA4 CuTe kernels for the dense (text and audio) attention paths. Pinned to
+# the revision FastVideo's own `fasth3` extra selects: it fixes
+# nvidia-cutlass-dsl at 4.6.0.dev0, and an older cutlass-dsl breaks these
+# kernels at JIT time rather than at import.
+flash-attn-4 @ git+https://github.com/Dao-AILab/flash-attention.git@14c377950125c70b7a9dabf9c561fca53715ac7d#subdirectory=flash_attn/cute
+
+# fasth3.py parses fasth3.yaml itself: the runtime hands over the path to the
+# file `runtime.config` names and does not read it.
+pyyaml
+
+# Reconnecting Bilibili live-chat WebSocket client. Pin the source revision
+# because this package is intentionally distributed from GitHub rather than PyPI.
+blivedm @ git+https://github.com/xfgryujk/blivedm.git@3bf17fe862b8c2fc6bc04c81c3f0c5db95de93d6
