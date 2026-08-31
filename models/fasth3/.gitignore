@@ -1,0 +1,32 @@
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Generated media and model assets
+outputs/
+weights/
+*.mp4
+*.wav
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# Editor and operating-system state
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
