@@ -125,10 +125,10 @@ frames and actions. The adapter preserves the upstream DDIM schedule,
 stabilization step, latent scaling, noise clamp, and VAE path instead of
 substituting a different cache implementation.
 
-Model reset and per-frame sampling run in worker threads so the asynchronous
-Reactor command loop remains responsive during GPU inference. Image and video
-decoding also run outside that loop. Commands received while one frame is being
-generated are sampled by a subsequent frame.
+Model reset and per-frame sampling use Reactor's synchronous inference boundary,
+matching the other cookbook world-model adapters. Image and video decoding run
+outside the asynchronous command loop so upload preparation does not delay
+unrelated commands. Controls are sampled at the start of each generated frame.
 
 ## Model messages
 

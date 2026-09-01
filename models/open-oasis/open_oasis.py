@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -396,7 +396,7 @@ class OpenOasis(ReactorPipeline):
         await self.send(self._state_update())
         return RolloutReset(seed=self.state._seed, conditioning=self._conditioning_name)
 
-    async def inference(self) -> AsyncGenerator[OpenOasisOutput | None, None]:
+    def inference(self) -> Iterator[OpenOasisOutput | None]:
         if self._backend is None:
             raise RuntimeError("Open-Oasis was not loaded")
         while True:
@@ -404,22 +404,17 @@ class OpenOasis(ReactorPipeline):
                 yield None
                 continue
             if self.state._reset_requested:
-                await asyncio.to_thread(
-                    self._backend.reset,
-                    self._conditioning,
-                    self.state._seed,
-                )
+                self._backend.reset(self._conditioning, self.state._seed)
                 self.state._reset_requested = False
                 yield OpenOasisOutput(
                     main_video=np.ascontiguousarray(self._conditioning[-1])
                 )
                 continue
             action = self._build_action()
-            # Consume only pulses included in this snapshot. Commands arriving while the
-            # worker generates are latched for the following frame.
+            # Consume only pulses included in this inference snapshot.
             self.state._pending_key_pulses = frozenset()
             self.state._pending_mouse_pulses = frozenset()
-            frame = await asyncio.to_thread(self._backend.generate_one, action)
+            frame = self._backend.generate_one(action)
             self.state._camera_x = self.state._camera_y = 0.0
             yield OpenOasisOutput(main_video=np.ascontiguousarray(frame))
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -123,7 +122,7 @@ def test_new_connection_waits_and_disconnect_discards_upload() -> None:
 
     assert model._conditioning is None
     assert model._conditioning_name == "none"
-    assert asyncio.run(anext(model.inference())) is None
+    assert next(model.inference()) is None
 
 
 def test_playback_contract_uses_one_frame_chunks_without_explicit_fps() -> None:
@@ -141,30 +140,3 @@ def test_press_and_release_before_sampling_still_produces_one_frame_pulse() -> N
 
     model.state._pending_key_pulses = frozenset()
     assert model._build_action()[11] == 0
-
-
-def test_command_is_processed_while_worker_thread_runs_inference() -> None:
-    class BlockingBackend:
-        def __init__(self) -> None:
-            self.entered = threading.Event()
-            self.release = threading.Event()
-
-        def reset(self, _conditioning, _seed) -> None:
-            self.entered.set()
-            assert self.release.wait(timeout=2)
-
-    async def exercise() -> None:
-        model = ready_model()
-        backend = BlockingBackend()
-        model._backend = backend  # type: ignore[assignment]
-        inference = asyncio.create_task(anext(model.inference()))
-        assert await asyncio.to_thread(backend.entered.wait, 1)
-
-        reply = await asyncio.wait_for(model.set_key_state("w", True), timeout=0.1)
-        assert reply.pressed_keys == ["w"]
-
-        backend.release.set()
-        output = await asyncio.wait_for(inference, timeout=1)
-        assert output is not None
-
-    asyncio.run(exercise())
