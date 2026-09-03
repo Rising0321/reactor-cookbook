@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PIL import Image
 from reactor_runtime import CommandError, UploadedFile
-
 from solarwm_camera import CameraMotionPlanner, MotionConfig
 from solarwm_images import normalize_output_frames, validate_uploaded_image
 from solarwm_reactor import SolarWM
+from solarwm_types import SolarWMState
 
 
 def _upload() -> UploadedFile:
@@ -48,6 +49,43 @@ def test_upload_validation_and_output_normalization() -> None:
     frames = normalize_output_frames(np.zeros((12, 480, 864, 3), dtype=np.float32))
     assert frames.dtype == np.uint8
     assert frames.flags.c_contiguous
+
+
+def test_set_image_accepts_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Allow uploaded-image inference with SolarWM's empty text conditioning."""
+    import asyncio
+
+    model = SolarWM()
+    model.state = SolarWMState()
+    model._config = SimpleNamespace(
+        max_chunks=320,
+        default_prompt="A realistic cinematic scene with smooth camera motion.",
+    )
+    model._selected_image = None
+    model._seed = 42
+    model._chunk_index = 0
+    model._chunk_in_flight = False
+    model._last_chunk_seconds = None
+    model.state.prompt = ""
+    model.state._restart_requested = True
+    model.state._limit_reached = False
+    for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll"):
+        setattr(model.state, name, 0.0)
+    sent = []
+
+    async def record(message: object) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr("solarwm_reactor.validate_uploaded_image", lambda _image: None)
+    monkeypatch.setattr(model, "send", record)
+
+    reply = asyncio.run(model.set_image(_upload(), ""))
+
+    assert reply.prompt == "A realistic cinematic scene with smooth camera motion."
+    assert (
+        model.state.prompt == "A realistic cinematic scene with smooth camera motion."
+    )
+    assert model.state._restart_requested is True
 
 
 def test_upload_rejects_declared_type_mismatch() -> None:

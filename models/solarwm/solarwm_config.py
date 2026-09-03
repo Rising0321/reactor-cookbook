@@ -25,6 +25,7 @@ class SolarWMConfig:
     checkpoint_path: Path
     runtime_root: Path
     seed: int
+    default_prompt: str
     context_latents: int
     max_chunks: int
     translation_units_per_latent: float
@@ -60,6 +61,7 @@ def read_config(config_path: Path | None) -> SolarWMConfig:
         checkpoint_path=checkpoint_path,
         runtime_root=Path(assets["root"]).resolve() / "runtime",
         seed=int(raw["inference"]["seed"]),
+        default_prompt=str(raw["inference"]["default_prompt"]).strip(),
         context_latents=context,
         max_chunks=max_chunks,
         translation_units_per_latent=float(motion["translation_units_per_latent"]),
@@ -72,10 +74,37 @@ def prepare_runtime(config: SolarWMConfig) -> None:
     if not (config.source_path / ".git").is_dir():
         config.source_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "clone", config.source_url, str(config.source_path)], check=True
+            [
+                "git",
+                "clone",
+                "--filter=blob:none",
+                "--no-checkout",
+                config.source_url,
+                str(config.source_path),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(config.source_path),
+                "checkout",
+                "--detach",
+                config.source_revision,
+            ],
+            check=True,
         )
     revision = subprocess.run(
-        ["git", "-C", str(config.source_path), "rev-parse", "HEAD"],
+        [
+            "git",
+            "-c",
+            f"safe.directory={config.source_path}",
+            "-C",
+            str(config.source_path),
+            "rev-parse",
+            "HEAD",
+        ],
         check=True,
         capture_output=True,
         text=True,

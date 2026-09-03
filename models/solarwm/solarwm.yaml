@@ -11,6 +11,9 @@ assets:
 
 inference:
   seed: 42
+  default_prompt: >-
+    A realistic cinematic scene with coherent geometry, natural lighting,
+    detailed textures, and smooth camera motion.
 
 stream:
   # Preserve SolarWM's native 18-latent, six-chunk rolling KV-cache window.

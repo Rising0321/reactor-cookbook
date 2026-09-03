@@ -123,7 +123,12 @@ class ImageSelected(ModelMessage):
         description="Image source accepted by `set_image`; always `uploaded`."
     )
     filename: str = MessageField(description="Selected anchor-image filename.")
-    prompt: str = MessageField(description="Non-empty prompt for the fresh world.")
+    prompt: str = MessageField(
+        description=(
+            "Prompt for the fresh world. When `set_image` receives empty text with no active "
+            "prompt, this contains the configured generic cinematic fallback."
+        )
+    )
     seed: int = MessageField(description="Random seed for the fresh world.")
 
 

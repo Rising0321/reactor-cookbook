@@ -18,7 +18,6 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
-
 from solarwm_backend import BackendSettings, SolarWMBackend
 from solarwm_camera import CameraMotionPlanner, MotionConfig
 from solarwm_config import SolarWMConfig, prepare_runtime, read_config
@@ -116,7 +115,7 @@ class SolarWM(ReactorPipeline):
             "Replace the anchor image and start a fresh SolarWM world. Valid at any time; "
             "progress, camera axes, causal KV cache, and VAE cache reset. Emits `image_selected` "
             "and broadcasts `state_update` on success, or `command_error` for invalid image "
-            "bytes, media type, dimensions, or an empty prompt."
+            "bytes, media type, or dimensions."
         ),
     )
     async def set_image(
@@ -133,18 +132,19 @@ class SolarWM(ReactorPipeline):
             max_length=4096,
             moderate=True,
             description=(
-                "Scene prompt up to 4096 characters. A non-empty value conditions the fresh "
-                "world; an empty value preserves an already active prompt."
+                "Optional scene prompt up to 4096 characters. A non-empty value conditions the "
+                "fresh world; an empty value preserves the active prompt or falls back to the "
+                "configured generic cinematic prompt when no prompt is active."
             ),
         ),
     ) -> ImageSelected:
         """Select an uploaded anchor and queue a fresh continuous rollout."""
         validate_uploaded_image(image)
-        normalized = prompt.strip() or self.state.prompt.strip()
-        if not normalized:
-            raise CommandError(
-                "prompt_required", "SolarWM requires a prompt with the image."
-            )
+        normalized = (
+            prompt.strip()
+            or self.state.prompt.strip()
+            or self._require_config().default_prompt
+        )
         self._selected_image = image
         self.state.prompt = normalized
         self._request_restart()

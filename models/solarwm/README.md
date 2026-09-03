@@ -3,46 +3,42 @@
 Run the public [SolarWM](https://github.com/Junchao-cs/SolarWM) Wan2.2
 TI2V-5B Stage2 checkpoint as an interactive Reactor backend. A client uploads
 an anchor image and prompt, applies six-axis camera motion, and receives one
-native autoregressive video chunk per inference turn.
-
-This is the first-stage Reactor SDK adaptation intended for local debugging.
-It deliberately does not include a Reactor image build configuration.
+native autoregressive video chunk per inference turn. The workspace uses the
+current `reactor/v2` manifest: `reactor.yaml` defines the generated image and no
+hand-written Dockerfile is required.
 
 ## Prerequisites
 
-- Python 3.12, `uv`, CUDA 12.8, and one NVIDIA GPU with sufficient memory.
+- The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation),
+  Docker, NVIDIA Container Toolkit, and one GPU with sufficient memory.
 - Access approval for the gated
   [`junchaoh-cs/SolarWM`](https://huggingface.co/junchaoh-cs/SolarWM) repository.
 - About 75 GB of persistent storage for the Wan2.2-5B base assets and Stage2
   checkpoint. The checked-in config places them under
   `/opt/dlami/nvme/.cache_hf/SolarWM`.
 
-## Run locally
+## Run
 
-Create the development environment on NVMe and install the pinned source plus
-Reactor Runtime:
-
-```sh
-export UV_CACHE_DIR=/opt/dlami/nvme/.cache_uv
-export HF_HOME=/opt/dlami/nvme/.cache_hf
-export HF_TOKEN="$HF_KEY"
-
-uv venv --python 3.12 /opt/dlami/nvme/.cache_uv/envs/solarwm-wan5
-uv pip install --python /opt/dlami/nvme/.cache_uv/envs/solarwm-wan5/bin/python \
-  -r requirements.txt reactor-runtime==3.2.5 reactor-sdk==1.2.0
-```
-
-Start Reactor Runtime on one selected GPU:
+`reactor.yaml` pins Reactor Runtime 3.2.5, CUDA 12.8.1, Python 3.12, the pinned
+SolarWM source, Python dependencies, and the FlashAttention 2 build step. The
+generated image contains code and dependencies only; model assets remain in
+the shared `/opt/dlami/nvme/.cache_hf` weights mount.
 
 ```sh
 cd models/solarwm
-export CUDA_VISIBLE_DEVICES=7
-export PORT=18087
-export HF_HOME=/opt/dlami/nvme/.cache_hf
-export UV_CACHE_DIR=/opt/dlami/nvme/.cache_uv
+reactor validate
+reactor build
+reactor run --gpus device=7 --port 18087 -e HF_TOKEN
+```
+
+`--gpus device=7` exposes host GPU 7 as device 0 inside the container. First
+startup downloads the gated Stage2 assets when they are absent; later starts
+reuse `/opt/dlami/nvme/.cache_hf/SolarWM`. Forward the credential without
+putting its value on the command line:
+
+```sh
 export HF_TOKEN="$HF_KEY"
-PYTHONPATH=. /opt/dlami/nvme/.cache_uv/envs/solarwm-wan5/bin/python \
-  -m reactor_runtime.serve
+reactor run --gpus device=7 --port 18087 -e HF_TOKEN
 ```
 
 The endpoint is local at `http://localhost:18087`. Check readiness and schema:
@@ -56,7 +52,9 @@ curl -s localhost:18087/schema
 
 Generation waits for `set_image`; there is no default or random image.
 
-- `set_image(image, prompt)` uploads an anchor and starts a fresh world.
+- `set_image(image, prompt)` uploads an anchor and starts a fresh world. The
+  prompt is optional; when neither the command nor active state supplies one,
+  SolarWM uses the generic cinematic prompt configured in `solarwm.yaml`.
 - `set_prompt(prompt)` restarts from the uploaded anchor because SolarWM keeps
   prompt cross-attention cached for the complete rollout.
 - `set_forward`, `set_strafe`, and `set_vertical` control translation.
