@@ -21,13 +21,12 @@ class SolarWMOutput(Output):
 
 
 class StateUpdate(ModelMessage):
-    """Emitted after connection, accepted commands, and completed chunks with full state."""
+    """Emitted after connection, state mutation, reset, or chunk completion."""
 
     prompt: str = MessageField(
         description=(
-            "Active scene prompt, or an empty string before an image is selected. A successful "
-            "`set_prompt` change restarts generation from the uploaded anchor because SolarWM "
-            "caches cross-attention for the complete rollout."
+            "Prompt for the current or queued world, or an empty string before image selection. "
+            "A successful `set_prompt` starts a fresh world from the selected image."
         )
     )
     image_source: str = MessageField(
@@ -47,7 +46,7 @@ class StateUpdate(ModelMessage):
     )
     limit_reached: bool = MessageField(
         description=(
-            "Whether the rollout exhausted its safe RoPE timeline. Use `reset` or `set_image` "
+            "Whether the rollout reached its supported timeline. Use `reset` or `set_image` "
             "before requesting another chunk."
         )
     )
@@ -59,7 +58,7 @@ class StateUpdate(ModelMessage):
     )
     last_chunk_seconds: float | None = MessageField(
         description=(
-            "Wall-clock seconds spent in model generation and causal VAE decode for the most "
+            "Wall-clock seconds spent generating and decoding the most "
             "recent completed chunk. Null before the first chunk of a fresh world."
         )
     )
@@ -125,8 +124,8 @@ class ImageSelected(ModelMessage):
     filename: str = MessageField(description="Selected anchor-image filename.")
     prompt: str = MessageField(
         description=(
-            "Prompt for the fresh world. When `set_image` receives empty text with no active "
-            "prompt, this contains the configured generic cinematic fallback."
+            "Non-empty prompt for the fresh world. When `set_image` receives empty text with no "
+            "active prompt, this contains the configured default."
         )
     )
     seed: int = MessageField(description="Random seed for the fresh world.")
@@ -142,7 +141,7 @@ class PromptQueued(ModelMessage):
 
 
 class CameraMotionChanged(ModelMessage):
-    """Emitted when one held camera axis changes."""
+    """Emitted when held camera motion changes or is released."""
 
     forward: float = MessageField(description="Active backward-to-forward motion.")
     strafe: float = MessageField(description="Active left-to-right motion.")
@@ -188,8 +187,8 @@ class SolarWMState(InputState):
         max_length=4096,
         moderate=True,
         description=(
-            "Active scene prompt up to 4096 characters, or empty before image selection. A "
-            "change restarts from the uploaded anchor with fresh KV and cross-attention caches."
+            "Active scene prompt up to 4096 characters, or empty before image selection. Use "
+            "`set_prompt` to replace it and start a fresh world from the selected image."
         ),
     )
     forward: float = InputField(

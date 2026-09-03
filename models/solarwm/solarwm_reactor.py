@@ -112,10 +112,11 @@ class SolarWM(ReactorPipeline):
     @event(
         name="set_image",
         description=(
-            "Replace the anchor image and start a fresh SolarWM world. Valid at any time; "
-            "progress, camera axes, causal KV cache, and VAE cache reset. Emits `image_selected` "
-            "and broadcasts `state_update` on success, or `command_error` for invalid image "
-            "bytes, media type, or dimensions."
+            "Replace the anchor image and start a fresh world with continuous `main_video` "
+            "generation. Valid at any time; progress and camera axes reset, and the upload is "
+            "decoded before the command succeeds. Emits `image_selected` and broadcasts "
+            "`state_update` on success, or `command_error` for invalid image bytes, media "
+            "type, or dimensions."
         ),
     )
     async def set_image(
@@ -133,8 +134,8 @@ class SolarWM(ReactorPipeline):
             moderate=True,
             description=(
                 "Optional scene prompt up to 4096 characters. A non-empty value conditions the "
-                "fresh world; an empty value preserves the active prompt or falls back to the "
-                "configured generic cinematic prompt when no prompt is active."
+                "fresh world; an empty value preserves the active prompt or uses the configured "
+                "default when no prompt is active."
             ),
         ),
     ) -> ImageSelected:
@@ -157,10 +158,10 @@ class SolarWM(ReactorPipeline):
     @event(
         name="set_prompt",
         description=(
-            "Replace text conditioning and restart from the selected anchor because SolarWM "
-            "caches cross-attention for the full rollout. Valid after image selection. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` for an "
-            "empty prompt or missing image."
+            "Replace the text condition and queue a fresh rollout from the selected image. The "
+            "new prompt begins at chunk one and continuous generation resumes from the fresh "
+            "world. Emits `prompt_queued` and broadcasts `state_update` on success, or "
+            "`command_error` before image selection or for empty text."
         ),
     )
     async def set_prompt(
@@ -170,7 +171,7 @@ class SolarWM(ReactorPipeline):
             max_length=4096,
             moderate=True,
             description=(
-                "Non-empty scene description up to 4096 characters for a fresh rollout."
+                "Non-empty scene description up to 4096 characters for the fresh world."
             ),
         ),
     ) -> PromptQueued:
@@ -190,7 +191,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="set_forward",
-        description="Set held backward-to-forward camera translation for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Set backward-to-forward camera translation for the next chunk. Valid after image "
+            "selection and before the rollout limit; the value is held for later chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def set_forward(
         self,
@@ -198,7 +204,10 @@ class SolarWM(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Normalized backward (-1) to forward (1) translation; zero stops this held axis.",
+            description=(
+                "Normalized backward (-1) to forward (1) translation. Zero stops this axis; the "
+                "value is sampled at the next chunk boundary and held."
+            ),
         ),
     ) -> CameraMotionChanged:
         """Set forward translation and report all held camera axes."""
@@ -206,7 +215,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="set_strafe",
-        description="Set held left-to-right camera translation for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Set left-to-right camera translation for the next chunk. Valid after image "
+            "selection and before the rollout limit; the value is held for later chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def set_strafe(
         self,
@@ -214,7 +228,10 @@ class SolarWM(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Normalized left (-1) to right (1) translation; zero stops this held axis.",
+            description=(
+                "Normalized left (-1) to right (1) translation. Zero stops this axis; the value "
+                "is sampled at the next chunk boundary and held."
+            ),
         ),
     ) -> CameraMotionChanged:
         """Set strafe translation and report all held camera axes."""
@@ -222,7 +239,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="set_vertical",
-        description="Set held down-to-up camera translation for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Set down-to-up camera translation for the next chunk. Valid after image selection "
+            "and before the rollout limit; the value is held for later chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def set_vertical(
         self,
@@ -230,7 +252,10 @@ class SolarWM(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Normalized down (-1) to up (1) translation; zero stops this held axis.",
+            description=(
+                "Normalized down (-1) to up (1) translation. Zero stops this axis; the value is "
+                "sampled at the next chunk boundary and held."
+            ),
         ),
     ) -> CameraMotionChanged:
         """Set vertical translation and report all held camera axes."""
@@ -238,7 +263,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="set_pitch",
-        description="Set held downward-to-upward camera pitch for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Set downward-to-upward camera pitch for the next chunk. Valid after image selection "
+            "and before the rollout limit; the value is held for later chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def set_pitch(
         self,
@@ -246,7 +276,10 @@ class SolarWM(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Normalized downward (-1) to upward (1) pitch; zero stops this held axis.",
+            description=(
+                "Normalized downward (-1) to upward (1) pitch. Zero stops this axis; the value "
+                "is sampled at the next chunk boundary and held."
+            ),
         ),
     ) -> CameraMotionChanged:
         """Set pitch and report all held camera axes."""
@@ -254,7 +287,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="set_yaw",
-        description="Set held left-to-right camera yaw for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Set left-to-right camera yaw for the next chunk. Valid after image selection and "
+            "before the rollout limit; the value is held for later chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def set_yaw(
         self,
@@ -262,7 +300,10 @@ class SolarWM(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Normalized left (-1) to right (1) yaw; zero stops this held axis.",
+            description=(
+                "Normalized left (-1) to right (1) yaw. Zero stops this axis; the value is "
+                "sampled at the next chunk boundary and held."
+            ),
         ),
     ) -> CameraMotionChanged:
         """Set yaw and report all held camera axes."""
@@ -270,7 +311,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="set_roll",
-        description="Set held counterclockwise-to-clockwise camera roll for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Set counterclockwise-to-clockwise camera roll for the next chunk. Valid after image "
+            "selection and before the rollout limit; the value is held for later chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def set_roll(
         self,
@@ -278,7 +324,10 @@ class SolarWM(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Normalized counterclockwise (-1) to clockwise (1) roll; zero stops this held axis.",
+            description=(
+                "Normalized counterclockwise (-1) to clockwise (1) roll. Zero stops this axis; "
+                "the value is sampled at the next chunk boundary and held."
+            ),
         ),
     ) -> CameraMotionChanged:
         """Set roll and report all held camera axes."""
@@ -286,7 +335,11 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="release_camera",
-        description="Release all six held camera axes to neutral for the next chunk. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection or after the rollout limit.",
+        description=(
+            "Return every held camera axis to neutral for forthcoming chunks. Emits "
+            "`camera_motion_changed` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected or a fresh rollout is required."
+        ),
     )
     async def release_camera(self) -> CameraMotionChanged:
         """Release all camera motion and report the neutral controls."""
@@ -298,7 +351,12 @@ class SolarWM(ReactorPipeline):
 
     @event(
         name="reset",
-        description="Restart from the selected image and prompt. Valid after image selection; progress, caches, and camera axes reset. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected.",
+        description=(
+            "Restart from the selected image and prompt with continuous generation from chunk "
+            "one. Valid when an anchor exists; progress and camera axes reset. Emits "
+            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
+            "`command_error` when no image is selected."
+        ),
     )
     async def reset(
         self,
@@ -306,7 +364,10 @@ class SolarWM(ReactorPipeline):
             default=-1,
             ge=-1,
             le=2_147_483_647,
-            description="Seed for the fresh rollout; -1 retains the active seed.",
+            description=(
+                "Seed from 0 to 2147483647 for the fresh rollout. Use -1 to retain the active "
+                "seed; a non-negative value becomes active when reset begins."
+            ),
         ),
     ) -> RolloutResetQueued:
         """Queue a reproducible fresh rollout from the selected anchor."""
