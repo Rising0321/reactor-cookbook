@@ -1,0 +1,4 @@
+-e /opt/dlami/nvme/.cache_hf/sources/SolarWM
+Pillow>=10.1
+huggingface_hub[hf_xet]>=0.36
+flash-attn==2.8.3
