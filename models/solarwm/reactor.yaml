@@ -18,7 +18,7 @@ model:
       limit: 160Gi
 
 runtime:
-  import: solarwm_reactor:SolarWM
+  import: solarwm:SolarWM
   config: solarwm.yaml
   # Mount the shared HF root so SolarWM can reuse existing Wan2.2 base files
   # through symlinks without duplicating tens of gigabytes.

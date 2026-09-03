@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 from PIL import Image
 from reactor_runtime import CommandError, UploadedFile
+from solarwm import SolarWM
 from solarwm_camera import CameraMotionPlanner, MotionConfig
 from solarwm_images import normalize_output_frames, validate_uploaded_image
-from solarwm_reactor import SolarWM
 from solarwm_types import SolarWMState
 
 
@@ -76,7 +76,7 @@ def test_set_image_accepts_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None
     async def record(message: object) -> None:
         sent.append(message)
 
-    monkeypatch.setattr("solarwm_reactor.validate_uploaded_image", lambda _image: None)
+    monkeypatch.setattr("solarwm.validate_uploaded_image", lambda _image: None)
     monkeypatch.setattr(model, "send", record)
 
     reply = asyncio.run(model.set_image(_upload(), ""))

@@ -23,11 +23,25 @@ class BackendSettings:
     runtime_root: Path
 
 
+def _expose_upstream_package(source_path: Path) -> None:
+    """Let the ``solarwm.py`` entry module resolve upstream SolarWM subpackages."""
+    package_path = source_path / "src" / "solarwm"
+    if not package_path.is_dir():
+        raise RuntimeError(f"SolarWM package is missing: {package_path}")
+    entry_module = sys.modules.get("solarwm")
+    if entry_module is None:
+        raise RuntimeError("SolarWM Reactor entry module is not loaded")
+    search_locations = [str(package_path)]
+    entry_module.__path__ = search_locations
+    if entry_module.__spec__ is not None:
+        entry_module.__spec__.submodule_search_locations = search_locations
+
+
 class SolarWMBackend:
     """Preserve SolarWM self-KV, cross-attention, and VAE caches across chunks."""
 
     def __init__(self, settings: BackendSettings) -> None:
-        sys.path.insert(0, str(settings.source_path / "src"))
+        _expose_upstream_package(settings.source_path)
         import torch
         from solarwm.backends.wan22.runtime.stage2 import (
             build_stage2_generation_provider,
