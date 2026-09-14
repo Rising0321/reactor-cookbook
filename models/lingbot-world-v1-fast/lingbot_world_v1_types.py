@@ -147,8 +147,11 @@ class CameraMotionChanged(ModelMessage):
     roll: float = MessageField(
         description="Active counterclockwise-to-clockwise roll motion."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk expected to sample these values first."
+    applies_to_chunk: int | None = MessageField(
+        description=(
+            "One-based chunk that will first sample this camera state, or null "
+            "when a neutral release is accepted after rollout capacity is exhausted."
+        )
     )
 
 

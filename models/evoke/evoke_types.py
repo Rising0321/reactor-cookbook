@@ -36,8 +36,8 @@ class StateUpdate(ModelMessage):
     )
     input_source: str = MessageField(
         description=(
-            "Source of the active conditioning media: `built_in`, `uploaded`, or `none` in "
-            "prompt-only mode."
+            "Source of the active conditioning media: `uploaded`, or `none` before "
+            "explicit conditioning and in prompt-only mode."
         )
     )
     input_name: str = MessageField(
@@ -64,17 +64,22 @@ class StateUpdate(ModelMessage):
             "chunks emit 36 RGB frames; prompt-only t2v emits 33 for chunk 1 and 36 later."
         )
     )
-    next_chunk: int = MessageField(
+    next_chunk: int | None = MessageField(
         description=(
             "One-based chunk that camera and prompt commands accepted now will first affect. "
-            "It returns to 1 after a rollout reset."
+            "It returns to 1 after an explicit reset, or is null while awaiting conditioning "
+            "or after exhaustion."
         )
     )
     max_chunks: int = MessageField(
         description=(
-            "Chunks generated before the adapter automatically starts a fresh rollout from "
-            "the active conditioning input."
+            "Maximum chunks before generation stops. The world is retained and never "
+            "restarts automatically."
         )
+    )
+    limit_reached: bool = MessageField(
+        description="Whether the current world has exhausted its chunk capacity; release "
+        "remains valid and a new world requires explicit reset or conditioning."
     )
     forward: float = MessageField(
         description=(
@@ -119,14 +124,13 @@ class CommandApplied(ModelMessage):
 
     action: str = MessageField(
         description=(
-            "Command name that changed the world, such as `set_prompt`, `set_yaw`, "
-            "or `reset`."
+            "Command name that changed the world, such as `set_prompt`, `set_yaw`, or `reset`."
         )
     )
-    applies_to_chunk: int = MessageField(
+    applies_to_chunk: int | None = MessageField(
         description=(
             "One-based chunk that first observes the change. Playback-only changes report the "
-            "next chunk they gate."
+            "next chunk they gate. Null while awaiting conditioning or after exhaustion."
         )
     )
     detail: str = MessageField(
@@ -137,17 +141,14 @@ class CommandApplied(ModelMessage):
     )
 
 
-class RolloutRestarted(ModelMessage):
-    """Emitted when the chunk horizon starts a fresh rollout automatically."""
+class RolloutLimitReached(ModelMessage):
+    """Emitted when the final supported chunk completes without replacing the world."""
 
-    replaced_chunks: int = MessageField(
-        description="Number of completed chunks replaced by the automatic fresh rollout."
+    completed_chunks: int = MessageField(
+        description="Number of completed chunks in the exhausted world."
     )
     max_chunks: int = MessageField(
-        description="Configured horizon that triggered this automatic rollout restart."
-    )
-    seed: int = MessageField(
-        description="Seed retained by the fresh rollout so the restart is observable."
+        description="Configured maximum chunks supported in one continuous world."
     )
 
 
@@ -219,3 +220,4 @@ class EvokeState(InputState):
         ),
     )
     _restart_requested: bool = True
+    _limit_reached: bool = False

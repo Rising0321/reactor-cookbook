@@ -195,11 +195,15 @@ class LingBotWorldV2(ReactorPipeline):
     @event(
         name="set_camera",
         description=(
-            "Set all six held camera axes atomically for forthcoming chunks. Requires a selected "
-            "image and an available chunk; values are sampled together when the next chunk begins "
-            "and remain active until changed or released. Emits `camera_motion_changed` and "
-            "broadcasts `state_update` on success, or `command_error` when generation is not "
-            "available."
+            "Set all six held camera axes atomically until changed or released. Requires a "
+            "selected image. Nonzero input requires available rollout capacity; all-zero input "
+            "safely releases every axis even after the limit, without resetting the world. "
+            "Translation is direction-only: forward/strafe/vertical are normalized together "
+            "per chunk. For one nonzero translation axis, changing its nonzero magnitude "
+            "does not change displacement scale; only its sign matters. For combined "
+            "translation, relative axis ratios determine direction. Repeated native chunks "
+            "accumulate motion. Pitch/yaw/roll remain magnitude-sensitive angular rates. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_camera(
@@ -208,19 +212,31 @@ class LingBotWorldV2(ReactorPipeline):
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Backward (-1) to forward (1) camera direction; zero is neutral.",
+            description=(
+                "Backward (-1) to forward (1) camera direction; zero is neutral. "
+                "Direction-only normalized translation: nonzero single-axis magnitude "
+                "does not change displacement scale; sign and multi-axis ratios matter."
+            ),
         ),
         strafe: float = InputField(
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Left (-1) to right (1) camera direction; zero is neutral.",
+            description=(
+                "Left (-1) to right (1) camera direction; zero is neutral. "
+                "Direction-only normalized translation: nonzero single-axis magnitude "
+                "does not change displacement scale; sign and multi-axis ratios matter."
+            ),
         ),
         vertical: float = InputField(
             default=0.0,
             ge=-1.0,
             le=1.0,
-            description="Down (-1) to up (1) camera direction; zero is neutral.",
+            description=(
+                "Down (-1) to up (1) camera direction; zero is neutral. "
+                "Direction-only normalized translation: nonzero single-axis magnitude "
+                "does not change displacement scale; sign and multi-axis ratios matter."
+            ),
         ),
         pitch: float = InputField(
             default=0.0,
@@ -243,7 +259,8 @@ class LingBotWorldV2(ReactorPipeline):
     ) -> CameraMotionChanged:
         """Set all camera axes and report the complete held state."""
         self._require_selected()
-        self._require_available()
+        if any(value != 0.0 for value in (forward, strafe, vertical, pitch, yaw, roll)):
+            self._require_available()
         self.state._forward = forward
         self.state._strafe = strafe
         self.state._vertical = vertical
@@ -257,16 +274,15 @@ class LingBotWorldV2(ReactorPipeline):
     @event(
         name="release_camera",
         description=(
-            "Return every held camera axis to neutral for forthcoming chunks. Requires a selected "
-            "image and an available chunk; neutral motion is sampled at the next boundary. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or `command_error` "
-            "when generation is not available."
+            "Return every held camera axis to neutral. Requires a selected image and remains "
+            "valid after rollout capacity is exhausted. Does not reset or resume the world. "
+            "Returns `camera_motion_changed` with a null applies_to_chunk after the limit, "
+            "and broadcasts `state_update`."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
         """Release all camera motion and report the neutral held state."""
         self._require_selected()
-        self._require_available()
         self._clear_camera()
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -486,7 +502,7 @@ class LingBotWorldV2(ReactorPipeline):
             pitch=self.state._pitch,
             yaw=self.state._yaw,
             roll=self.state._roll,
-            applies_to_chunk=self._next_chunk(),
+            applies_to_chunk=None if self._limit_reached else self._next_chunk(),
         )
 
     def _clear_camera(self) -> None:
@@ -545,7 +561,7 @@ class LingBotWorldV2(ReactorPipeline):
             image_name = selected.name
         else:
             image_name = ""
-        next_chunk = None if self._limit_reached else self._next_chunk()
+        next_chunk = None if self._limit_reached or selected is None else self._next_chunk()
         next_frames = None
         if next_chunk is not None:
             next_frames = FIRST_CHUNK_FRAMES if next_chunk == 1 else STEADY_CHUNK_FRAMES

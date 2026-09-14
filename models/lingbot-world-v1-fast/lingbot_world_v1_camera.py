@@ -95,7 +95,7 @@ def _camera_delta(
     delta[:3, :3] = (
         _rotation_z(float(roll_step))
         @ _rotation_y(float(yaw_step))
-        @ _rotation_x(float(-pitch_step))
+        @ _rotation_x(float(pitch_step))
     )
     delta[:3, 3] = translation
     return delta

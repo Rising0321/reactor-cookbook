@@ -60,13 +60,13 @@ class StateUpdate(ModelMessage):
     next_chunk: int | None = MessageField(
         description=(
             "One-based chunk that newly accepted prompt and camera controls will first affect, "
-            "or null after the rollout limit is reached."
+            "or null before image selection or after the rollout limit is reached."
         )
     )
     next_chunk_frames: int | None = MessageField(
         description=(
             "Expected RGB frames in `next_chunk`: 13 for a fresh rollout and 16 afterward, "
-            "or null after the rollout limit is reached."
+            "or null before image selection or after the rollout limit is reached."
         )
     )
     max_chunks: int = MessageField(
@@ -143,8 +143,11 @@ class CameraMotionChanged(ModelMessage):
     roll: float = MessageField(
         description="Active counterclockwise-to-clockwise roll rate."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that will first sample this complete camera state."
+    applies_to_chunk: int | None = MessageField(
+        description=(
+            "One-based chunk that will first sample this camera state, or null "
+            "when a neutral release is accepted after rollout capacity is exhausted."
+        )
     )
 
 

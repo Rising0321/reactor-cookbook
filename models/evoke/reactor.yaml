@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: evoke-post-distillation
-  version: v0.1.0
+  version: v0.2.0
   description: |
     Explore an autoregressive world through text, media, and six-axis camera motion.
   resources:

@@ -167,8 +167,11 @@ class ActionChanged(ModelMessage):
     pressed_keys: list[str] = MessageField(
         description="Complete sorted WASD key set held after applying the event."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that will first sample the updated multi-hot key state."
+    applies_to_chunk: int | None = MessageField(
+        description=(
+            "One-based chunk that will first sample the updated multi-hot key state, or null "
+            "before image selection and after the rollout limit."
+        )
     )
 
 
@@ -181,8 +184,11 @@ class CameraMotionChanged(ModelMessage):
     yaw: float = MessageField(
         description="Turn-left (-1) to turn-right (1) velocity held for forthcoming chunks."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that will first sample both camera values."
+    applies_to_chunk: int | None = MessageField(
+        description=(
+            "One-based chunk that will first sample both camera values, or null before image "
+            "selection and after the rollout limit."
+        )
     )
 
 

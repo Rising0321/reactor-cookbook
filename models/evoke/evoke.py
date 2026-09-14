@@ -33,7 +33,7 @@ from evoke_types import (
     CommandApplied,
     EvokeOutput,
     EvokeState,
-    RolloutRestarted,
+    RolloutLimitReached,
     StateUpdate,
 )
 from upstream_backend import EvokeWorkerBackend, WorkerSettings
@@ -131,16 +131,17 @@ class Evoke(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize a built-in i2v world before its first viewer connects."""
+        """Wait for explicit image, reference video, or text conditioning."""
         config = self._require_config()
         self._mode = "i2v"
-        self._media = config.default_image
+        self._media = None
         self._pose = None
-        self._input_source = "built_in"
-        self._input_name = config.default_image.name
+        self._input_source = "none"
+        self._input_name = ""
         self._pose_name = ""
-        self.state.prompt = config.stability_prompt
-        self.state._restart_requested = True
+        self.state.prompt = ""
+        self.state._restart_requested = False
+        self.state._limit_reached = False
         self._seed = config.seed
         self._chunk_index = 0
         self._clear_controls()
@@ -196,9 +197,7 @@ class Evoke(ReactorPipeline):
         value = self._resolve_prompt(prompt)
         self.state.prompt = value
         detail = (
-            "Neutral stability prompt restored"
-            if not prompt.strip()
-            else f"Prompt queued: {value}"
+            "Neutral stability prompt restored" if not prompt.strip() else f"Prompt queued: {value}"
         )
         message = self._confirmation("set_prompt", detail)
         await self._send_state_update()
@@ -376,6 +375,12 @@ class Evoke(ReactorPipeline):
         return message
 
     async def _set_axis(self, name: str, value: float) -> CommandApplied:
+        if value != 0.0 and self.state._limit_reached:
+            raise CommandError(
+                "rollout_limit_reached",
+                "The world is exhausted; controls can be released but further generation "
+                "requires an explicit reset.",
+            )
         if self._mode == "t2v":
             raise CommandError(
                 "camera_unavailable", "EVOKE t2v mode does not consume camera poses."
@@ -510,6 +515,21 @@ class Evoke(ReactorPipeline):
         return await self._set_axis("roll", roll)
 
     @event(
+        name="release_controls",
+        description=(
+            "Atomically set all six camera axes to zero without resetting the world. "
+            "Valid while awaiting input, in text-only mode, and after the rollout limit. "
+            "Emits `command_applied` and broadcasts `state_update` on success."
+        ),
+    )
+    async def release_controls(self) -> CommandApplied:
+        """Release all held camera motion as one atomic command."""
+        self._clear_controls()
+        message = self._confirmation("release_controls", "All camera axes are neutral")
+        await self._send_state_update()
+        return message
+
+    @event(
         name="reset",
         description=(
             "Start a fresh rollout from the active image, video, or text conditioning. It "
@@ -529,15 +549,11 @@ class Evoke(ReactorPipeline):
     ) -> CommandApplied:
         """Queue a fresh rollout and confirm its retained seed."""
         if self._mode != "t2v" and self._media is None:
-            raise CommandError(
-                "conditioning_required", "Select EVOKE conditioning before reset."
-            )
+            raise CommandError("conditioning_required", "Select EVOKE conditioning before reset.")
         if seed >= 0:
             self._seed = seed
         self._request_restart()
-        message = self._confirmation(
-            "reset", f"Fresh rollout queued with seed {self._seed}"
-        )
+        message = self._confirmation("reset", f"Fresh rollout queued with seed {self._seed}")
         await self._send_state_update()
         return message
 
@@ -548,6 +564,12 @@ class Evoke(ReactorPipeline):
             planner = self._planner
             if backend is None or planner is None:
                 raise RuntimeError("EVOKE was not loaded")
+            if self._mode != "t2v" and self._media is None:
+                yield None
+                continue
+            if self.state._limit_reached:
+                yield None
+                continue
             if self.state._restart_requested:
                 backend.reset(
                     mode=self._mode,
@@ -588,24 +610,23 @@ class Evoke(ReactorPipeline):
                     f"expected {expected}"
                 )
             self._chunk_index += 1
-            await self.send(self._state_update())
-            yield EvokeOutput(main_video=frames)
-
             config = self._require_config()
             if self._chunk_index >= config.max_chunks:
-                replaced = self._chunk_index
-                self._request_restart()
+                self.state._limit_reached = True
+                self._clear_controls()
                 await self.send(
-                    RolloutRestarted(
-                        replaced_chunks=replaced,
+                    RolloutLimitReached(
+                        completed_chunks=self._chunk_index,
                         max_chunks=config.max_chunks,
-                        seed=self._seed,
                     )
                 )
+            await self.send(self._state_update())
+            yield EvokeOutput(main_video=frames)
 
     def _request_restart(self) -> None:
         self.output.flush()
         self.state._restart_requested = True
+        self.state._limit_reached = False
         self._chunk_index = 0
         self._clear_controls()
 
@@ -627,7 +648,8 @@ class Evoke(ReactorPipeline):
             pose_name=self._pose_name,
             seed=self._seed,
             completed_chunks=self._chunk_index,
-            next_chunk=self._chunk_index + 1,
+            next_chunk=self._next_chunk(),
+            limit_reached=self.state._limit_reached,
             max_chunks=config.max_chunks,
             forward=self.state.forward,
             strafe=self.state.strafe,
@@ -645,9 +667,14 @@ class Evoke(ReactorPipeline):
         """Return a successful command result tied to its first affected chunk."""
         return CommandApplied(
             action=action,
-            applies_to_chunk=self._chunk_index + 1,
+            applies_to_chunk=self._next_chunk(),
             detail=detail,
         )
+
+    def _next_chunk(self) -> int | None:
+        if self.state._limit_reached or (self._mode != "t2v" and self._media is None):
+            return None
+        return self._chunk_index + 1
 
     def _resolve_prompt(self, prompt: str) -> str:
         """Return explicit text or the configured scene-neutral stability condition."""

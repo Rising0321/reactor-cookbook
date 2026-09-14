@@ -92,3 +92,25 @@ def test_generation_controls_require_an_uploaded_image() -> None:
         model.set_forward(1.0)
 
     assert error.value.code == "image_required"
+
+
+@pytest.mark.parametrize(
+    "axis", ["forward", "strafe", "vertical", "pitch", "yaw", "roll"]
+)
+def test_exhausted_world_accepts_only_neutral_camera_release(axis: str) -> None:
+    """Accept final-chunk neutral cleanup without restarting an exhausted world."""
+    model = _model()
+    model.on_session_started()
+    model._selected_input = Path("anchor.jpg")
+    model._chunk_index = 512
+    model.state._restart_requested = False
+    model.state._limit_reached = True
+    command = getattr(model, f"set_{axis}")
+    state = command(0.0)
+    assert state.next_chunk is None
+    assert state.completed_chunks == 512
+    assert state.limit_reached is True
+    assert model.state._restart_requested is False
+    with pytest.raises(CommandError) as error:
+        command(0.05)
+    assert error.value.code == "rollout_limit_reached"

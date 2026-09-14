@@ -7,20 +7,6 @@ import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
-
 from matrix_game_2_assets import (
     load_input_image,
     prepare_runtime_assets,
@@ -39,6 +25,19 @@ from matrix_game_2_types import (
     RolloutLimitReached,
     StateUpdate,
 )
+from reactor_runtime import (
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorPipeline,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -177,8 +176,9 @@ class MatrixGame2(ReactorPipeline):
     @event(
         name="set_key_state",
         description=(
-            "Hold or release one WASD movement key for forthcoming chunks. Requires a selected "
-            "image; the complete held-key set is sampled as the official four-value multi-hot "
+            "Hold or release one WASD movement key for forthcoming chunks. Holding requires a "
+            "selected, unexhausted world; releasing is valid before image selection and after "
+            "the rollout limit. The complete held-key set is sampled as the four-value multi-hot "
             "condition when the next chunk starts. Emits `action_changed` and broadcasts "
             "`state_update` on success, or `command_error` when a reset is required."
         ),
@@ -202,8 +202,8 @@ class MatrixGame2(ReactorPipeline):
         ),
     ) -> ActionChanged:
         """Update one held WASD key and report the complete discrete action."""
-        self._require_playable_rollout()
         if pressed:
+            self._require_playable_rollout()
             self.state._pressed_keys = self.state._pressed_keys.union((key,))
         else:
             self.state._pressed_keys = self.state._pressed_keys.difference((key,))
@@ -220,7 +220,9 @@ class MatrixGame2(ReactorPipeline):
         name="set_pitch",
         description=(
             "Set continuous look-down or look-up camera velocity for forthcoming chunks. "
-            "Requires a selected image; the normalized value is sampled at the next chunk "
+            "Nonzero motion requires a selected, unexhausted world; zero releases this axis "
+            "even before image selection or after the rollout limit. The value is sampled at the "
+            "next chunk "
             "boundary and mapped to Matrix's native vertical mouse condition. Emits "
             "`camera_motion_changed` and broadcasts `state_update` on success."
         ),
@@ -237,7 +239,8 @@ class MatrixGame2(ReactorPipeline):
         ),
     ) -> CameraMotionChanged:
         """Queue normalized pitch and return the complete camera action."""
-        self._require_playable_rollout()
+        if pitch != 0.0:
+            self._require_playable_rollout()
         self.state.pitch = pitch
         message = self._camera_motion_changed()
         await self.send(self._state_update())
@@ -247,7 +250,9 @@ class MatrixGame2(ReactorPipeline):
         name="set_yaw",
         description=(
             "Set continuous turn-left or turn-right camera velocity for forthcoming chunks. "
-            "Requires a selected image; the normalized value is sampled at the next chunk "
+            "Nonzero motion requires a selected, unexhausted world; zero releases this axis "
+            "even before image selection or after the rollout limit. The value is sampled at the "
+            "next chunk "
             "boundary and mapped to Matrix's native horizontal mouse condition. Emits "
             "`camera_motion_changed` and broadcasts `state_update` on success."
         ),
@@ -264,7 +269,8 @@ class MatrixGame2(ReactorPipeline):
         ),
     ) -> CameraMotionChanged:
         """Queue normalized yaw and return the complete camera action."""
-        self._require_playable_rollout()
+        if yaw != 0.0:
+            self._require_playable_rollout()
         self.state.yaw = yaw
         message = self._camera_motion_changed()
         await self.send(self._state_update())
@@ -408,8 +414,10 @@ class MatrixGame2(ReactorPipeline):
                 "Reset Matrix-Game-2.0 before requesting another chunk.",
             )
 
-    def _next_control_chunk(self) -> int:
-        """Return the one-based chunk expected to sample controls accepted now."""
+    def _next_control_chunk(self) -> int | None:
+        """Return the next control chunk, or None when no future chunk can run."""
+        if self._selected_input is None or self.state._limit_reached:
+            return None
         if self.state._restart_requested:
             return 1
         return self._chunk_index + 1 + int(self._chunk_in_flight)
@@ -427,9 +435,7 @@ class MatrixGame2(ReactorPipeline):
             chunk_in_flight=self._chunk_in_flight,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,
-            next_chunk=None
-            if selected is None or self.state._limit_reached
-            else self._next_control_chunk(),
+            next_chunk=self._next_control_chunk(),
             max_chunks=max_chunks,
             last_chunk_frames=self._last_chunk_frames,
             pressed_keys=sorted(self.state._pressed_keys),

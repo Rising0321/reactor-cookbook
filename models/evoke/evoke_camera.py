@@ -94,7 +94,9 @@ def _plan_motion(
     delta[:3, :3] = (
         _rotation_z(float(roll_step))
         @ _rotation_y(float(yaw_step))
-        @ _rotation_x(float(-pitch_step))
+        # OpenCV camera coordinates use +Y down and +Z forward. Positive
+        # right-handed X rotation therefore points the optical axis upward.
+        @ _rotation_x(float(pitch_step))
     )
     delta[:3, 3] = translation
 

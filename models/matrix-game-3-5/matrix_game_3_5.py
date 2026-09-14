@@ -249,10 +249,10 @@ class MatrixGame35(ReactorPipeline):
     @event(
         name="set_forward",
         description=(
-            "Set backward-to-forward camera translation. Valid after selecting an image and "
-            "before the rollout limit; the value is sampled at the next 12-frame chunk "
-            "boundary and held for later chunks. Returns `state_update` on success, or "
-            "`command_error` until an image is selected or a limited rollout is reset."
+            "Set backward-to-forward translation, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `state_update` on success."
         ),
     )
     def set_forward(
@@ -269,17 +269,17 @@ class MatrixGame35(ReactorPipeline):
         ),
     ) -> StateUpdate:
         """Queue forward motion and return the complete shared world state."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=forward == 0.0)
         self.state.forward = forward
         return self._state_update()
 
     @event(
         name="set_strafe",
         description=(
-            "Set left-to-right camera translation. Valid after selecting an image and before "
-            "the rollout limit; the value is sampled at the next 12-frame chunk boundary and "
-            "held for later chunks. Returns `state_update` on success, or `command_error` until "
-            "an image is selected or a limited rollout is reset."
+            "Set left-to-right translation, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `state_update` on success."
         ),
     )
     def set_strafe(
@@ -296,17 +296,17 @@ class MatrixGame35(ReactorPipeline):
         ),
     ) -> StateUpdate:
         """Queue strafe motion and return the complete shared world state."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=strafe == 0.0)
         self.state.strafe = strafe
         return self._state_update()
 
     @event(
         name="set_vertical",
         description=(
-            "Set down-to-up camera translation. Valid after selecting an image and before the "
-            "rollout limit; the value is sampled at the next 12-frame chunk boundary and held "
-            "for later chunks. Returns `state_update` on success, or `command_error` until an "
-            "image is selected or a limited rollout is reset."
+            "Set down-to-up translation, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `state_update` on success."
         ),
     )
     def set_vertical(
@@ -323,17 +323,17 @@ class MatrixGame35(ReactorPipeline):
         ),
     ) -> StateUpdate:
         """Queue vertical motion and return the complete shared world state."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=vertical == 0.0)
         self.state.vertical = vertical
         return self._state_update()
 
     @event(
         name="set_pitch",
         description=(
-            "Set downward-to-upward camera pitch. Valid after selecting an image and before "
-            "the rollout limit; the value is sampled at the next 12-frame chunk boundary and "
-            "held for later chunks. Returns `state_update` on success, or `command_error` until "
-            "an image is selected or a limited rollout is reset."
+            "Set downward-to-upward pitch, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `state_update` on success."
         ),
     )
     def set_pitch(
@@ -350,17 +350,17 @@ class MatrixGame35(ReactorPipeline):
         ),
     ) -> StateUpdate:
         """Queue pitch motion and return the complete shared world state."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=pitch == 0.0)
         self.state.pitch = pitch
         return self._state_update()
 
     @event(
         name="set_yaw",
         description=(
-            "Set left-to-right camera yaw. Valid after selecting an image and before the "
-            "rollout limit; the value is sampled at the next 12-frame chunk boundary and held "
-            "for later chunks. Returns `state_update` on success, or `command_error` until an "
-            "image is selected or a limited rollout is reset."
+            "Set left-to-right yaw, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `state_update` on success."
         ),
     )
     def set_yaw(
@@ -377,17 +377,17 @@ class MatrixGame35(ReactorPipeline):
         ),
     ) -> StateUpdate:
         """Queue yaw motion and return the complete shared world state."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=yaw == 0.0)
         self.state.yaw = yaw
         return self._state_update()
 
     @event(
         name="set_roll",
         description=(
-            "Set counterclockwise-to-clockwise camera roll. Valid after selecting an image and "
-            "before the rollout limit; the value is sampled at the next 12-frame chunk "
-            "boundary and held for later chunks. Returns `state_update` on success, or "
-            "`command_error` until an image is selected or a limited rollout is reset."
+            "Set counterclockwise-to-clockwise roll, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `state_update` on success."
         ),
     )
     def set_roll(
@@ -404,7 +404,7 @@ class MatrixGame35(ReactorPipeline):
         ),
     ) -> StateUpdate:
         """Queue roll motion and return the complete shared world state."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=roll == 0.0)
         self.state.roll = roll
         return self._state_update()
 
@@ -523,14 +523,14 @@ class MatrixGame35(ReactorPipeline):
             return 1
         return self._chunk_index + 1 + int(self._chunk_in_flight)
 
-    def _require_available_rollout(self) -> None:
+    def _require_available_rollout(self, *, neutral: bool = False) -> None:
         """Reject controls until an image is selected or after the rollout limit."""
         if self._selected_input is None:
             raise CommandError(
                 "image_required",
                 "Select an image before requesting a Matrix chunk.",
             )
-        if self.state._limit_reached:
+        if self.state._limit_reached and not neutral:
             raise CommandError(
                 "rollout_limit_reached",
                 "Reset Matrix-Game-3.5 before requesting another chunk.",

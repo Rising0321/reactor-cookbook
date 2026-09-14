@@ -111,3 +111,26 @@ def test_camera_controls_require_an_image() -> None:
 
     with pytest.raises(CommandError):
         asyncio.run(world.set_forward(1.0))
+
+
+@pytest.mark.parametrize(
+    "axis", ["forward", "strafe", "vertical", "pitch", "yaw", "roll"]
+)
+def test_exhausted_world_accepts_only_neutral_camera_release(axis: str) -> None:
+    """A final-chunk release is safe and does not invent a future output."""
+    world, messages = _world()
+    world.on_session_started()
+    world._selected_input = Path("anchor.jpg")
+    world._chunk_index = 320
+    world.state._restart_requested = False
+    world.state._limit_reached = True
+    command = getattr(world, f"set_{axis}")
+    response = asyncio.run(command(0.0))
+    assert response.applies_to_chunk is None
+    assert messages[-1].next_chunk is None
+    assert messages[-1].completed_chunks == 320
+    assert world.state._limit_reached is True
+    assert world.state._restart_requested is False
+    with pytest.raises(CommandError) as error:
+        asyncio.run(command(0.05))
+    assert error.value.code == "rollout_limit_reached"

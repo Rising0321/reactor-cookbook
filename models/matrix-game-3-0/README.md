@@ -108,6 +108,18 @@ One Reactor chunk is one original Matrix iteration. The first chunk contains
 12 chunks, or 497 frames total. Playback adapts to measured inference
 throughput, and the output queue holds the largest complete chunk of 57 frames.
 
+The default session capacity is retained. A positive integer in
+`stream.max_chunks` selects another upstream iteration count without changing
+the native chunk sizes or denoising settings. Clients can inspect
+`state_update.max_chunks` and `limit_reached` before sending further controls.
+
+`set_key_state` describes each camera-relative direction explicitly: `w`
+forward, `s` backward, `a` strafe left, and `d` strafe right. Turning uses
+`set_yaw`, not strafe. `release_controls` atomically releases all keys and
+zeros pitch/yaw without resetting the world. Releases and zero-valued camera
+commands are valid before selecting an image and after the rollout limit;
+nonneutral controls require an initialized world with remaining capacity.
+
 The adapter loads `MatrixGame3Pipeline` once and runs its original interactive
 `generate()` method. It replaces only the blocking terminal action reader and
 per-iteration video writer at runtime. The upstream loop continues to own and

@@ -275,10 +275,10 @@ class LingBotWorldV1(ReactorPipeline):
     @event(
         name="set_forward",
         description=(
-            "Set backward-to-forward camera translation for the next chunk. Valid before the "
-            "rollout limit; the value is held for later chunks. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` until a fresh rollout is "
-            "started after the limit."
+            "Set backward-to-forward translation, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_forward(
@@ -299,10 +299,10 @@ class LingBotWorldV1(ReactorPipeline):
     @event(
         name="set_strafe",
         description=(
-            "Set left-to-right camera translation for the next chunk. Valid before the rollout "
-            "limit; the value is held for later chunks. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` until a fresh rollout is "
-            "started after the limit."
+            "Set left-to-right translation, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_strafe(
@@ -323,10 +323,10 @@ class LingBotWorldV1(ReactorPipeline):
     @event(
         name="set_vertical",
         description=(
-            "Set down-to-up camera translation for the next chunk. Valid before the rollout "
-            "limit; the value is held for later chunks. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` until a fresh rollout is "
-            "started after the limit."
+            "Set down-to-up translation, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_vertical(
@@ -347,10 +347,10 @@ class LingBotWorldV1(ReactorPipeline):
     @event(
         name="set_pitch",
         description=(
-            "Set downward-to-upward camera pitch for the next chunk. Valid before the rollout "
-            "limit; the value is held for later chunks. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` until a fresh rollout is "
-            "started after the limit."
+            "Set downward-to-upward pitch, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_pitch(
@@ -371,10 +371,10 @@ class LingBotWorldV1(ReactorPipeline):
     @event(
         name="set_yaw",
         description=(
-            "Set left-to-right camera yaw for the next chunk. Valid before the rollout limit; "
-            "the value is held for later chunks. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` until a fresh rollout is "
-            "started after the limit."
+            "Set left-to-right yaw, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_yaw(
@@ -395,10 +395,10 @@ class LingBotWorldV1(ReactorPipeline):
     @event(
         name="set_roll",
         description=(
-            "Set counterclockwise-to-clockwise camera roll for the next chunk. Valid before the "
-            "rollout limit; the value is held for later chunks. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` until a fresh rollout is "
-            "started after the limit."
+            "Set counterclockwise-to-clockwise roll, held until changed or released. "
+            "Requires a selected image. Nonzero input requires available rollout capacity; "
+            "zero safely releases this axis even after the limit, without resetting the world. "
+            "Returns `camera_motion_changed` and broadcasts `state_update` on success."
         ),
     )
     async def set_roll(
@@ -515,7 +515,7 @@ class LingBotWorldV1(ReactorPipeline):
 
     async def _set_axis(self, name: str, value: float) -> CameraMotionChanged:
         """Set one validated axis, broadcast state, and report held camera motion."""
-        self._require_available_rollout()
+        self._require_available_rollout(neutral=value == 0.0)
         setattr(self.state, name, value)
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -530,7 +530,9 @@ class LingBotWorldV1(ReactorPipeline):
             pitch=self.state.pitch,
             yaw=self.state.yaw,
             roll=self.state.roll,
-            applies_to_chunk=self._next_control_chunk(),
+            applies_to_chunk=(
+                None if self.state._limit_reached else self._next_control_chunk()
+            ),
         )
 
     def _select_sample(self, sample: Sample) -> None:
@@ -557,14 +559,14 @@ class LingBotWorldV1(ReactorPipeline):
         self._last_chunk_seconds = None
         self.output.flush()
 
-    def _require_available_rollout(self) -> None:
+    def _require_available_rollout(self, *, neutral: bool = False) -> None:
         """Reject controls that cannot apply until a fresh rollout starts."""
         if self._selected_input is None:
             raise CommandError(
                 "image_required",
                 "Upload an image or select a random image before this command.",
             )
-        if self.state._limit_reached:
+        if self.state._limit_reached and not neutral:
             raise CommandError(
                 "rollout_limit_reached",
                 "Reset LingBot-World or select an image before requesting another chunk.",

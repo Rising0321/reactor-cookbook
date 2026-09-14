@@ -174,9 +174,7 @@ class MatrixGame30(ReactorPipeline):
         if not normalized:
             raise CommandError("prompt_required", "Matrix-Game 3.0 requires a prompt.")
         if self._selected_input is None:
-            raise CommandError(
-                "image_required", "Select an image before setting a prompt."
-            )
+            raise CommandError("image_required", "Select an image before setting a prompt.")
         self.state.prompt = normalized
         self._request_fresh_rollout()
         return self._state_update()
@@ -232,9 +230,7 @@ class MatrixGame30(ReactorPipeline):
         """Select a random built-in example and queue its first native chunk."""
         config = self._require_config()
         candidates = [
-            index
-            for index in range(len(config.examples))
-            if index != self._example_index
+            index for index in range(len(config.examples)) if index != self._example_index
         ]
         if candidates:
             self._example_index = int(self._example_rng.choice(candidates))
@@ -247,11 +243,11 @@ class MatrixGame30(ReactorPipeline):
     @event(
         name="set_key_state",
         description=(
-            "Hold or release one native W/S/A/D keyboard token for subsequent chunks. Valid "
-            "before the 12-chunk rollout limit; the complete binary "
-            "key state is sampled at the next 57- or 40-frame chunk boundary. Emits "
-            "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
-            "with `rollout_limit_reached` at the limit."
+            "Hold or release one native W/S/A/D movement key for subsequent chunks. Holding "
+            "requires an image and available rollout capacity; release is valid before image "
+            "selection and after exhaustion. The complete key state is sampled at the next "
+            "57- or 40-frame chunk boundary. Returns `controls_changed` and broadcasts "
+            "`state_update` on success."
         ),
     )
     async def set_key_state(
@@ -260,8 +256,9 @@ class MatrixGame30(ReactorPipeline):
             default="w",
             choices=MOVEMENT_KEYS,
             description=(
-                "Native Matrix movement key. Each held key directly sets its corresponding "
-                "binary W/S/A/D action channel; perpendicular pairs produce diagonals."
+                "Camera-relative movement: `w` moves forward, `s` moves backward, `a` strafes "
+                "left, and `d` strafes right. These do not turn the view; use set_yaw for turning. "
+                "Each held key sets its binary channel; perpendicular pairs produce diagonals."
             ),
         ),
         pressed: bool = InputField(
@@ -273,7 +270,8 @@ class MatrixGame30(ReactorPipeline):
         ),
     ) -> ControlsChanged:
         """Update one native keyboard token and report all held controls."""
-        self._require_available_rollout()
+        if pressed:
+            self._require_available_rollout()
         if pressed:
             self.state._pressed_keys = self.state._pressed_keys.union((key,))
         else:
@@ -285,11 +283,11 @@ class MatrixGame30(ReactorPipeline):
     @event(
         name="set_pitch",
         description=(
-            "Set continuous camera pitch for subsequent native chunks. Valid before the "
-            "12-chunk rollout limit; the normalized value is scaled "
-            "to Matrix's native mouse-x range and sampled at the next chunk boundary. Emits "
-            "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
-            "with `rollout_limit_reached` at the limit."
+            "Set continuous camera pitch for subsequent native chunks. Nonzero motion requires "
+            "an image and available rollout capacity; zero releases this axis before image "
+            "selection or after exhaustion. The normalized value maps to native mouse-x and "
+            "is sampled at the next chunk boundary. Returns `controls_changed` and broadcasts "
+            "`state_update` on success."
         ),
     )
     async def set_pitch(
@@ -305,7 +303,8 @@ class MatrixGame30(ReactorPipeline):
         ),
     ) -> ControlsChanged:
         """Set normalized native pitch and report all held controls."""
-        self._require_available_rollout()
+        if pitch != 0.0:
+            self._require_available_rollout()
         self.state.pitch = pitch
         message = self._controls_changed("set_pitch")
         await self.send(self._state_update())
@@ -314,11 +313,11 @@ class MatrixGame30(ReactorPipeline):
     @event(
         name="set_yaw",
         description=(
-            "Set continuous camera yaw for subsequent native chunks. Valid before the "
-            "12-chunk rollout limit; the normalized value is scaled "
-            "to Matrix's native mouse-y range and sampled at the next chunk boundary. Emits "
-            "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
-            "with `rollout_limit_reached` at the limit."
+            "Set continuous camera yaw for subsequent native chunks. Nonzero motion requires "
+            "an image and available rollout capacity; zero releases this axis before image "
+            "selection or after exhaustion. The normalized value maps to native mouse-y and "
+            "is sampled at the next chunk boundary. Returns `controls_changed` and broadcasts "
+            "`state_update` on success."
         ),
     )
     async def set_yaw(
@@ -334,9 +333,25 @@ class MatrixGame30(ReactorPipeline):
         ),
     ) -> ControlsChanged:
         """Set normalized native yaw and report all held controls."""
-        self._require_available_rollout()
+        if yaw != 0.0:
+            self._require_available_rollout()
         self.state.yaw = yaw
         message = self._controls_changed("set_yaw")
+        await self.send(self._state_update())
+        return message
+
+    @event(
+        name="release_controls",
+        description=(
+            "Atomically release all movement keys and set pitch and yaw to zero without "
+            "resetting the world. Valid before image selection and after "
+            "the rollout limit. Emits `controls_changed` and broadcasts `state_update`."
+        ),
+    )
+    async def release_controls(self) -> ControlsChanged:
+        """Set the complete six-channel control state to neutral."""
+        self._clear_controls()
+        message = self._controls_changed("release_controls")
         await self.send(self._state_update())
         return message
 
@@ -463,9 +478,7 @@ class MatrixGame30(ReactorPipeline):
             else "built_in"
         )
         next_chunk = (
-            None
-            if selected is None or self.state._limit_reached
-            else self._chunk_index + 1
+            None if selected is None or self.state._limit_reached else self._chunk_index + 1
         )
         return StateUpdate(
             prompt=self.state.prompt,

@@ -104,7 +104,11 @@ The frontend owns device mapping. WASD maps naturally to `forward` and
 `strafe`; pointer, arrow, touch, or gamepad input can drive `yaw` and `pitch`;
 additional controls can drive `vertical` and `roll`. Sending the complete
 camera state in one `set_camera` call keeps diagonal movement and simultaneous
-rotation on the same chunk boundary.
+translation/rotation atomic. Translation is direction-only: each native chunk normalizes
+the forward/strafe/vertical vector. Changing a lone nonzero axis from 0.05 to 0.1 does
+not increase displacement scale; only its sign and, for combined axes, their relative
+ratios matter. More native chunks accumulate motion. Pitch/yaw/roll remain
+magnitude-sensitive angular rates.
 
 Prompt and camera commands accepted during inference apply to the following
 chunk. An in-flight GPU chunk finishes before a reset or disconnect takes
@@ -149,6 +153,10 @@ The public model ships a 1024-position temporal RoPE table. At four latents per
 chunk, one world supports 256 chunks: about 4 minutes and 15 seconds of steady
 16 FPS video after the first chunk. Reaching the limit idles generation;
 `reset`, `set_image`, or `random_image` starts a fresh timeline.
+`release_camera` and all-zero `set_camera` remain valid after the limit, without
+resetting or resuming generation. Their `camera_motion_changed` reply contains
+`applies_to_chunk: null`; nonzero camera input still requires a fresh timeline.
+Before image selection, `state_update.next_chunk` and `next_chunk_frames` are null.
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
 clips up to five minutes. LingBot-World-V2 emits video without audio.

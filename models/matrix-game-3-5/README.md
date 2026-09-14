@@ -160,9 +160,11 @@ disconnect take effect when inference returns to Runtime.
 
 `stream.max_chunks` bounds the preallocated PRoPE camera timeline. The default
 512 chunks cover 6.4 minutes. After the final chunk, generation stops and emits
-`RolloutLimitReached` followed by a `StateUpdate` with `limit_reached: true` and
-`next_chunk: null`. Camera commands then return `rollout_limit_reached` until
-`reset` or `set_image` starts a fresh timeline.
+`rollout_limit_reached` followed by a `state_update` with `limit_reached: true` and
+`next_chunk: null`. Nonzero camera commands return a `command_error` with code
+`rollout_limit_reached` until `reset` or `set_image` starts a fresh timeline.
+Zero-valued camera commands remain valid for safely releasing each axis; they
+preserve the exhausted world and return `state_update` with `next_chunk: null`.
 Reset releases the prior KV and memory state while preserving loaded weights.
 
 Ending a session also releases its rollout caches and request workspace while

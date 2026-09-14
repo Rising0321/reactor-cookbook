@@ -84,6 +84,14 @@ Keyboard and camera values are sampled together at the next chunk boundary.
 Changing a control while one chunk is in flight applies it to the following
 chunk. Ending the session releases all controls.
 
+Releasing a key, setting either camera axis to zero, and `release_controls`
+remain valid before image selection and after `rollout_limit_reached`. Key and
+camera replies report `applies_to_chunk` as null when no future chunk can run;
+`state_update` reports `next_chunk` as null. Holding a key or
+requesting nonzero camera motion requires an initialized, unexhausted world.
+An exhausted world requires an explicit `reset` or image selection; releasing
+controls does not restart it.
+
 ## Start from a public demo
 
 `random_image` selects one of the public universal example images in the pinned

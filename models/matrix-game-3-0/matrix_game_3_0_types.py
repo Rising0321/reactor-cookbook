@@ -58,7 +58,7 @@ class StateUpdate(ModelMessage):
     )
     limit_reached: bool = MessageField(
         description=(
-            "Whether the official 12-iteration rollout has completed. Use `reset`, "
+            "Whether the rollout has reached `max_chunks`. Use `reset`, "
             "`set_image`, `set_prompt`, or `random_image` to begin another rollout."
         )
     )
@@ -82,8 +82,8 @@ class StateUpdate(ModelMessage):
     )
     max_chunks: int = MessageField(
         description=(
-            "Native iteration count retained from the upstream distilled inference recipe; "
-            "the default is 12 chunks."
+            "Maximum number of native chunks in the current rollout. "
+            "Inspect this value before planning further generation."
         )
     )
     pressed_keys: list[str] = MessageField(
@@ -112,7 +112,7 @@ class ControlsChanged(ModelMessage):
     control: str = MessageField(
         description=(
             "Wire name of the command that produced this snapshot: `set_key_state`, "
-            "`set_pitch`, or `set_yaw`."
+            "`set_pitch`, `set_yaw`, or `release_controls`."
         )
     )
     pressed_keys: list[str] = MessageField(

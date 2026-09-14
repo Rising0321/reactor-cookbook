@@ -91,9 +91,9 @@ def read_config(config_path: Path | None) -> MatrixGame30Config:
     num_inference_steps = int(inference.get("num_inference_steps", 3))
     if num_inference_steps <= 0:
         raise ValueError("inference.num_inference_steps must be positive")
-    max_chunks = int(stream.get("max_chunks", 12))
-    if max_chunks != 12:
-        raise ValueError("stream.max_chunks must remain 12 to match upstream inference")
+    max_chunks = stream.get("max_chunks", 12)
+    if isinstance(max_chunks, bool) or not isinstance(max_chunks, int) or max_chunks <= 0:
+        raise ValueError("stream.max_chunks must be a positive integer")
     timeout = float(stream.get("chunk_timeout_seconds", 1800.0))
     if timeout <= 0:
         raise ValueError("stream.chunk_timeout_seconds must be positive")

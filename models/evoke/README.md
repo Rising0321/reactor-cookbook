@@ -162,9 +162,15 @@ mode and filenames, prompt, seed, completed and next chunk, and all six
 camera axes. A newly connected viewer and every completed chunk receive the
 same snapshot.
 
-After 512 chunks, the adapter starts a fresh rollout from the active condition
-and emits `rollout_restarted`. This bounds the preallocated pose timeline while
-keeping checkpoints and the worker resident.
+New sessions wait for `set_image`, `set_reference_video`, or `start_text` and do
+not generate a built-in demo. After 512 chunks, generation stops and emits
+`rollout_limit_reached`; `state_update.limit_reached` is true and `next_chunk`
+is null. The final world is retained. Only explicit `reset` or conditioning
+selection starts another world; neutral control releases remain valid.
+
+`release_controls` atomically neutralizes all six camera axes, including in
+text-only mode, before conditioning, and after the rollout limit. It does not
+reset the world or resume an exhausted rollout.
 
 ## Public source and model assets
 

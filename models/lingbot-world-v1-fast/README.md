@@ -133,6 +133,9 @@ immediately.
 
 `rollout_limit_reached` reports when generation stops at the configured safe
 RoPE boundary. `reset`, `set_image`, or `random_image` starts a fresh timeline.
+Zero-valued camera commands remain valid after that boundary and safely release
+the corresponding axis without resetting the world. Their `camera_motion_changed`
+reply has `applies_to_chunk: null`; nonzero motion still requires a fresh timeline.
 Message delivery remains outside the synchronous inference loop.
 
 ## Public source and model assets

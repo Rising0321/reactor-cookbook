@@ -87,6 +87,7 @@ def test_contract_documents_commands_messages_and_video_track() -> None:
     """Expose every control and response through a polished Reactor schema."""
     contract = ModelContract.of(Evoke)
     assert set(contract.commands) == {
+        "release_controls",
         "reset",
         "set_forward",
         "set_image",
@@ -116,14 +117,14 @@ def test_contract_documents_commands_messages_and_video_track() -> None:
     ]
     assert set(document["webhooks"]) == {
         "command_applied",
-        "rollout_restarted",
+        "rollout_limit_reached",
         "state_update",
     }
     assert all(
         webhook["post"]["summary"].startswith("Emitted ")
         for webhook in document["webhooks"].values()
     )
-    for name in ("StateUpdate", "CommandApplied", "RolloutRestarted"):
+    for name in ("StateUpdate", "CommandApplied", "RolloutLimitReached"):
         properties = document["components"]["schemas"][name]["properties"]
         assert all(
             property_schema.get("description")
