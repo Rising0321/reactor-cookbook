@@ -10,13 +10,17 @@ ZingKey = Literal["w", "a", "s", "d", "i", "j", "k", "l"]
 
 class ZingOutput(Output):
     """Carry one generated RGB frame batch."""
+
     main_video: Video
 
 
 class ZingState(InputState):
     """Store the shared prompt and held world controls."""
+
     prompt: str = InputField(
-        default="", max_length=4096, moderate=True,
+        default="",
+        max_length=4096,
+        moderate=True,
         description=(
             "Active scene and motion description, up to 4096 characters. A non-empty change is "
             "sampled at the next chunk boundary and preserves the current world history."
@@ -28,6 +32,7 @@ class ZingState(InputState):
 
 class StateUpdate(ModelMessage):
     """Emitted after connection, state mutation, reset, or chunk completion."""
+
     prompt: str = MessageField(
         description="Prompt for the current or queued world, or an empty string before input."
     )
@@ -59,10 +64,33 @@ class StateUpdate(ModelMessage):
     generating: bool = MessageField(
         description="Whether image preparation or one video chunk is in progress."
     )
+    max_chunks: int = MessageField(
+        description="Maximum chunks before generation stops; a new world requires "
+        "an explicit reset or image selection."
+    )
+    limit_reached: bool = MessageField(
+        description="Whether this world is exhausted. Its final view and history are retained; "
+        "generation does not restart automatically."
+    )
+    world_epoch: int = MessageField(
+        description="Session-local world identifier, incremented only when an explicit input "
+        "or reset queues a fresh world."
+    )
+
+
+class RolloutLimitReached(ModelMessage):
+    """Emitted once when the final chunk completes, without replacing the world."""
+
+    completed_chunks: int = MessageField(description="Completed chunks in the exhausted world.")
+    max_chunks: int = MessageField(description="Maximum chunks supported by this rollout.")
+    world_epoch: int = MessageField(
+        description="Identifier of the exhausted world; no implicit reset occurs."
+    )
 
 
 class PromptQueued(ModelMessage):
     """Emitted when a prompt is accepted for a forthcoming chunk."""
+
     prompt: str = MessageField(description="Normalized prompt accepted by `set_prompt`.")
     applies_to_chunk: int = MessageField(
         description="One-based chunk that will first sample the accepted prompt."
@@ -74,6 +102,7 @@ class PromptQueued(ModelMessage):
 
 class ImageSelected(ModelMessage):
     """Emitted when an uploaded or built-in image starts a fresh world."""
+
     source: Literal["uploaded", "built_in"] = MessageField(
         description="Selected image source: `uploaded` or `built_in`."
     )
@@ -84,28 +113,33 @@ class ImageSelected(ModelMessage):
 
 class ActionChanged(ModelMessage):
     """Emitted when one held movement or look control changes successfully."""
+
     key: ZingKey = MessageField(description="Control changed by `set_key`.")
     pressed: bool = MessageField(description="Whether `key` is now held or released.")
     pressed_keys: list[str] = MessageField(
         description="Complete set of controls held after the change."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that will first sample the complete held state."
+    applies_to_chunk: int | None = MessageField(
+        description="One-based chunk that will first sample the complete held state, "
+        "or null at the rollout limit."
     )
 
 
 class ControlsReleased(ModelMessage):
     """Emitted when every held movement and look control is released."""
+
     released_keys: list[str] = MessageField(
         description="Controls that were held before `release_controls`."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that will first sample neutral controls."
+    applies_to_chunk: int | None = MessageField(
+        description="One-based chunk that will first sample neutral controls, "
+        "or null at the rollout limit."
     )
 
 
 class RolloutReset(ModelMessage):
     """Emitted when `reset` queues a fresh world from the selected condition."""
+
     seed: int = MessageField(description="Random seed selected for the fresh world.")
     replaced_chunks: int = MessageField(
         description="Number of completed chunks that the fresh world will replace."
@@ -114,6 +148,7 @@ class RolloutReset(ModelMessage):
 
 class ChunkCompleted(ModelMessage):
     """Emitted after one causal chunk finishes and before its RGB frames stream."""
+
     chunk: int = MessageField(description="One-based index of the completed chunk.")
     video_frames: int = MessageField(
         description="Number of RGB frames carried by `main_video`; normally 16."

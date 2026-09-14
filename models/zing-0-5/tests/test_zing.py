@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import pytest
 from PIL import Image
 from reactor_runtime import UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
@@ -30,6 +31,9 @@ def test_contract_covers_text_image_and_all_native_controls() -> None:
 
 def test_released_cache_and_chunk_geometry_are_preserved() -> None:
     config = read_config(Path(__file__).parents[1] / "zing.yaml")
+    source_override = os.environ.get("ZING_TEST_SOURCE_PATH")
+    if source_override:
+        config = replace(config, source_path=Path(source_override))
     activate_source(config)
     from zing_v0_5.config import load_config
     upstream = load_config(config.source_path / "config" / "zing.yaml")

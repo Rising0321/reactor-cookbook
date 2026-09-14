@@ -56,12 +56,20 @@ curl -fsS http://localhost:8080/schema
 ```
 
 The checked-in `runtime.weights_path` is
-`/opt/dlami/nvme/.cache_hf/zing-0.5`. Reactor mounts that host directory at the
+`~/.cache/reactor_registry/zing-0-5`. Reactor mounts the resolved host directory at the
 same path in the container, and the adapter resolves the checkpoint, Hugging
 Face cache, uploaded-image workspace, and compiled-kernel caches beneath it.
 Change that manifest value when another high-capacity host volume is preferred.
 Configure Docker's image and build-cache storage on that volume separately when
 the system disk is small.
+
+The pinned upstream source is built into the image at `/opt/zing-world-model`.
+For a source checkout outside Docker, set `source.path` in `zing.yaml` to
+a writable checkout location; it is independent of the model's persistent weights.
+
+The upstream-fidelity test needs the pinned source checkout, but no weights or
+GPU. When testing outside the built image, set `ZING_TEST_SOURCE_PATH` to
+that checkout before running `PYTHONPATH=. python -m pytest tests/ -q`.
 
 ## Runtime boundary
 
@@ -84,6 +92,11 @@ lifecycle events take effect only between complete native chunks.
 
 New sessions remain idle until a client calls `set_prompt`, `set_image`, or
 `example_image`.
+
+Generation stops at `state_update.max_chunks` and emits `rollout_limit_reached`.
+It retains the final world and never resets automatically. `state_update`
+reports `limit_reached` and `world_epoch`; only an explicit input selection or
+`reset` starts a new epoch. Controls can always be released at the limit.
 
 ## Controls
 
@@ -134,9 +147,10 @@ Message delivery stays outside the synchronous inference loop.
 ## Rollout length and recording
 
 `zing.yaml` limits one continuous world to 32 chunks. Reaching the configured
-bound automatically starts a fresh world from the same selected condition,
-prompt, and seed. Calling `reset`, `set_image`, or an initial `set_prompt` also
-starts a fresh timeline.
+bound stops generation without changing the current world, prompt, or seed.
+`rollout_limit_reached` reports exhaustion; `reset`, `set_image`, or
+`example_image` explicitly starts a fresh timeline. An initial `set_prompt`
+starts a text-conditioned world before any image is selected.
 
 `reactor.yaml` records `main_video` by default. Zing 0.5 emits video without
 audio.

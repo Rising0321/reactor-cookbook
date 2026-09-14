@@ -1,5 +1,5 @@
 source:
-  path: /opt/dlami/nvme/.cache_hf/sources/zing-world-model
+  path: /opt/zing-world-model
   url: https://github.com/seedleap/zing-world-model.git
   revision: 8dd446798f2dec160351c17484c53e8deaaf7ef4
 assets:

@@ -9,18 +9,38 @@ from typing import Literal, Protocol
 
 import numpy as np
 from reactor_runtime import (
-    ClientInfo, CommandError, InputField, ReactorPipeline, UploadedFile,
-    connected, disconnected, event, session_ended, session_started,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorPipeline,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    session_ended,
+    session_started,
 )
 from reactor_runtime.log import get_logger
 
 from zing_assets import (
-    ZingAdapterConfig, activate_source, configure_environment, prepare_assets, read_config,
+    ZingAdapterConfig,
+    activate_source,
+    configure_environment,
+    prepare_assets,
+    read_config,
 )
 from zing_images import materialized_image, validate_image
 from zing_types import (
-    ActionChanged, ChunkCompleted, ControlsReleased, ImageSelected, PromptQueued,
-    RolloutReset, StateUpdate, ZingOutput, ZingState,
+    ActionChanged,
+    ChunkCompleted,
+    ControlsReleased,
+    ImageSelected,
+    PromptQueued,
+    RolloutLimitReached,
+    RolloutReset,
+    StateUpdate,
+    ZingOutput,
+    ZingState,
 )
 
 logger = get_logger(__name__)
@@ -51,6 +71,8 @@ class Zing(ReactorPipeline):
         self._active_prompt: str | None = None
         self._completed_chunks = 0
         self._generating = False
+        self._limit_reached = False
+        self._world_epoch = 0
 
     def load(self, config_path: Path | None) -> None:
         config = read_config(config_path)
@@ -58,12 +80,15 @@ class Zing(ReactorPipeline):
         prepare_assets(config)
         activate_source(config)
         from zing_backend import ZingBackend
+
         self._config = config
         self._seed = config.seed
         self._backend = ZingBackend(config)
         logger.info(
-            "Zing 0.5 ready", source_revision=config.source_revision,
-            checkpoint_revision=config.asset_revision, cache_window="97/9",
+            "Zing 0.5 ready",
+            source_revision=config.source_revision,
+            checkpoint_revision=config.asset_revision,
+            cache_window="97/9",
             frames_per_chunk=16,
         )
 
@@ -80,6 +105,8 @@ class Zing(ReactorPipeline):
         self._active_prompt = None
         self._completed_chunks = 0
         self._generating = False
+        self._limit_reached = False
+        self._world_epoch = 0
 
     @session_ended
     def on_session_ended(self) -> None:
@@ -118,7 +145,8 @@ class Zing(ReactorPipeline):
     async def set_prompt(
         self,
         prompt: str = InputField(
-            max_length=4096, moderate=True,
+            max_length=4096,
+            moderate=True,
             description=(
                 "Non-empty scene, appearance, subject, camera, and motion description, up to "
                 "4096 characters. Whitespace is trimmed and the result is sampled when the next "
@@ -128,6 +156,12 @@ class Zing(ReactorPipeline):
     ) -> PromptQueued:
         """Queue a prompt and report the chunk expected to consume it."""
         normalized = prompt.strip()
+        if self._limit_reached:
+            raise CommandError(
+                "rollout_limit_reached",
+                "The current world is exhausted; select an image or explicitly reset "
+                "to start a new world.",
+            )
         if not normalized:
             raise CommandError("empty_prompt", "Zing requires a non-empty prompt.")
         initial = self._completed_chunks == 0 and self._active_prompt is None
@@ -138,7 +172,8 @@ class Zing(ReactorPipeline):
             self._image_name = None
             self._request_reset()
         message = PromptQueued(
-            prompt=normalized, applies_to_chunk=self._completed_chunks + 1,
+            prompt=normalized,
+            applies_to_chunk=self._completed_chunks + 1,
             resets_rollout=starts_text_rollout,
         )
         await self.send(self._state_update())
@@ -163,7 +198,9 @@ class Zing(ReactorPipeline):
             ),
         ),
         prompt: str = InputField(
-            default="", max_length=4096, moderate=True,
+            default="",
+            max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene and motion description for the fresh world. An empty value uses "
                 "the configured image-neutral prompt."
@@ -224,8 +261,9 @@ class Zing(ReactorPipeline):
     @event(
         name="set_key",
         description=(
-            "Press or release one held world control for forthcoming chunks. `w`, `a`, `s`, and "
-            "`d` control movement; `i`, `j`, `k`, and `l` control look direction. The complete "
+            "Press or release one held native key for forthcoming chunks. "
+            "`w`: move forward; `a`: strafe left; `s`: move backward; `d`: strafe right; "
+            "`i`: look up; `j`: look left; `k`: look down; `l`: look right. The complete "
             "held state is sampled when the next chunk begins and remains active until changed or "
             "released. Emits `action_changed` and broadcasts `state_update` on success."
         ),
@@ -234,8 +272,11 @@ class Zing(ReactorPipeline):
         self,
         key: Literal["w", "a", "s", "d", "i", "j", "k", "l"] = InputField(
             description=(
-                "Control to change: `w`/`a`/`s`/`d` move forward/left/backward/right, and "
-                "`i`/`j`/`k`/`l` look up/left/down/right."
+                "Native key to change: `w`: move forward; `a`: strafe left; "
+                "`s`: move backward; `d`: strafe right; `i`: look up; "
+                "`j`: look left; `k`: look down; `l`: look right. "
+                "Native key names are not external action labels. "
+                "Looking down requires native `k`, never native `j`."
             )
         ),
         pressed: bool = InputField(
@@ -243,6 +284,12 @@ class Zing(ReactorPipeline):
         ),
     ) -> ActionChanged:
         """Change one held control and report the complete held state."""
+        if pressed and self._limit_reached:
+            raise CommandError(
+                "rollout_limit_reached",
+                "The current world is exhausted; controls can only be released "
+                "until an explicit reset.",
+            )
         keys = set(self.state._pressed_keys)
         (keys.add if pressed else keys.discard)(key)
         self.state._pressed_keys = frozenset(keys)
@@ -251,7 +298,7 @@ class Zing(ReactorPipeline):
             key=key,
             pressed=pressed,
             pressed_keys=sorted(keys),
-            applies_to_chunk=self._completed_chunks + 1,
+            applies_to_chunk=None if self._limit_reached else self._completed_chunks + 1,
         )
 
     @event(
@@ -267,7 +314,10 @@ class Zing(ReactorPipeline):
         released = sorted(self.state._pressed_keys)
         self.state._pressed_keys = frozenset()
         await self.send(self._state_update())
-        return ControlsReleased(released_keys=released, applies_to_chunk=self._completed_chunks + 1)
+        return ControlsReleased(
+            released_keys=released,
+            applies_to_chunk=None if self._limit_reached else self._completed_chunks + 1,
+        )
 
     @event(
         name="reset",
@@ -302,8 +352,9 @@ class Zing(ReactorPipeline):
             if self._conditioning == "none" and not self.state._reset_requested:
                 yield None
                 continue
-            if self._completed_chunks >= config.max_chunks:
-                self._request_reset()
+            if self._limit_reached and not self.state._reset_requested:
+                yield None
+                continue
             if self.state._reset_requested:
                 self._generating = True
                 await self.send(self._state_update())
@@ -330,11 +381,26 @@ class Zing(ReactorPipeline):
             self._completed_chunks += 1
             self._active_prompt = sampled_prompt
             self._generating = False
-            await self.send(ChunkCompleted(
-                chunk=self._completed_chunks, video_frames=int(frames.shape[0]),
-                generation_seconds=elapsed, prompt=sampled_prompt,
-                action_keys=sorted(sampled_keys), cache_frames=backend.cache_frames(),
-            ))
+            if self._completed_chunks >= config.max_chunks:
+                self._limit_reached = True
+                self.state._pressed_keys = frozenset()
+                await self.send(
+                    RolloutLimitReached(
+                        completed_chunks=self._completed_chunks,
+                        max_chunks=config.max_chunks,
+                        world_epoch=self._world_epoch,
+                    )
+                )
+            await self.send(
+                ChunkCompleted(
+                    chunk=self._completed_chunks,
+                    video_frames=int(frames.shape[0]),
+                    generation_seconds=elapsed,
+                    prompt=sampled_prompt,
+                    action_keys=sorted(sampled_keys),
+                    cache_frames=backend.cache_frames(),
+                )
+            )
             await self.send(self._state_update())
             yield ZingOutput(main_video=frames)
 
@@ -343,16 +409,24 @@ class Zing(ReactorPipeline):
         self.state._pressed_keys = frozenset()
         self._active_prompt = None
         self._completed_chunks = 0
-        if getattr(self, "output", None) is not None:
-            self.output.flush()
+        self._limit_reached = False
+        self._world_epoch += 1
+        self.output.flush()
 
     def _state_update(self) -> StateUpdate:
         return StateUpdate(
-            prompt=self.state.prompt, active_prompt=self._active_prompt,
-            pressed_keys=sorted(self.state._pressed_keys), conditioning=self._conditioning,
-            image_name=self._image_name, seed=self._seed,
-            completed_chunks=self._completed_chunks, reset_queued=self.state._reset_requested,
+            prompt=self.state.prompt,
+            active_prompt=self._active_prompt,
+            pressed_keys=sorted(self.state._pressed_keys),
+            conditioning=self._conditioning,
+            image_name=self._image_name,
+            seed=self._seed,
+            completed_chunks=self._completed_chunks,
+            reset_queued=self.state._reset_requested,
             generating=self._generating,
+            max_chunks=self._config.max_chunks if self._config is not None else 0,
+            limit_reached=self._limit_reached,
+            world_epoch=self._world_epoch,
         )
 
     def _require_config(self) -> ZingAdapterConfig:
@@ -369,5 +443,6 @@ class Zing(ReactorPipeline):
 class _null_image:
     def __enter__(self) -> None:
         return None
+
     def __exit__(self, *_: object) -> None:
         return None

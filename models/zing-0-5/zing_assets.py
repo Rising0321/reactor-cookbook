@@ -1,4 +1,4 @@
-"""Resolve Zing's pinned source, checkpoint, and NVMe cache paths."""
+"""Resolve Zing's pinned source, checkpoint, and persistent cache paths."""
 
 from __future__ import annotations
 
