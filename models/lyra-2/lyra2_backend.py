@@ -9,10 +9,10 @@ from pathlib import Path
 from types import MethodType
 
 import numpy as np
+from reactor_runtime import get_weights_path
 
-# TE's cuDNN fused-attention backend rejects hosts that expose more than one
-# CUDA runtime (this DLAMI has system CUDA 13 beside PyTorch's CUDA 12). Lyra's
-# own DotProductAttention supports the equivalent FlashAttention path.
+# Use Lyra's FlashAttention path to avoid mixed CUDA/cuDNN fused-attention
+# dependencies. Explicit environment settings take precedence.
 os.environ.setdefault("NVTE_FUSED_ATTN", "0")
 os.environ.setdefault("NVTE_FLASH_ATTN", "1")
 
@@ -23,7 +23,7 @@ class Lyra2Backend:
     def __init__(self, config: dict):
         self.config = config
         source = Path(config["source_path"]).resolve()
-        weights = Path(os.environ.get("REACTOR_WEIGHTS_PATH", source.parent)).resolve()
+        weights = get_weights_path().expanduser().resolve()
         mounted_checkpoints = weights / "source/Lyra-2/checkpoints"
         image_checkpoints = source / "checkpoints"
         if not image_checkpoints.exists():
@@ -45,8 +45,8 @@ class Lyra2Backend:
             output_root=str(weights / config["output_path"]),
         )
         # The released GUI wrapper is tuned for smaller cards and contains
-        # additional hard-coded CPU moves beyond args.offload. This deployment
-        # has a 183 GiB B200, so keep diffusion, CLIP, DA3 and UMT5 resident.
+        # additional hard-coded CPU moves beyond args.offload. This B200 recipe
+        # keeps diffusion, CLIP, DA3 and UMT5 resident.
         self.model.args.offload = False
         self.model.args.offload_vae = False
         self.model.args.offload_da3_diffusion = False

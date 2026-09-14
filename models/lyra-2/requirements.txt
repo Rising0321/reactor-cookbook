@@ -1,3 +1,5 @@
+# The Runtime release is pinned by build.runtime_version in reactor.yaml.
+# Keep only model dependencies here; do not install reactor-runtime directly.
 --extra-index-url https://download.pytorch.org/whl/cu128
 
 torch==2.7.1+cu128

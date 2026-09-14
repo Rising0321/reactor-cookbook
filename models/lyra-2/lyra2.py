@@ -13,7 +13,7 @@ import yaml
 from PIL import Image, UnidentifiedImageError
 from reactor_runtime import (ClientInfo, CommandError, InputField, ReactorPipeline,
                              UploadedFile, connected, disconnected, event,
-                             session_ended, session_started)
+                             get_weights_path, session_ended, session_started)
 
 from lyra2_backend import Lyra2Backend
 from lyra2_camera import Lyra2CameraPlanner
@@ -43,9 +43,15 @@ class Lyra2(ReactorPipeline):
         if config_path is None:
             raise ValueError("Lyra-2 requires lyra2.yaml")
         self.config = yaml.safe_load(config_path.read_text())
-        for key in ("source_path", "output_path", "cache_path"):
-            self.config[key] = str(Path(self.config[key]).expanduser().resolve())
-            Path(self.config[key]).mkdir(parents=True, exist_ok=True) if key != "source_path" else None
+        self.config["source_path"] = str(Path(self.config["source_path"]).expanduser().resolve())
+        weights = get_weights_path()
+        for key in ("output_path", "cache_path"):
+            location = Path(self.config[key]).expanduser()
+            if not location.is_absolute():
+                location = weights / location
+            location = location.resolve()
+            location.mkdir(parents=True, exist_ok=True)
+            self.config[key] = str(location)
         import os
         cache = self.config["cache_path"]
         for name, value in {
@@ -70,6 +76,9 @@ class Lyra2(ReactorPipeline):
         if self.backend: self.backend.clear()
         self.image = None
         self.image_name = None
+        self.chunk = 0
+        self.active_prompt = None
+        self.generating = False
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:

@@ -134,6 +134,15 @@ path at a high-capacity volume before the first run when the system disk is
 small. Container image layers and BuildKit cache are managed by Docker and
 should be moved separately through Docker's `data-root` configuration.
 
+Relative `cache_path` and `output_path` values in `lyra2.yaml` resolve beneath
+the Runtime-provided weights directory, independent of the process working
+directory. Absolute paths remain available for explicit deployment overrides.
+The checked-in configuration does not depend on a particular host disk layout.
+
+Ending a session clears its selected image, active prompt, generation flag,
+and completed-chunk count. A new viewer cannot inherit the prior session's
+progress or active conditioning.
+
 ## Inference performance
 
 The tested B200 path uses Transformer Engine 2.7 and FlashAttention 2.8.1. A
@@ -145,6 +154,11 @@ history grows.
 The output queue holds one complete native chunk. Reactor does not impose a
 model FPS in the adapter; Runtime paces the emitted frames for WebRTC playback
 and recording.
+
+`chunk_completed` reports generation completion before its video batch is
+streamed. It is not a client-side playback-completion acknowledgement. Clients
+must not infer that all 80 frames have arrived from that message or assume a
+fixed 15-second delivery window.
 
 ## Recording
 
