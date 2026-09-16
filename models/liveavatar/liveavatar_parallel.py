@@ -1,7 +1,7 @@
 """Native TPP behind the same demand-driven Runtime backend interface.
 
-Spawns five workers for the released path, or two when ``LIVEAVATAR_TURBO=1``
-selects the opt-in two-GPU turbo mode (see ``liveavatar_turbo``)."""
+Spawns five workers for the released path, or three when ``LIVEAVATAR_TURBO=1``
+selects the opt-in three-GPU turbo mode (see ``liveavatar_turbo``)."""
 
 from __future__ import annotations
 

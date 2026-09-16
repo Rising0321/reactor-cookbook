@@ -4,15 +4,15 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 export DOCKER_HOST="${DOCKER_HOST:-unix:///run/reactor-worldmodels-docker/docker.sock}"
 export HF_HOME=/opt/dlami/nvme/.cache_hf
 export UV_CACHE_DIR=/opt/dlami/nvme/.cache_uv
-IFS=',' read -ra devices <<< "${LIVEAVATAR_GPUS:?Set two available GPU indices, e.g. 0,1}"
-if (( ${#devices[@]} != 2 )); then
-  echo 'The container Turbo profile requires two GPUs.' >&2
+IFS=',' read -ra devices <<< "${LIVEAVATAR_GPUS:?Set three available GPU indices, e.g. 0,1,2}"
+if (( ${#devices[@]} != 3 )); then
+  echo 'The container Turbo profile requires three GPUs.' >&2
   exit 1
 fi
 declare -A seen_devices=()
 for gpu in "${devices[@]}"; do
   if [[ ! "$gpu" =~ ^[0-9]+$ || -n "${seen_devices[$gpu]:-}" ]]; then
-    echo 'Provide two distinct numeric GPU indices.' >&2
+    echo 'Provide three distinct numeric GPU indices.' >&2
     exit 1
   fi
   seen_devices[$gpu]=1

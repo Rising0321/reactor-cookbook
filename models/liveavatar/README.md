@@ -5,14 +5,14 @@ audio with [LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar) and Reactor
 Add a scene or performance prompt, optionally supply a prepared pose sequence,
 and stream the resulting video with the uploaded speech.
 
-The recipe serves LiveAvatar's three-step Turbo profile on two NVIDIA B200
+The recipe serves LiveAvatar's four-step Turbo profile on three NVIDIA B200
 GPUs. A session waits for your inputs and an explicit `start` command.
 
 ## Prerequisites
 
 - The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation),
   Docker, an NVIDIA driver and NVIDIA Container Toolkit.
-- Two available NVIDIA B200 GPUs.
+- Three available NVIDIA B200 GPUs.
 - A high-capacity volume for the base checkpoint, LiveAvatar checkpoint,
   image layers and persistent runtime data.
 
@@ -29,7 +29,7 @@ below. Replace `/path/to/liveavatar-weights` with that directory:
 ```sh
 cd models/liveavatar
 reactor build
-reactor run --gpus '"device=0,1"' \
+reactor run --gpus '"device=0,1,2"' \
   --weights /path/to/liveavatar-weights
 ```
 
@@ -131,7 +131,7 @@ Rejected commands return `command_error`. Missing image or audio produces
 
 ## Inference performance and verification
 
-Two-B200 container tests observed approximately 1.43–1.51 seconds of worker
+Three-B200 container tests observed approximately 1.55–1.56 seconds of worker
 build time for a steady 48-frame clip, which represents 1.92 seconds of
 playback. First-clip preparation and compilation add substantial latency.
 These worker timings exclude client backpressure and allow work to overlap;

@@ -46,11 +46,14 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V
         from liveavatar.models.wan.wan_2_2.configs import WAN_CONFIGS
 
-        # Turbo packs the four stages 2+2 with the VAE sharing the last rank.
-        if plan["shared_vae"]:
+        # Turbo repacks the four stages 2+2; the released five-GPU path is native.
+        # ``shared_vae`` False keeps a dedicated VAE rank (turbo); True shares it.
+        if plan["world_size"] < 5:
             from liveavatar_grouped_benchmark import install_grouped_generate
 
-            install_grouped_generate(WanS2V, plan["world_size"], shared_vae=True)
+            install_grouped_generate(
+                WanS2V, plan["world_size"], shared_vae=plan["shared_vae"]
+            )
 
         model = WanS2V(
             config=WAN_CONFIGS["s2v-14B"],

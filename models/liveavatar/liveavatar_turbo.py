@@ -1,14 +1,20 @@
-"""Opt-in two-GPU turbo mode for the native TPP backend.
+"""Opt-in three-GPU turbo mode for the native TPP backend.
 
 The released path runs the four denoising stages across four GPUs with a fifth
 dedicated to streaming VAE. Turbo instead packs the stages 2+2 across two GPUs
-with the VAE sharing the second rank (a bit-exact stage repack, reusing
-``install_grouped_generate``), ``torch.compile``s the DiT while keeping the VAE
-eager (compiling the VAE regressed it), and runs three denoising steps. That
-lands ~31 FPS gap-free on two GPUs -- the five-GPU throughput on far less
-hardware -- and measured quality-equivalent to the 4-step/5-GPU reference
-(reactor_bench within noise, lip-sync held, no long-take drift across five
-subjects incl. a 52 s take).
+with a third rank running the dedicated streaming VAE (a stage repack reusing
+``install_grouped_generate``) and ``torch.compile``s the DiT while keeping the
+VAE eager (compiling the VAE regressed it). It keeps all four denoising steps --
+no step reduction -- and lands ~31 FPS gap-free on three GPUs, matching the
+released four-GPU throughput on less hardware.
+
+Because the model is run-to-run nondeterministic (FA4 / parallel reductions,
+amplified by the autoregressive rollout), bit-exactness is unattainable for any
+layout; "lossless" here means within that intrinsic variance. The repack and the
+DiT ``torch.compile`` both stay inside it -- their decoded-frame MSE against the
+five-GPU path is no larger than two identical five-GPU runs differ from each
+other, and ``reactor_bench`` identity / temporal-flicker / reference-fidelity
+land in the same band.
 
 Turbo is off unless ``LIVEAVATAR_TURBO=1``; with it unset every value below
 reproduces the released five-GPU behaviour exactly, so the default path is
@@ -27,22 +33,24 @@ def turbo_enabled() -> bool:
 def turbo_plan() -> dict:
     """Serving parameters for the active mode.
 
-    ``world_size``    processes/GPUs to spawn.
-    ``num_gpus_dit``  ranks that run DiT stages (turbo: both; released: four,
-                      leaving rank four for the dedicated VAE).
+    ``world_size``    processes/GPUs to spawn (turbo three, released five).
+    ``num_gpus_dit``  ranks that run DiT stages (turbo two, packed 2+2, with a
+                      third dedicated VAE rank; released four, leaving rank four
+                      for the dedicated VAE).
     ``output_rank``   rank that decodes and delivers clips to Runtime.
-    ``sampling_steps`` denoising steps (turbo 3, released 4). Overridable with
-                      ``LIVEAVATAR_STEPS`` for experiments.
-    ``shared_vae``    pack the VAE onto the last DiT rank via the stage repack.
+    ``sampling_steps`` denoising steps -- four in both modes (no reduction).
+                      Overridable with ``LIVEAVATAR_STEPS`` for experiments.
+    ``shared_vae``    whether the VAE shares the last DiT rank; turbo keeps a
+                      dedicated VAE rank (``False``) via the stage repack.
     ``compile``       DiT-only ``torch.compile``.
     """
     if turbo_enabled():
         return {
-            "world_size": 2,
+            "world_size": 3,
             "num_gpus_dit": 2,
-            "output_rank": 1,
-            "sampling_steps": int(os.environ.get("LIVEAVATAR_STEPS", "3")),
-            "shared_vae": True,
+            "output_rank": 2,
+            "sampling_steps": int(os.environ.get("LIVEAVATAR_STEPS", "4")),
+            "shared_vae": False,
             "compile": True,
         }
     return {

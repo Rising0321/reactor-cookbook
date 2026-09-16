@@ -1,7 +1,7 @@
 """Stage packing; retain four independent denoising KV histories.
 
 Transform the pinned upstream method in memory, without modifying its checkout.
-Used by the GPU-count benchmarks and by the opt-in two-GPU turbo serving mode
+Used by the GPU-count benchmarks and by the opt-in three-GPU turbo serving mode
 (``liveavatar_turbo``); the released five-GPU backend leaves it untouched. A
 physical DiT rank executes consecutive denoising stages, each with its own
 unchanged-size cache. One GPU additionally executes streaming VAE when there is

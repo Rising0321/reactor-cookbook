@@ -8,11 +8,11 @@ import liveavatar_assets as assets
 from prepare_weights import link_or_copy
 
 
-def test_manifest_has_native_yaml_build_and_two_gpu_profile():
+def test_manifest_has_native_yaml_build_and_three_gpu_profile():
     manifest = yaml.safe_load((Path(__file__).parents[1] / "reactor.yaml").read_text())
-    assert manifest["model"]["resources"]["gpu"]["count"] == 2
+    assert manifest["model"]["resources"]["gpu"]["count"] == 3
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_TURBO"] == "1"
-    assert manifest["build"]["runtime_env"]["LIVEAVATAR_STEPS"] == "3"
+    assert manifest["build"]["runtime_env"]["LIVEAVATAR_STEPS"] == "4"
     assert manifest["build"]["runtime_version"] == "3.2.5"
     assert "--force-reinstall flash-attn-4==4.0.0b30" in manifest["build"]["run"][0]
     assert "from flash_attn.cute import" in manifest["build"]["run"][1]
