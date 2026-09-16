@@ -25,5 +25,5 @@ opencv-python-headless
 imageio
 imageio-ffmpeg
 matplotlib
-flash-attn==2.8.3
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 flash-attn-4==4.0.0b30

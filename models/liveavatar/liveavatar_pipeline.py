@@ -98,13 +98,13 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="set_avatar_image",
-        description="Select an uploaded identity image while idle. Replies `input_accepted` and broadcasts `state_update`; invalid images or an active take return `command_error`. Required before `start`.",
+        description="Select the reference image for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; generation begins after a separate `start`. Rejects invalid images with `invalid_image` and changes during a take with `take_running` through `command_error`.",
     )
     async def set_avatar_image(
         self,
         image: UploadedFile = InputField(
             moderate=True,
-            description="PNG, JPEG or WebP reference, up to 25 MiB; aspect ratio is fitted by the model. Applies at the next `start`; no default image is supplied.",
+            description="Uploaded reference image, such as PNG, JPEG or WebP; nonempty, at most 25 MiB and 40 million pixels. Converted to RGB and fitted to the output aspect ratio. Required alongside `set_audio` before `start`; replaces the selected image for the next take and is cleared by `reset`.",
         ),
     ) -> InputAccepted:
         self._require_idle()
@@ -125,13 +125,13 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="set_audio",
-        description="Select uploaded driving audio while idle. Replies `input_accepted` and broadcasts `state_update`; unreadable audio or an active take return `command_error`. Required before `start`.",
+        description="Select the speech audio for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; `start` also requires an accepted reference image. Rejects empty, oversized or unreadable audio with `invalid_audio`, audio shorter than 1.92 seconds with `audio_too_short`, and changes during a take with `take_running` through `command_error`.",
     )
     async def set_audio(
         self,
         audio: UploadedFile = InputField(
             moderate=True,
-            description="WAV, FLAC or MP3 audio up to 100 MiB, decoded to mono 16 kHz. Drives and is played with the next take; video ends at the audio or requested clip limit.",
+            description="Uploaded speech audio, such as WAV, FLAC or MP3; nonempty, at most 100 MiB and at least 1.92 seconds long after decoding. Drives lip and body motion from the next `start` and is played as mono 48 kHz on `main_audio`. Audio duration and `max_chunks` limit the take; `reset` clears this selection.",
         ),
     ) -> InputAccepted:
         self._require_idle()
@@ -178,14 +178,14 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="set_pose_video",
-        description="Select or clear a pose-conditioning upload while idle. Replies `input_accepted` and broadcasts `state_update`; unreadable videos or an active take return `command_error`. The reference image and audio remain required.",
+        description="Select or clear optional pose guidance for the next take while idle. Requires an active session. Returns `input_accepted` and broadcasts `state_update`; reference image and speech audio remain required before `start`. Rejects empty, oversized or unreadable video with `invalid_pose` and changes during a take with `take_running` through `command_error`.",
     )
     async def set_pose_video(
         self,
         pose_video: UploadedFile | None = InputField(
             default=None,
             moderate=True,
-            description="Optional MP4 containing a prepared pose sequence, not a request to extract pose from ordinary footage. Null clears it; applies at the next `start`.",
+            description="Uploaded MP4 containing a prepared pose sequence for motion guidance; nonempty, at most 100 MiB and containing a readable video track. Applies at the next `start`. Omit or pass null to clear the selection and use audio-driven motion. Prepare the pose sequence before upload; this command selects the supplied sequence.",
         ),
     ) -> InputAccepted:
         self._require_idle()
@@ -227,7 +227,7 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="set_prompt",
-        description="Set optional scene text while idle. Replies `input_accepted` and broadcasts `state_update`; an active take returns `command_error`. Text describes appearance or motion, not speech synthesis. Negative text is accepted for compatibility but does not influence this four-step model.",
+        description="Set the optional appearance, scene and performance description for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Applies at the next `start`, with speech supplied through `set_audio`. `negative_prompt` is retained as compatibility text and has no effect on video in this serving profile.",
     )
     async def set_prompt(
         self,
@@ -235,13 +235,13 @@ class LiveAvatar(ReactorPipeline):
             default="",
             max_length=4096,
             moderate=True,
-            description="Optional scene and performance description applied at `start`; empty uses image and audio without additional scene text.",
+            description="Scene, appearance and performance description, up to 4096 characters. Read at the next `start`; an empty string clears additional scene text. Speech content comes from `set_audio`. Retained by `stop` and cleared by `reset`.",
         ),
         negative_prompt: str = InputField(
             default="",
             max_length=4096,
             moderate=True,
-            description="Compatibility text passed at `start`; empty retains the upstream default. The released four-step model does not apply negative conditioning, so this field does not change the video.",
+            description="Compatibility text, up to 4096 characters, retained for the next `start`. This serving profile applies no negative conditioning, so changing this value has no effect on video. Empty selects the model's default text; `reset` clears the stored value.",
         ),
     ) -> InputAccepted:
         self._require_idle()
@@ -252,7 +252,7 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="set_generation_options",
-        description="Set sampling seed and clip limit while idle without starting generation. Applies on the next explicit `start`. Replies `input_accepted` and broadcasts `state_update`; an active take returns `command_error`.",
+        description="Select the sampling seed and clip limit for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Both values apply at the next explicit `start`; omitted fields take their declared defaults.",
     )
     async def set_generation_options(
         self,
@@ -260,13 +260,13 @@ class LiveAvatar(ReactorPipeline):
             default=420,
             ge=0,
             le=2147483647,
-            description="Sampling seed for the next `start`; each successive clip uses seed plus its zero-based clip index. Does not start generation.",
+            description="Non-negative sampling seed from 0 through 2147483647, default 420. Read at the next `start` and retained by `stop`; `reset` restores 420. Selecting a seed leaves the take idle until `start`.",
         ),
         max_chunks: int = InputField(
             default=10000,
             ge=1,
             le=10000,
-            description="Maximum clips for the next `start`; defaults to 10000, and audio length may end the take earlier. Does not start generation.",
+            description="Maximum generated clips per take, from 1 through 10000, default 10000. Read at the next `start`; audio duration can finish the take earlier. The first clip has 45 frames and later clips have 48 at 25 FPS. Retained by `stop`; `reset` restores 10000.",
         ),
     ) -> InputAccepted:
         self._require_idle()
@@ -276,7 +276,7 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="start",
-        description="Begin generation explicitly after all desired inputs have been accepted. Valid only while idle with both `set_avatar_image` and `set_audio` completed; prompt and generation options are optional. Replies `take_changed` and broadcasts `state_update`; missing inputs or an active take return `command_error`. Uploading or adjusting inputs alone never starts generation.",
+        description="Begin an avatar take from the selected image, speech audio and optional conditions. Valid while idle after `set_avatar_image` and `set_audio` succeed. Returns `take_changed` and broadcasts `state_update`, resetting progress and the generation error. Rejects missing inputs with `inputs_required` and an active take with `take_running` through `command_error`. Configure every desired input before calling this parameter-free command.",
     )
     async def start(self) -> TakeChanged:
         self._require_idle()
@@ -293,7 +293,7 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="stop",
-        description="End an active or idle take, retaining uploads and text for another `start`. Replies `take_changed` and broadcasts `state_update`; waits for an in-flight clip to finish safely and flushes queued output.",
+        description="End the take and clear queued playback while retaining selected inputs, options and progress for inspection or another `start`. Valid while idle or generating in an active session. Returns `take_changed` and broadcasts `state_update`. Handled between inference turns, so an in-flight clip can delay the reply. Explicit stopping is reported by this reply; `generation_ended` reports automatic completion or failure.",
     )
     async def stop_take(self) -> TakeChanged:
         if self._backend is not None:
@@ -305,7 +305,7 @@ class LiveAvatar(ReactorPipeline):
 
     @event(
         name="reset",
-        description="End the take and clear uploaded inputs, prompts and progress in any session state. Replies `take_changed` and broadcasts `state_update`; upload a new image and audio before `start`.",
+        description="End the take, clear queued playback and selected inputs, and restore the session defaults. Valid while idle or generating in an active session; an in-flight clip can delay the reply. Returns `take_changed` and broadcasts `state_update` with cleared image, audio, pose, text, progress and error, seed 420 and clip limit 10000. Select image and audio again before `start`.",
     )
     async def reset(self) -> TakeChanged:
         await self.stop_take()

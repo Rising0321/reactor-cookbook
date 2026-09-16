@@ -68,9 +68,7 @@ def install_dit_compile() -> None:
     import torch
 
     os.environ["ENABLE_COMPILE"] = "true"
-    inference_utils = importlib.import_module(
-        "liveavatar.models.wan.inference_utils"
-    )
+    inference_utils = importlib.import_module("liveavatar.models.wan.inference_utils")
     eager = {"stream_decode"}
 
     def selective(func):

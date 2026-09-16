@@ -22,6 +22,7 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         import torch
         import torch.distributed as dist
         import yaml
+
         from liveavatar_assets import SOURCE, configure_cache_environment
         from liveavatar_turbo import install_dit_compile, turbo_plan
 
@@ -81,11 +82,9 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         if rank == output_rank:
             results.put(("ready",))
         while True:
-            objects = [commands.get() if rank == 0 else None]
-            dist.broadcast_object_list(
-                objects, src=0, device=torch.device(f"cuda:{rank}")
-            )
-            job = objects[0]
+            # User uploads may take arbitrarily long; no NCCL collective may
+            # remain pending while a rank waits for the next interactive take.
+            job = commands.get()
             model.vae.model.clear_cache()
             model.vae.model.first_decode = True
             model.vae.model.first_encode = True

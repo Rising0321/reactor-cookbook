@@ -27,43 +27,43 @@ class LiveAvatarState(InputState):
 
 
 class StateUpdate(ModelMessage):
-    """Emitted on connection and after each accepted change or completed clip."""
+    """Emitted on connection, accepted changes, generated clips and automatic take completion or failure."""
 
     image_name: str | None = MessageField(
-        description="Selected uploaded reference filename, or null until `set_avatar_image`."
+        description="Filename selected by `set_avatar_image` for the next `start`, or null until selected. Retained by `stop` and cleared by `reset`."
     )
     audio_name: str | None = MessageField(
-        description="Selected uploaded driving audio filename, or null until `set_audio`."
+        description="Speech filename selected by `set_audio` for the next `start`, or null until selected. Retained by `stop` and cleared by `reset`."
     )
     pose_name: str | None = MessageField(
-        description="Optional uploaded pose video filename; null means audio-driven motion only."
+        description="Prepared pose filename selected for the next `start`, or null for audio-driven motion. Cleared by `set_pose_video` with null or by `reset`; retained by `stop`."
     )
     prompt: str | None = MessageField(
-        description="Scene description for the next take; null means no text condition."
+        description="Selected scene and performance description, used from the next `start`; null means empty text. Retained through `stop` and automatic completion, and cleared by `reset`."
     )
     negative_prompt: str | None = MessageField(
-        description="Requested exclusions, or null to use the released model default."
+        description="Stored compatibility text, or null for the model's default text. This serving profile applies no negative conditioning. Retained by `stop` and cleared by `reset`."
     )
     seed: int = MessageField(
-        description="Seed read at `start`; retained by `stop` and restored to 420 by `reset`."
+        description="Selected sampling seed from 0 through 2147483647, read at `start`. Retained by `stop` and restored to 420 by `reset`."
     )
     ready: bool = MessageField(
-        description="Whether both reference image and driving audio have been selected."
+        description="True when an image and speech audio are selected. Describes input readiness even during a take; enable `start` only when this is true and `running` is false. `reset` clears readiness."
     )
     running: bool = MessageField(
-        description="Whether a take is active after an accepted explicit `start`."
+        description="True from accepted `start` until automatic completion, failure, `stop` or `reset`. While true, input and generation-option changes are rejected."
     )
     completed_chunks: int = MessageField(
-        description="Number of clips delivered in the current or most recent take."
+        description="Number of clips generated in the current or most recent take, starting at zero. Updated with each `chunk_complete`, retained by `stop`, and cleared by `start` or `reset`."
     )
     frames: int = MessageField(
-        description="Video frames delivered this take at 25 frames per second."
+        description="Cumulative generated video frames in the current or most recent take, played at 25 FPS. Updated with each clip, retained by `stop`, and cleared by `start` or `reset`. Client playback can lag this count."
     )
     max_chunks: int = MessageField(
-        description="Clip limit selected by `set_generation_options` and read at `start`; audio can end the take earlier."
+        description="Selected per-take clip limit from 1 through 10000, read at `start`; audio duration can finish a take earlier. Retained by `stop`; `reset` restores 10000."
     )
     error: str | None = MessageField(
-        description="Most recent generation failure, or null when no failure occurred."
+        description="Most recent generation failure in this session, or null when clear. Set with a failed `generation_ended`, retained by `stop`, and cleared by `start` or `reset`. Rejected input commands leave this value unchanged."
     )
 
     @classmethod
@@ -88,32 +88,32 @@ class InputAccepted(ModelMessage):
     """Emitted as the reply when an uploaded input, prompt, or generation options are accepted."""
 
     field: str = MessageField(
-        description="Accepted condition: avatar_image, audio, pose_video, prompt, or generation_options."
+        description="Condition selected by the successful command: `avatar_image`, `audio`, `pose_video`, `prompt`, or `generation_options`. The accompanying `state_update` contains the complete selection; generation waits for `start`."
     )
 
 
 class TakeChanged(ModelMessage):
-    """Emitted as the reply when start, stop, or reset succeeds."""
+    """Emitted as the command-correlated reply when `start`, `stop` or `reset` succeeds."""
 
     action: str = MessageField(
-        description="Accepted command wire name; state details follow in `state_update`."
+        description="Accepted command wire name: `start`, `stop`, or `reset`. An accompanying `state_update` describes the resulting inputs and progress; clients should not assume the reply arrives before that snapshot."
     )
 
 
 class ChunkComplete(ModelMessage):
-    """Emitted once for each generated clip sent on main_video and main_audio."""
+    """Emitted once per generated clip for `main_video` and `main_audio`, alongside `state_update`."""
 
     chunk: int = MessageField(
-        description="One-based completed clip number, reset at `start`."
+        description="One-based generated clip number within the take; the first clip after each `start` is 1. Reports generation progress independently of client playback."
     )
     frames: int = MessageField(
-        description="Frames in this clip: 45 in the first clip, then 48 at 25 FPS."
+        description="Video frames in this clip: 45 for clip 1, then 48 per clip, played at 25 FPS. This count contributes to the cumulative `state_update.frames`."
     )
 
 
 class GenerationEnded(ModelMessage):
-    """Emitted when a take reaches its limit or fails during generation."""
+    """Emitted on automatic take completion or generation failure, alongside `state_update`."""
 
     reason: str = MessageField(
-        description="complete for normal completion; otherwise the reported failure."
+        description="`complete` when the audio or selected clip limit ends the take; otherwise the generation error text also reported in `state_update.error`. Explicit `stop` and `reset` are acknowledged through `take_changed`."
     )

@@ -44,10 +44,35 @@ def test_shutdown_is_repeatable_without_workers():
     backend.processes = []
     backend.directory = None
     context = mp.get_context("spawn")
-    backend.commands = context.Queue(maxsize=1)
+    backend.commands = [context.Queue(maxsize=1) for _ in range(2)]
     backend.results = context.Queue(maxsize=2)
     backend.ack = context.Queue(maxsize=1)
     backend.shutdown()
     backend.shutdown()
     assert not backend.active
     assert not backend.pending_ack
+
+
+def test_start_delivers_identical_job_to_every_rank(tmp_path):
+    import soundfile as sf
+
+    audio = tmp_path / "audio.wav"
+    sf.write(audio, np.zeros(1600, dtype=np.float32), 16000)
+    backend = ParallelBackend.__new__(ParallelBackend)
+    backend.active = False
+    backend.processes = [object(), object()]
+    backend.commands = [queue.Queue(maxsize=1), queue.Queue(maxsize=1)]
+    backend.start(
+        image=tmp_path / "image.png",
+        audio=audio,
+        pose=None,
+        prompt="test",
+        negative_prompt="",
+        seed=420,
+        max_chunks=1,
+    )
+    jobs = [commands.get_nowait() for commands in backend.commands]
+    assert jobs[0] == jobs[1]
+    assert jobs[0]["prompt"] == "test"
+    assert jobs[0]["pose"] is None
+    assert backend.active

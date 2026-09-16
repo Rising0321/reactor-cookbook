@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+
 from liveavatar_assets import WORK, prepare_assets
 from liveavatar_audio import OUTPUT_SAMPLE_RATE, playback_audio
 
@@ -39,7 +40,7 @@ class ParallelBackend:
         world_size = turbo_plan()["world_size"]
         context = mp.get_context("spawn")
         self.directory = tempfile.TemporaryDirectory(prefix="tpp-", dir=WORK)
-        self.commands = context.Queue(maxsize=1)
+        self.commands = [context.Queue(maxsize=1) for _ in range(world_size)]
         self.results = context.Queue(maxsize=2)
         self.ack = context.Queue(maxsize=1)
         self.processes = [
@@ -51,7 +52,7 @@ class ParallelBackend:
                     self.directory.name,
                     str(self.base),
                     str(self.lora),
-                    self.commands,
+                    self.commands[rank],
                     self.results,
                     self.ack,
                 ),
@@ -90,17 +91,17 @@ class ParallelBackend:
         self.audio = playback_audio(waveform, rate)
         self.offset = 0
         self.pending_ack = False
-        self.commands.put(
-            {
-                "image": str(image),
-                "audio": str(audio),
-                "pose": str(pose) if pose else None,
-                "prompt": prompt,
-                "negative_prompt": negative_prompt,
-                "seed": seed,
-                "max_chunks": max_chunks,
-            }
-        )
+        job = {
+            "image": str(image),
+            "audio": str(audio),
+            "pose": str(pose) if pose else None,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "seed": seed,
+            "max_chunks": max_chunks,
+        }
+        for commands in self.commands:
+            commands.put(job)
         self.active = True
 
     def next(self):
@@ -143,7 +144,7 @@ class ParallelBackend:
                     process.kill()
                     process.join(timeout=3)
         self.processes = []
-        for channel in (self.commands, self.results, self.ack):
+        for channel in (*self.commands, self.results, self.ack):
             channel.cancel_join_thread()
             channel.close()
         if self.directory is not None:

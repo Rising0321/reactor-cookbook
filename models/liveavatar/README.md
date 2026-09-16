@@ -1,178 +1,193 @@
-# LiveAvatar — stage-one SDK adaptation
+# LiveAvatar through Reactor Runtime
 
-## Accelerated native TPP + FlashAttention 4
+Generate a speaking-avatar video from an uploaded reference image and speech
+audio with [LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar) and Reactor.
+Add a scene or performance prompt, optionally supply a prepared pose sequence,
+and stream the resulting video with the uploaded speech.
 
-The optional five-B200 path uses the released four-stage temporal denoising
-pipeline and a dedicated streaming VAE rank. The external upload / Start /
-Stop / Reset contract is unchanged. See [PERFORMANCE.md](PERFORMANCE.md) for
-timings, numerical/quality limits and the distinction from the single-GPU path.
-See [GPU_COUNT_BENCHMARK.md](GPU_COUNT_BENCHMARK.md) for fewer-GPU stage-packing
-benchmarks; those experiments do not change the five-GPU serving launcher.
+The recipe serves LiveAvatar's three-step Turbo profile on two NVIDIA B200
+GPUs. A session waits for your inputs and an explicit `start` command.
 
-```bash
-# Check GPU ownership and memory first; choose five available devices.
-LIVEAVATAR_GPUS=0,1,2,3,4 bash start_parallel.sh
+## Prerequisites
+
+- The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation),
+  Docker, an NVIDIA driver and NVIDIA Container Toolkit.
+- Two available NVIDIA B200 GPUs. The deployment manifest requests two GPUs;
+  the local launch helper checks for at least 110,000 MiB free on each.
+- A high-capacity volume for the base checkpoint, LiveAvatar checkpoint,
+  image layers and persistent runtime data.
+- [uv](https://docs.astral.sh/uv/) for the lightweight weight-preparation
+  command below.
+
+## Run
+
+This directory is a `reactor` workspace. Its `reactor.yaml` declares the model
+entry point, GPU resources, weights mount and complete serving-image build:
+Reactor Runtime 3.2.5, Python 3.12, CUDA 12.8.1, Python dependencies, system
+packages and source preparation. Reactor generates the image build from these
+YAML fields. See the [build configuration
+guide](https://docs.reactor.inc/deploy/platform/build).
+
+Prepare the pinned weights on a large volume before starting the container:
+
+```sh
+cd models/liveavatar
+export UV_CACHE_DIR=/opt/dlami/nvme/.cache_uv
+export UV_PYTHON_INSTALL_DIR=/opt/dlami/nvme/.cache_uv/python
+export HF_HOME=/opt/dlami/nvme/.cache_hf
+
+uv run --no-project --python 3.12 --with 'huggingface-hub<1' \
+  python prepare_weights.py \
+  --output /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy \
+  --allow-download
+
+reactor build
+reactor run --gpus '"device=0,1"' \
+  --weights /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
 ```
 
-The Runtime remains native 3.2.5. It owns five spawned GPU workers; killing other
-users' processes is never part of startup. Stop during a take terminates only
-these workers to unblock native NCCL safely; the next Start reloads them.
-Normal completion retains weights. No default input image or audio is selected.
-Use `start_local.sh` for the preserved single-GPU stage-one baseline.
+The helper reuses cached downloads, creates hard links on the same filesystem
+and copies across filesystems. Omit `--allow-download` for cache-only
+preparation. The serving container uses the mounted weights and starts with
+model downloads disabled.
 
-## Two-GPU turbo mode (opt-in)
+`reactor run` serves at `http://localhost:8080` by default and reuses the built
+image. Rebuild after changing adapter code, configuration or dependencies.
+Choose other available host GPUs and a different port when needed:
 
-An optional two-B200 path delivers the same gap-free full-cadence stream on far
-less hardware. It packs the four denoising stages 2+2 across two GPUs with the
-VAE sharing the second rank (a bit-exact stage repack), `torch.compile`s the DiT
-while keeping the streaming VAE eager, and runs three denoising steps. Measured
-~32 FPS gap-free steady-state on two GPUs (versus ~50 FPS on five), with quality
-measured equivalent to the released 4-step/5-GPU path — `reactor_bench` identity,
-temporal-flicker and reference-fidelity within noise, lip-sync held, and no
-long-take drift across five subjects including a 52 s take.
-
-```bash
-# Two available devices; the first turbo clip pays a one-time DiT compile.
-LIVEAVATAR_GPUS=0,1 bash start_turbo.sh
+```sh
+reactor build
+reactor run --gpus '"device=2,3"' --port 8793 \
+  --weights /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
 ```
 
-Turbo is entirely opt-in: the released five-GPU launcher and defaults are the
-quality reference and are unchanged (`liveavatar_turbo.turbo_plan` reproduces the
-five-GPU behaviour exactly unless `LIVEAVATAR_TURBO=1`). The external upload /
-Start / Stop / Reset contract is identical. The first turbo clip absorbs a
-one-time DiT-compilation cost; steady-state clips are gap-free.
+The nested quotes keep the two device IDs in one Docker GPU selection.
+Inspect readiness and the generated contract on the selected port:
 
-## Single-GPU baseline
-
-This workspace provides uploaded-image/audio avatar takes through Reactor Runtime
-3.2.5 and the Python Reactor SDK. It does **not** add world-navigation controls,
-a default avatar, Docker packaging, FA4, CUDA graphs, or compilation.
-
-**Acceptance status, 2026-09-16:** real single-GPU model loading and SDK generation
-passed after installing upstream's required FlashAttention 2.8.3. A three-clip
-test delivered all 141 frames at 25 FPS; the final six-clip test delivered all
-285 frames (11.4 seconds). Temporal samples and inspected clip boundaries
-show stable identity/background and plausible speech gestures. Sixteen CPU tests,
-schema rendering, and lint checks pass. See [GPU_TEST_REPORT.md](GPU_TEST_REPORT.md)
-for the final longer-take results and precise acceptance limits.
-
-**Audio correction (v0.2.0):** the earlier GPU recording's SDK audio had a
-16/48 kHz mismatch, not just waiting silence. Output is now actually resampled
-to mono 48 kHz once per take and declared at 48 kHz; native model conditioning
-remains 16 kHz. CPU Runtime-to-SDK speech regression passes. The old `take.mp4`
-used uploaded audio and was not evidence of correct live playback. See
-[AUDIO_FIX_REPORT.md](AUDIO_FIX_REPORT.md).
-
-This is not yet a real-time-speed implementation: the live audio track inserts
-silence while waiting for the next generated clip. No FA4, CUDA graphs or compile
-optimization has been added. No unrelated GPU task was stopped.
-
-## Start locally
-
-All shell commands below run from this directory:
-
-```bash
-cd /opt/dlami/nvme/ruixing/reactor-cookbook-liveavatar-20260916/models/liveavatar
-LIVEAVATAR_GPU=0 bash start_local.sh
+```sh
+curl -fsS http://localhost:8793/health
+curl -fsS http://localhost:8793/schema
 ```
 
-Choose an available GPU index first. The script refuses to launch below 100,000
-MiB free VRAM; it never stops other processes. It binds to `127.0.0.1:8791` by
-default (`LIVEAVATAR_PORT` overrides the port). Keep this foreground terminal open;
-Ctrl-C stops only this service.
+Wait for `state: available` before connecting a new session. During loading,
+the health endpoint can already return HTTP 200.
 
-The environment is `/opt/dlami/nvme/.cache_uv/liveavatar-stage1`. Source/checkpoint
-setup is idempotent:
+The manifest's `runtime.weights_path` uses the NVMe directory above. Override
+it with `--weights` to use another mounted volume. Source is included in the
+image; persistent runtime files remain beneath the weights mount. Configure
+the container engine's image and build-cache storage on the large volume
+before building. See [deployment details](DEPLOYMENT.md) for the dedicated
+NVMe Docker daemon and [run_container.sh](run_container.sh) for the local
+GPU-memory-checking launcher.
 
-```bash
-/opt/dlami/nvme/.cache_uv/liveavatar-stage1/bin/python liveavatar_assets.py
-```
+## Connect and prepare a take
 
-The manifest is used only for the Runtime import and schema, not to build a
-container. `liveavatar_pipeline.py` has that suffix to avoid shadowing upstream's
-`liveavatar` Python package.
+Open [Reactor Sandbox](https://reactor-sandbox.vercel.app/), choose
+**Local (Direct)** and enter the Runtime URL. Create a session, then use the
+model commands in Controls:
 
-## Upload and record a test take
+1. Upload an image and submit `set_avatar_image`.
+2. Upload speech audio and submit `set_audio`.
+3. Optionally submit `set_prompt`, `set_pose_video` and
+   `set_generation_options`.
+4. Check `state_update.ready` is true and `state_update.running` is false.
+5. Send `start` with an empty payload.
 
-For browser uploads, see [SANDBOX.md](SANDBOX.md). In v0.3.0, `start` takes no
-parameters: configure `set_generation_options` first if needed, then explicitly
-send `start`. The model exposes no pause/resume/step commands.
+Image and audio may be selected in either order. Await each command reply
+before starting. A newly created session has empty input selections;
+uploading files and changing conditions leave generation idle until `start`.
 
-No image is selected at startup. The client must supply image and audio explicitly.
-From another terminal, with the service running:
+See [the browser guide](SANDBOX.md) for audio file-picker support. For remote
+browsers, HTTP signalling and WebRTC media both need a reachable route.
+SSH HTTP-port forwarding alone covers signalling; a TURN/TCP relay and its
+forwarded port can carry the media connection.
 
-```bash
-/opt/dlami/nvme/.cache_uv/liveavatar-stage1/bin/python check_model.py \
-  --image /absolute/path/to/uploaded-avatar.png \
-  --audio /absolute/path/to/uploaded-speech.wav \
-  --prompt 'A person speaking naturally to the camera.' \
-  --chunks 3 \
-  --output /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-stage1/real-test
-```
+## Inputs and controls
 
-The script uses `reactor_sdk`, uploads both files, reads named audio/video tracks,
-and saves command messages. `video.mp4` contains received frames at model-native
-25 FPS; `audio.wav` preserves received PCM, including transport-inserted silence.
-`take.mp4` pairs the gapless received frames with the uploaded driving audio,
-as upstream's offline exporter does. It is a **model-timeline quality preview**,
-not a wall-clock recording demonstrating real-time speed. The script fails for
-missing media or a generation error. The CPU test video is not a substitute.
+All input setters apply to the next `start` and require an idle take.
 
-## Client contract
-
-| Command | Meaning |
+| Command | Input and effect |
 | --- | --- |
-| `set_avatar_image` | Upload identity/reference image; no built-in fallback |
-| `set_audio` | Upload driving WAV/MP3/FLAC, normalized to mono 16 kHz |
-| `set_pose_video` | Upload a prepared pose video, or null to clear it |
-| `set_prompt` | Set optional scene text and compatibility negative text |
-| `set_generation_options` | Set seed and clip limit while idle; never starts generation |
-| `start` | Explicit no-argument start button; requires accepted image and audio |
-| `stop` | End the take, retain conditions and flush output |
-| `reset` | End the take and clear all selected conditions |
+| `set_avatar_image(image)` | Select a decodable reference image, such as PNG, JPEG or WebP, up to 25 MiB and 40 million pixels. |
+| `set_audio(audio)` | Select decodable speech audio, such as WAV, FLAC or MP3, up to 100 MiB and at least 1.92 seconds long. |
+| `set_pose_video(pose_video)` | Select a prepared MP4 pose sequence up to 100 MiB, or pass null to clear pose guidance. |
+| `set_prompt(prompt, negative_prompt)` | Describe appearance, surroundings and performance. Both text fields accept up to 4096 characters; `negative_prompt` is compatibility text with no effect on video in this serving profile. |
+| `set_generation_options(seed, max_chunks)` | Select a seed from 0 through 2147483647 and a clip limit from 1 through 10000. Omitted fields use 420 and 10000 respectively. |
+| `start()` | Begin a take from the accepted inputs and reset its progress counters. Requires both image and audio. |
+| `stop()` | End the take and clear queued playback, retaining inputs, options and progress. |
+| `reset()` | End the take, clear selections and progress, and restore the default seed and clip limit. |
 
-Conditions may be changed only while idle, preventing ambiguous mid-take changes.
-`state_update` is the full snapshot on connection, accepted changes and clip
-completion. `input_accepted` and `take_changed` are awaited command replies;
-`chunk_complete` and `generation_ended` are progress broadcasts. Rejected commands
-return `command_error`. Uploaded free-form content is marked for moderation in
-the schema; actual moderation is a deployment responsibility.
+The prompt conditions visual appearance and performance; speech comes from
+the uploaded audio. Prepare pose guidance before uploading it. Pose-conditioned
+generation requires separate acceptance testing.
 
-`main_video` uses native **25 FPS**. `main_audio` carries the normalized input
-audio, not synthesized speech. One inference turn emits one native 48-frame
-clip (45 frames for the first clip, following the upstream three-frame trim).
-The runtime waits for the next turn before allowing the producer to continue.
+A running take rejects input changes. Send `stop`, await its reply, update
+conditions, then send `start` for another take. Commands run between inference
+turns, so an in-flight clip can delay a stop or reset reply.
 
-The selected four-step branch has no classifier-free-guidance application:
-upstream computes negative-text embeddings but does not use them in the denoiser.
-`negative_prompt` is forwarded for compatibility, **not advertised as an effective
-negative-control feature**.
+## Runtime boundary and output
 
-## Input coverage and boundaries
+The model loads once at service startup. Each take uses the selected image,
+audio and conditions throughout its generation. Automatic completion retains
+the selections and model weights for another take. Ending a session clears its
+uploaded selections. Stopping an active take releases its generation workers;
+the next take can therefore incur model-loading latency.
 
-Supported native inference conditions: image, driving audio, positive text,
-negative text passthrough, optional prepared pose video, seed, and clip limit.
-Resolution uses the released fast single-card recipe's `704*384` area and native
-image-aspect fitting. Pose decoding uses upstream unchanged; real pose-conditioned
-generation remains untested.
+Each inference turn supplies one audiovisual clip. The first clip carries
+45 frames; later clips carry 48. `main_video` plays at the model's native
+25 FPS. `main_audio` carries the selected speech, resampled to mono 48 kHz
+and aligned with the generated clip durations. Audio length and `max_chunks`
+determine when a take finishes.
 
-Not claimed as implemented: optional CosyVoice TTS, multi-speaker SAM2 routing,
-or external/local-LLM prompt expansion. These require separate auxiliary models
-and dependencies; the released TTS bootstrap also references a top-level `wan`
-package absent from this checkout. Supply speech audio directly for this recipe.
-The upstream flags `init_first_frame`, `use_dataset`, and `drop_motion_noisy` do
-not change the released single-GPU denoiser, so they are not exposed as misleading
-controls. The four-step Euler sampler is fixed rather than offering unsupported
-solver/step combinations.
+## Model messages
 
-## Reproducibility and implementation notes
+Commands return typed, command-correlated replies:
 
-See [ADAPTATION_NOTES.md](ADAPTATION_NOTES.md) for pinned revisions, exact streaming
-changes, cache preservation, test evidence and remaining GPU acceptance work.
+- `input_accepted` identifies an accepted image, audio, pose, prompt or
+  generation-option selection.
+- `take_changed` acknowledges `start`, `stop` or `reset`.
+- `state_update` is the complete snapshot of selected filenames, text,
+  seed, readiness, running state, clip limit, progress and generation error.
+  A joining client receives a snapshot immediately. Accepted changes,
+  generated clips and automatic completion or failure broadcast updates.
+- `chunk_complete` reports the one-based generated clip number and its
+  frame count. Client playback can lag generation progress.
+- `generation_ended` reports `complete` when a take reaches its audio or
+  clip limit, or contains the generation failure text.
 
-```bash
-PYTHONPATH=. CUDA_VISIBLE_DEVICES='' \
-  /opt/dlami/nvme/.cache_uv/liveavatar-stage1/bin/python -m pytest tests -q
-/opt/dlami/nvme/.cache_uv/liveavatar-stage1/bin/python \
-  -m reactor_runtime.schema --path . --out schema.json
-```
+Rejected commands return `command_error`. Missing image or audio produces
+`inputs_required`; changing inputs during generation produces
+`take_running`. Read command acknowledgements from the awaited call and use
+`state_update` to render the current session.
+
+## Inference performance and verification
+
+Two-B200 container tests observed approximately 1.43–1.51 seconds of worker
+build time for a steady 48-frame clip, which represents 1.92 seconds of
+playback. First-clip preparation and compilation add substantial latency.
+These worker timings exclude client backpressure and allow work to overlap;
+end-to-end latency also depends on media transport and client buffering.
+
+Playback can contain waiting silence while the next clip is being generated.
+The [deployment report](DEPLOYMENT.md) records measured startup times, received
+frame counts, audio checks and the one-frame receive discrepancy seen in one
+test session.
+
+[check_model.py](check_model.py) exercises the real SDK upload and command
+sequence and saves received video, received PCM and messages. Its `take.mp4`
+preview pairs received video with the uploaded speech on the model timeline;
+use `audio.wav` to inspect the actual received audio, including waiting
+silence.
+
+## Public source and model assets
+
+- [Alibaba-Quark/LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar)
+  supplies the pinned inference source included by the YAML build.
+- [Wan-AI/Wan2.2-S2V-14B](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B)
+  supplies the base model.
+- [Quark-Vision/Live-Avatar](https://huggingface.co/Quark-Vision/Live-Avatar)
+  supplies the LiveAvatar checkpoint.
+
+Review the upstream repositories and model cards for their usage terms.
+Pinned revisions, storage layout and container acceptance results are
+documented in [DEPLOYMENT.md](DEPLOYMENT.md).
