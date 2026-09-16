@@ -76,9 +76,9 @@ The manifest's `runtime.weights_path` uses the NVMe directory above. Override
 it with `--weights` to use another mounted volume. Source is included in the
 image; persistent runtime files remain beneath the weights mount. Configure
 the container engine's image and build-cache storage on the large volume
-before building. See [deployment details](DEPLOYMENT.md) for the dedicated
-NVMe Docker daemon and [run_container.sh](run_container.sh) for the local
-GPU-memory-checking launcher.
+before building. [run_container.sh](run_container.sh) provides a local
+GPU-memory-checking launcher; set `DOCKER_HOST` to your container engine's
+endpoint when using it.
 
 ## Connect and prepare a take
 
@@ -169,9 +169,6 @@ These worker timings exclude client backpressure and allow work to overlap;
 end-to-end latency also depends on media transport and client buffering.
 
 Playback can contain waiting silence while the next clip is being generated.
-The [deployment report](DEPLOYMENT.md) records measured startup times, received
-frame counts, audio checks and the one-frame receive discrepancy seen in one
-test session.
 
 [check_model.py](check_model.py) exercises the real SDK upload and command
 sequence and saves received video, received PCM and messages. Its `take.mp4`
@@ -189,5 +186,5 @@ silence.
   supplies the LiveAvatar checkpoint.
 
 Review the upstream repositories and model cards for their usage terms.
-Pinned revisions, storage layout and container acceptance results are
-documented in [DEPLOYMENT.md](DEPLOYMENT.md).
+Checkpoint revisions are pinned in `liveavatar_assets.py`, and the image's
+source revision is pinned in `reactor.yaml`.
