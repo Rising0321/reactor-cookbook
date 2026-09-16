@@ -1,4 +1,7 @@
-"""Native five-GPU TPP behind the same demand-driven Runtime backend interface."""
+"""Native TPP behind the same demand-driven Runtime backend interface.
+
+Spawns five workers for the released path, or two when ``LIVEAVATAR_TURBO=1``
+selects the opt-in two-GPU turbo mode (see ``liveavatar_turbo``)."""
 
 from __future__ import annotations
 
@@ -11,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-
 from liveavatar_assets import WORK, prepare_assets
 from liveavatar_audio import OUTPUT_SAMPLE_RATE, playback_audio
 
@@ -32,7 +34,9 @@ class ParallelBackend:
         import multiprocessing as mp
 
         from liveavatar_parallel_worker import run_worker
+        from liveavatar_turbo import turbo_plan
 
+        world_size = turbo_plan()["world_size"]
         context = mp.get_context("spawn")
         self.directory = tempfile.TemporaryDirectory(prefix="tpp-", dir=WORK)
         self.commands = context.Queue(maxsize=1)
@@ -53,7 +57,7 @@ class ParallelBackend:
                 ),
                 daemon=True,
             )
-            for rank in range(5)
+            for rank in range(world_size)
         ]
         try:
             for process in self.processes:

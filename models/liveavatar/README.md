@@ -20,6 +20,28 @@ these workers to unblock native NCCL safely; the next Start reloads them.
 Normal completion retains weights. No default input image or audio is selected.
 Use `start_local.sh` for the preserved single-GPU stage-one baseline.
 
+## Two-GPU turbo mode (opt-in)
+
+An optional two-B200 path delivers the same gap-free full-cadence stream on far
+less hardware. It packs the four denoising stages 2+2 across two GPUs with the
+VAE sharing the second rank (a bit-exact stage repack), `torch.compile`s the DiT
+while keeping the streaming VAE eager, and runs three denoising steps. Measured
+~32 FPS gap-free steady-state on two GPUs (versus ~50 FPS on five), with quality
+measured equivalent to the released 4-step/5-GPU path — `reactor_bench` identity,
+temporal-flicker and reference-fidelity within noise, lip-sync held, and no
+long-take drift across five subjects including a 52 s take.
+
+```bash
+# Two available devices; the first turbo clip pays a one-time DiT compile.
+LIVEAVATAR_GPUS=0,1 bash start_turbo.sh
+```
+
+Turbo is entirely opt-in: the released five-GPU launcher and defaults are the
+quality reference and are unchanged (`liveavatar_turbo.turbo_plan` reproduces the
+five-GPU behaviour exactly unless `LIVEAVATAR_TURBO=1`). The external upload /
+Start / Stop / Reset contract is identical. The first turbo clip absorbs a
+one-time DiT-compilation cost; steady-state clips are gap-free.
+
 ## Single-GPU baseline
 
 This workspace provides uploaded-image/audio avatar takes through Reactor Runtime

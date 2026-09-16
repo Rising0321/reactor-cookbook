@@ -22,23 +22,34 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         import torch
         import torch.distributed as dist
         import yaml
-
         from liveavatar_assets import SOURCE, configure_cache_environment
+        from liveavatar_turbo import install_dit_compile, turbo_plan
 
         configure_cache_environment()
+        plan = turbo_plan()
+        output_rank = plan["output_rank"]
         torch.set_num_threads(4)
         torch.cuda.set_device(rank)
         dist.init_process_group(
             "nccl",
             init_method=f"file://{directory}/nccl-init",
             rank=rank,
-            world_size=5,
+            world_size=plan["world_size"],
             timeout=timedelta(seconds=120),
             device_id=torch.device(f"cuda:{rank}"),
         )
         sys.path.insert(0, str(SOURCE))
+        # Turbo compiles the DiT before the pinned decorators are imported.
+        if plan["compile"]:
+            install_dit_compile()
         from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V
         from liveavatar.models.wan.wan_2_2.configs import WAN_CONFIGS
+
+        # Turbo packs the four stages 2+2 with the VAE sharing the last rank.
+        if plan["shared_vae"]:
+            from liveavatar_grouped_benchmark import install_grouped_generate
+
+            install_grouped_generate(WanS2V, plan["world_size"], shared_vae=True)
 
         model = WanS2V(
             config=WAN_CONFIGS["s2v-14B"],
@@ -67,7 +78,7 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
 
         counts = install_fa4()
         dist.barrier()
-        if rank == 4:
+        if rank == output_rank:
             results.put(("ready",))
         while True:
             objects = [commands.get() if rank == 0 else None]
@@ -116,13 +127,13 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
                 max_repeat=job["max_chunks"],
                 max_area=704 * 384,
                 infer_frames=48,
-                sampling_steps=4,
+                sampling_steps=plan["sampling_steps"],
                 sample_solver="euler",
                 shift=3.0,
                 guide_scale=0,
                 seed=job["seed"],
                 offload_model=False,
-                num_gpus_dit=4,
+                num_gpus_dit=plan["num_gpus_dit"],
                 enable_vae_parallel=True,
                 chunk_callback=emit,
             )
@@ -132,7 +143,7 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
             model.kv_cache1 = model.crossattn_cache = None
             model._sampler_timesteps = model._sampler_sigmas = None
             dist.barrier()
-            if rank == 4:
+            if rank == output_rank:
                 results.put(("end",))
     except BaseException:
         error = traceback.format_exc()
