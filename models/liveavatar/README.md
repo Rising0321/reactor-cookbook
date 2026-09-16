@@ -12,73 +12,42 @@ GPUs. A session waits for your inputs and an explicit `start` command.
 
 - The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation),
   Docker, an NVIDIA driver and NVIDIA Container Toolkit.
-- Two available NVIDIA B200 GPUs. The deployment manifest requests two GPUs;
-  the local launch helper checks for at least 110,000 MiB free on each.
+- Two available NVIDIA B200 GPUs.
 - A high-capacity volume for the base checkpoint, LiveAvatar checkpoint,
   image layers and persistent runtime data.
-- [uv](https://docs.astral.sh/uv/) for the lightweight weight-preparation
-  command below.
 
 ## Run
 
-This directory is a `reactor` workspace. Its `reactor.yaml` declares the model
-entry point, GPU resources, weights mount and complete serving-image build:
-Reactor Runtime 3.2.5, Python 3.12, CUDA 12.8.1, Python dependencies, system
-packages and source preparation. Reactor generates the image build from these
-YAML fields. See the [build configuration
+This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
+runtime, GPU resources and complete serving-image build. See the [build configuration
 guide](https://docs.reactor.inc/deploy/platform/build).
 
-Prepare the pinned weights on a large volume before starting the container:
+Prepare a weights directory containing the base checkpoint in `wan2_2/` and
+the LiveAvatar checkpoint in `liveavatar_lora/`, using the model assets linked
+below. Replace `/path/to/liveavatar-weights` with that directory:
 
 ```sh
 cd models/liveavatar
-export UV_CACHE_DIR=/opt/dlami/nvme/.cache_uv
-export UV_PYTHON_INSTALL_DIR=/opt/dlami/nvme/.cache_uv/python
-export HF_HOME=/opt/dlami/nvme/.cache_hf
-
-uv run --no-project --python 3.12 --with 'huggingface-hub<1' \
-  python prepare_weights.py \
-  --output /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy \
-  --allow-download
-
 reactor build
 reactor run --gpus '"device=0,1"' \
-  --weights /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
+  --weights /path/to/liveavatar-weights
 ```
-
-The helper reuses cached downloads, creates hard links on the same filesystem
-and copies across filesystems. Omit `--allow-download` for cache-only
-preparation. The serving container uses the mounted weights and starts with
-model downloads disabled.
 
 `reactor run` serves at `http://localhost:8080` by default and reuses the built
-image. Rebuild after changing adapter code, configuration or dependencies.
-Choose other available host GPUs and a different port when needed:
+image and mounted weights. Rebuild after changing code, configuration or
+dependencies. Adjust `--gpus` to select available devices and add `--port` to
+choose a different HTTP port. Check readiness and the generated contract:
 
 ```sh
-reactor build
-reactor run --gpus '"device=2,3"' --port 8793 \
-  --weights /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
-```
-
-The nested quotes keep the two device IDs in one Docker GPU selection.
-Inspect readiness and the generated contract on the selected port:
-
-```sh
-curl -fsS http://localhost:8793/health
-curl -fsS http://localhost:8793/schema
+curl -fsS http://localhost:8080/health
+curl -fsS http://localhost:8080/schema
 ```
 
 Wait for `state: available` before connecting a new session. During loading,
 the health endpoint can already return HTTP 200.
 
-The manifest's `runtime.weights_path` uses the NVMe directory above. Override
-it with `--weights` to use another mounted volume. Source is included in the
-image; persistent runtime files remain beneath the weights mount. Configure
-the container engine's image and build-cache storage on the large volume
-before building. [run_container.sh](run_container.sh) provides a local
-GPU-memory-checking launcher; set `DOCKER_HOST` to your container engine's
-endpoint when using it.
+The container uses the prepared weights and keeps persistent runtime data
+beneath the weights mount. Storage locations are chosen by the operator.
 
 ## Connect and prepare a take
 
