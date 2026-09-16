@@ -43,19 +43,11 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         # Turbo compiles the DiT before the pinned decorators are imported.
         if plan["compile"]:
             install_dit_compile()
-        from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V
         from liveavatar.models.wan.wan_2_2.configs import WAN_CONFIGS
 
-        # Turbo repacks the four stages 2+2; the released five-GPU path is native.
-        # ``shared_vae`` False keeps a dedicated VAE rank (turbo); True shares it.
-        if plan["world_size"] < 5:
-            from liveavatar_stage_packing import install_grouped_generate
+        from liveavatar_streaming import StreamingWanS2V
 
-            install_grouped_generate(
-                WanS2V, plan["world_size"], shared_vae=plan["shared_vae"]
-            )
-
-        model = WanS2V(
+        model = StreamingWanS2V(
             config=WAN_CONFIGS["s2v-14B"],
             checkpoint_dir=base,
             device_id=rank,

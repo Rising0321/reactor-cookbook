@@ -78,29 +78,6 @@ def prepare_assets() -> tuple[Path, Path]:
         raise RuntimeError(
             f"Expected upstream {SOURCE_REVISION}, found {revision}; use a separate checkout"
         )
-    patch = Path(__file__).with_name("liveavatar-streaming.patch")
-    reverse = subprocess.run(
-        ["git", "-C", str(SOURCE), "apply", "--reverse", "--check", str(patch)],
-        capture_output=True,
-        check=False,
-    )
-    if reverse.returncode:
-        subprocess.run(
-            ["git", "-C", str(SOURCE), "apply", "--check", str(patch)], check=True
-        )
-        subprocess.run(["git", "-C", str(SOURCE), "apply", str(patch)], check=True)
-    if os.environ.get("LIVEAVATAR_MODE") == "tpp":
-        patch = Path(__file__).with_name("liveavatar-tpp-streaming.patch")
-        reverse = subprocess.run(
-            ["git", "-C", str(SOURCE), "apply", "--reverse", "--check", str(patch)],
-            capture_output=True,
-            check=False,
-        )
-        if reverse.returncode:
-            subprocess.run(
-                ["git", "-C", str(SOURCE), "apply", "--check", str(patch)], check=True
-            )
-            subprocess.run(["git", "-C", str(SOURCE), "apply", str(patch)], check=True)
     if LOCAL_WEIGHTS_ONLY:
         weights = mounted_weights_path()
         base, lora = weights / "wan2_2", weights / "liveavatar_lora"

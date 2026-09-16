@@ -7,7 +7,6 @@ from PIL import Image
 from reactor_runtime import CommandError, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
-from liveavatar_backend import ClipBridge
 from liveavatar_pipeline import LiveAvatar
 from liveavatar_types import LiveAvatarOutput, LiveAvatarState, StateUpdate
 
@@ -117,54 +116,6 @@ async def test_invalid_upload_does_not_replace_input(model):
     with pytest.raises(CommandError):
         await model.set_audio(audio_upload(0.2))
     assert model._audio.read_bytes() == original
-
-
-def test_bridge_has_exact_one_chunk_backpressure():
-    seen = []
-
-    def produce(emit):
-        for i in range(4):
-            seen.append(i)
-            emit(i)
-
-    bridge = ClipBridge(produce)
-    try:
-        assert bridge.next() == 0
-        assert seen == [0]
-        assert bridge.next() == 1
-        assert seen == [0, 1]
-        assert bridge.next() == 2
-        assert bridge.next() == 3
-        assert bridge.next() is None
-    finally:
-        bridge.close()
-
-
-def test_bridge_cancels_without_next_clip():
-    seen = []
-
-    def produce(emit):
-        for i in range(20):
-            seen.append(i)
-            emit(i)
-
-    bridge = ClipBridge(produce)
-    assert bridge.next() == 0
-    bridge.close()
-    assert seen == [0]
-    assert not bridge._thread.is_alive()
-
-
-def test_bridge_propagates_error():
-    def fail(emit):
-        raise ValueError("test failure")
-
-    bridge = ClipBridge(fail)
-    try:
-        with pytest.raises(ValueError, match="test failure"):
-            bridge.next()
-    finally:
-        bridge.close()
 
 
 @pytest.mark.asyncio

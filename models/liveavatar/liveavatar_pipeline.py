@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import os
 import subprocess
 import tempfile
 from collections.abc import AsyncGenerator
@@ -52,14 +51,9 @@ class LiveAvatar(ReactorPipeline):
 
     def load(self, config_path: Path | None = None):
         configure_cache_environment()
-        if os.environ.get("LIVEAVATAR_MODE", "single") == "tpp":
-            from liveavatar_parallel import ParallelBackend
+        from liveavatar_parallel import ParallelBackend
 
-            self._backend = ParallelBackend()
-            return
-        from liveavatar_backend import LiveAvatarBackend
-
-        self._backend = LiveAvatarBackend()
+        self._backend = ParallelBackend()
 
     @session_started
     async def on_session_started(self):

@@ -31,9 +31,11 @@ def test_local_weights_are_resolved_without_hf_download(tmp_path, monkeypatch):
         "check_output",
         lambda *args, **kwargs: assets.SOURCE_REVISION + "\n",
     )
-    monkeypatch.setattr(
-        subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess([], 0)
-    )
+
+    def reject_source_mutation(*args, **kwargs):
+        pytest.fail("Preparing existing assets must not mutate upstream source")
+
+    monkeypatch.setattr(subprocess, "run", reject_source_mutation)
     for name in [
         "wan2_2/config.json",
         "wan2_2/Wan2.1_VAE.pth",
