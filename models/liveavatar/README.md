@@ -66,8 +66,9 @@ Image and audio may be selected in either order. Await each command reply
 before starting. A newly created session has empty input selections;
 uploading files and changing conditions leave generation idle until `start`.
 
-See [the browser guide](SANDBOX.md) for audio file-picker support. For remote
-browsers, HTTP signalling and WebRTC media both need a reachable route.
+Use a client with image and audio upload support. In Sandbox, creating the
+session and sending the model's `start` command are separate actions.
+For remote browsers, HTTP signalling and WebRTC media both need a reachable route.
 SSH HTTP-port forwarding alone covers signalling; a TURN/TCP relay and its
 forwarded port can carry the media connection.
 

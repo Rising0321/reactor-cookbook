@@ -1,7 +1,7 @@
 """Stage packing; retain four independent denoising KV histories.
 
 Transform the pinned upstream method in memory, without modifying its checkout.
-Used by the GPU-count benchmarks and by the opt-in three-GPU turbo serving mode
+Used by the opt-in three-GPU turbo serving mode
 (``liveavatar_turbo``); the released five-GPU backend leaves it untouched. A
 physical DiT rank executes consecutive denoising stages, each with its own
 unchanged-size cache. One GPU additionally executes streaming VAE when there is
@@ -134,6 +134,6 @@ def install_grouped_generate(model_class, world_size, shared_vae=False):
         )
     namespace = dict(original.__globals__, StageRandomStreams=StageRandomStreams)
     # Only the locally validated, pinned upstream function is compiled.
-    exec(compile(source, "<liveavatar-grouped-benchmark>", "exec"), namespace)  # noqa: S102
+    exec(compile(source, "<liveavatar-stage-packing>", "exec"), namespace)  # noqa: S102
     model_class.generate = namespace[original.__name__]
     return groups

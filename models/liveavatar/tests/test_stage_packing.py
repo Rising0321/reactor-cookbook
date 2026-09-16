@@ -6,7 +6,7 @@ import textwrap
 import pytest
 
 from liveavatar_assets import SOURCE
-from liveavatar_grouped_benchmark import (
+from liveavatar_stage_packing import (
     StageRandomStreams,
     install_grouped_generate,
     stage_groups,

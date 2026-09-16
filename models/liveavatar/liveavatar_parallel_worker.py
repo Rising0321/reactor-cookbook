@@ -49,7 +49,7 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         # Turbo repacks the four stages 2+2; the released five-GPU path is native.
         # ``shared_vae`` False keeps a dedicated VAE rank (turbo); True shares it.
         if plan["world_size"] < 5:
-            from liveavatar_grouped_benchmark import install_grouped_generate
+            from liveavatar_stage_packing import install_grouped_generate
 
             install_grouped_generate(
                 WanS2V, plan["world_size"], shared_vae=plan["shared_vae"]
