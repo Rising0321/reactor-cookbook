@@ -1,0 +1,5 @@
+# Stage one uses a local environment, not a container.
+__pycache__
+.pytest_cache
+artifacts
+.venv

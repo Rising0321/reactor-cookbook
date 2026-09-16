@@ -1,0 +1,93 @@
+diff --git a/liveavatar/models/wan/causal_s2v_pipeline.py b/liveavatar/models/wan/causal_s2v_pipeline.py
+index 8253658..31b8f4d 100644
+--- a/liveavatar/models/wan/causal_s2v_pipeline.py
++++ b/liveavatar/models/wan/causal_s2v_pipeline.py
+@@ -690,6 +690,7 @@ class WanS2V:
+         mask=None,
+         input_video_for_sam2=None,
+         enable_online_decode=False,
++        chunk_callback=None,
+     ):
+         r"""
+         Generates video frames from input image and text prompt using diffusion process.
+@@ -935,6 +936,9 @@ class WanS2V:
+             self.kv_cache1 = None
+             self.shared_cond_cache = None  
+             active_nr = min(max_repeat, num_repeat)
++            # Decode history is separate from the denoiser's conditioning history.
++            # This is the same recurrence as the deferred decode loop below.
++            motion_latents_pp = motion_latents
+             for r in range(active_nr):
+             #-------------------------------------------rollout loop------------------------------------------------------
+                 #----------------------------------------------Step 2.1: clip-level init------------------------------------------------------      
+@@ -1132,14 +1136,42 @@ class WanS2V:
+                     motion_latents = torch.stack(
+                         self.vae.encode(videos_last_frames)
+                     ).type_as(clip_latents[0])
+-                    out.append(image.cpu())
++                    if chunk_callback is None:
++                        out.append(image.cpu())
++                    else:
++                        motion_latents_pp = motion_latents
++                        chunk_callback(image[0].cpu())
+                     if offload_model:
+                         self.vae.model.cpu()
+                         self.noise_model.to(self.device)
+                         torch.cuda.synchronize()
+                         torch.cuda.empty_cache()
+                 else:
+-                    clip_outputs.append(clip_output.detach().cpu())
++                    if chunk_callback is None:
++                        clip_outputs.append(clip_output.detach().cpu())
++                    else:
++                        if offload_model:
++                            self.noise_model.cpu()
++                        self.vae.model.to(self.device)
++                        decode_latents = torch.cat(
++                            [motion_latents_pp, clip_output.unsqueeze(0)], dim=2
++                        )
++                        image = torch.stack(self.vae.decode(decode_latents))
++                        image = image[:, :, -(infer_frames):]
++                        if not enable_online_decode and r == 0:
++                            image = image[:, :, 3:]
++                        overlap_frames_num = min(self.motion_frames, image.shape[2])
++                        videos_last_frames = torch.cat(
++                            [videos_last_frames[:, :, overlap_frames_num:],
++                             image[:, :, -overlap_frames_num:]], dim=2
++                        ).to(dtype=motion_latents_pp.dtype, device=motion_latents_pp.device)
++                        motion_latents_pp = torch.stack(
++                            self.vae.encode(videos_last_frames)
++                        ).type_as(clip_output)
++                        chunk_callback(image[0].cpu())
++                        if offload_model or self.init_on_cpu:
++                            self.vae.model.cpu()
++                            self.noise_model.to(self.device)
+ 
+         #-------------------------------------- Step 3: full-video postprocess (deferred VAE decode for r>=1)--------------------------------------
+         print(f"complete full-sequence generation")
+@@ -1185,7 +1217,7 @@ class WanS2V:
+                 ).type_as(clip_output)
+                 out.append(image.cpu())
+ 
+-        videos = torch.cat(out, dim=2)
++        videos = torch.cat(out, dim=2) if chunk_callback is None else None
+         del clip_noise, clip_latents, clip_output, block_latents
+         self._sampler_timesteps = None
+         self._sampler_sigmas = None
+@@ -1200,7 +1232,7 @@ class WanS2V:
+             torch.cuda.synchronize()
+             torch.cuda.empty_cache()
+ 
+-        return videos[0] if self.rank == 0 else None, dataset_info
++        return videos[0] if self.rank == 0 and videos is not None else None, dataset_info
+ 
+     def tts(self, tts_prompt_audio, tts_prompt_text, tts_text):
+         if not hasattr(self, 'cosyvoice'):
+@@ -1228,4 +1260,4 @@ class WanS2V:
+         sys.path.append('CosyVoice')
+         sys.path.append('CosyVoice/third_party/Matcha-TTS')
+         from cosyvoice.cli.cosyvoice import CosyVoice2
+-        self.cosyvoice = CosyVoice2('CosyVoice2-0.5B')
+\ No newline at end of file
++        self.cosyvoice = CosyVoice2('CosyVoice2-0.5B')
+

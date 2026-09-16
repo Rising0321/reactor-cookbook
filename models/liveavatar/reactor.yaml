@@ -1,0 +1,10 @@
+$schema: reactor/v1
+model:
+  name: liveavatar
+  version: v0.3.0
+  description: Audio-driven avatar clips from an uploaded identity image and audio.
+runtime:
+  import: liveavatar_pipeline:LiveAvatar
+  weights_path: /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-stage1
+build:
+  runtime_version: "3.2.5"
