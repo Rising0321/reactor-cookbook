@@ -27,6 +27,8 @@ def configure_cache_environment() -> None:
         "TORCH_HOME": ROOT / ".cache_hf/torch",
         "TMPDIR": WORK / "tmp",
         "TORCHINDUCTOR_CACHE_DIR": WORK / "inductor",
+        "CUTE_DSL_CACHE_DIR": WORK / "cute",
+        "FLASH_ATTENTION_CUTE_DSL_CACHE_DIR": WORK / "fa4",
     }.items():
         os.environ[name] = str(value)
         value.mkdir(parents=True, exist_ok=True)
@@ -67,6 +69,18 @@ def prepare_assets() -> tuple[Path, Path]:
             ["git", "-C", str(SOURCE), "apply", "--check", str(patch)], check=True
         )
         subprocess.run(["git", "-C", str(SOURCE), "apply", str(patch)], check=True)
+    if os.environ.get("LIVEAVATAR_MODE") == "tpp":
+        patch = Path(__file__).with_name("liveavatar-tpp-streaming.patch")
+        reverse = subprocess.run(
+            ["git", "-C", str(SOURCE), "apply", "--reverse", "--check", str(patch)],
+            capture_output=True,
+            check=False,
+        )
+        if reverse.returncode:
+            subprocess.run(
+                ["git", "-C", str(SOURCE), "apply", "--check", str(patch)], check=True
+            )
+            subprocess.run(["git", "-C", str(SOURCE), "apply", str(patch)], check=True)
     from huggingface_hub import snapshot_download
 
     base = Path(snapshot_download("Wan-AI/Wan2.2-S2V-14B", revision=BASE_REVISION))

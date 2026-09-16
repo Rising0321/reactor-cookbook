@@ -26,3 +26,4 @@ imageio
 imageio-ffmpeg
 matplotlib
 flash-attn==2.8.3
+flash-attn-4==4.0.0b30

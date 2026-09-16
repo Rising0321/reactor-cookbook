@@ -1,5 +1,27 @@
 # LiveAvatar — stage-one SDK adaptation
 
+## Accelerated native TPP + FlashAttention 4
+
+The optional five-B200 path uses the released four-stage temporal denoising
+pipeline and a dedicated streaming VAE rank. The external upload / Start /
+Stop / Reset contract is unchanged. See [PERFORMANCE.md](PERFORMANCE.md) for
+timings, numerical/quality limits and the distinction from the single-GPU path.
+See [GPU_COUNT_BENCHMARK.md](GPU_COUNT_BENCHMARK.md) for fewer-GPU stage-packing
+benchmarks; those experiments do not change the five-GPU serving launcher.
+
+```bash
+# Check GPU ownership and memory first; choose five available devices.
+LIVEAVATAR_GPUS=0,1,2,3,4 bash start_parallel.sh
+```
+
+The Runtime remains native 3.2.5. It owns five spawned GPU workers; killing other
+users' processes is never part of startup. Stop during a take terminates only
+these workers to unblock native NCCL safely; the next Start reloads them.
+Normal completion retains weights. No default input image or audio is selected.
+Use `start_local.sh` for the preserved single-GPU stage-one baseline.
+
+## Single-GPU baseline
+
 This workspace provides uploaded-image/audio avatar takes through Reactor Runtime
 3.2.5 and the Python Reactor SDK. It does **not** add world-navigation controls,
 a default avatar, Docker packaging, FA4, CUDA graphs, or compilation.

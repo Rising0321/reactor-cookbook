@@ -1,0 +1,47 @@
+diff --git a/liveavatar/models/wan/causal_s2v_pipeline_tpp.py b/liveavatar/models/wan/causal_s2v_pipeline_tpp.py
+index 1c2c429..4f163ae 100644
+--- a/liveavatar/models/wan/causal_s2v_pipeline_tpp.py
++++ b/liveavatar/models/wan/causal_s2v_pipeline_tpp.py
+@@ -698,6 +698,7 @@ class WanS2V:
+         mask=None,
+         input_video_for_sam2=None,
+         enable_online_decode=False,
++        chunk_callback=None,
+     ):
+         r"""
+         Generates video frames from input image and text prompt using diffusion process.
+@@ -1127,13 +1128,16 @@ class WanS2V:
+                         if r == 0 and block_index == 0:
+                             image = image[:, :, 3:]#第一个clip第一个block保留0帧，后面3
+                  
+-                        out.append(image.cpu())
++                        if chunk_callback is None:
++                            out.append(image.cpu())
++                        else:
++                            chunk_callback(image[0])
+ 
+         #-------------------------------------- Step 3: full-video postprocess--------------------------------------
+         if dist.is_initialized():
+                 dist.barrier()
+         if dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
+-            videos = torch.cat(out, dim=2)
++            videos = torch.cat(out, dim=2) if chunk_callback is None else None
+             del clip_noise, clip_latents, clip_output,block_latents
+             self._sampler_timesteps = None
+             self._sampler_sigmas = None
+@@ -1142,7 +1146,7 @@ class WanS2V:
+                 gc.collect()
+                 torch.cuda.synchronize()
+ 
+-            return videos[0], dataset_info
++            return (videos[0] if videos is not None else None), dataset_info
+         else:
+             return None,dataset_info
+     
+@@ -1173,4 +1177,4 @@ class WanS2V:
+         sys.path.append('CosyVoice')
+         sys.path.append('CosyVoice/third_party/Matcha-TTS')
+         from cosyvoice.cli.cosyvoice import CosyVoice2
+-        self.cosyvoice = CosyVoice2('CosyVoice2-0.5B')
+\ No newline at end of file
++        self.cosyvoice = CosyVoice2('CosyVoice2-0.5B')
