@@ -23,7 +23,7 @@ chunk boundary.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-controls its Reactor Runtime 3.2.5, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.5.0, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -103,6 +103,13 @@ and Great Wall anchors arrive in the pinned source checkout; their locations
 are documented in [`example_images`](example_images).
 
 ## Runtime boundary
+
+`LingBotWorldV1` uses the `ReactorApp` step loop. `process_input()` creates a
+`LingbotV1State` snapshot of the selected image, prompt, seed, and camera
+controls. `generate()` runs one native chunk from that snapshot, and
+`process_output()` publishes its video and state messages. Commands take
+effect between chunks; generation waits for an image and stops at the rollout
+limit. Playback follows measured generation throughput.
 
 LingBot-World Fast is an autoregressive video model. The included
 `InteractiveFastRollout` runs its native three-latent, four-timestep boundary as
