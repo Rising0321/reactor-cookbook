@@ -169,7 +169,7 @@ mode and filenames, prompt, seed, completed and next chunk, and all six
 camera axes. A newly connected viewer and every completed chunk receive the
 same snapshot.
 
-After 512 chunks, the adapter starts a fresh rollout from the active condition
+After 2,048 chunks, the adapter starts a fresh rollout from the active condition
 and emits `rollout_restarted`. This bounds the preallocated pose timeline while
 keeping checkpoints and the worker resident.
 

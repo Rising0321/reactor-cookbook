@@ -100,7 +100,7 @@ def read_config(config_path: Path | None) -> EvokeConfig:
     motion = _mapping(document.get("motion"), "motion")
     stream = _mapping(document.get("stream"), "stream")
     source_path = _source_path(source.get("path"))
-    max_chunks = int(stream.get("max_chunks", 512))
+    max_chunks = int(stream.get("max_chunks", 2048))
     if max_chunks < 12:
         raise ValueError("stream.max_chunks must be at least 12")
     translation_speed = float(motion.get("translation_units_per_second", 1.0))

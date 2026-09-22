@@ -10,17 +10,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import evoke_config
 import numpy as np
 import pytest
 import yaml
-from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
-from reactor_runtime.interface.model.contract import ModelContract
-
-import evoke_config
 from evoke import Evoke
 from evoke_camera import CameraMotionPlanner, MotionConfig
 from evoke_images import validate_uploaded_image, validate_uploaded_pose
 from evoke_types import CommandApplied, EvokeOutput, EvokeState, StateUpdate
+from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
+from reactor_runtime.interface.model.contract import ModelContract
 
 EXAMPLE_DIR = Path(__file__).parents[1]
 STABILITY_PROMPT = evoke_config.read_config(EXAMPLE_DIR / "evoke.yaml").stability_prompt
@@ -339,10 +338,14 @@ def test_step_snapshot_preserves_conditioning_and_errors() -> None:
     asyncio.run(run())
 
 
-def test_automatic_restart_effects_belong_to_output(monkeypatch: Any) -> None:
+@pytest.mark.parametrize("max_chunks", [512, 2048])
+def test_automatic_restart_effects_belong_to_output(
+    monkeypatch: Any, max_chunks: int
+) -> None:
     """Snapshot a neutral fresh rollout without sending or flushing in input."""
     model, backend, messages = _ready_model()
-    model._chunk_index = 512
+    model._config = SimpleNamespace(max_chunks=max_chunks)
+    model._chunk_index = max_chunks
     model.state._restart_requested = False
     model.state.forward = 1.0
     flushes = []
@@ -358,5 +361,41 @@ def test_automatic_restart_effects_belong_to_output(monkeypatch: Any) -> None:
         assert len(backend.reset_calls) == 1
         assert flushes == [None]
         assert model.state.forward == 0.0
+
+    asyncio.run(run())
+
+
+def test_default_restart_bound_matches_config_fallback(tmp_path: Path) -> None:
+    """Keep the shipped restart horizon and an omitted setting consistent."""
+    config_path = EXAMPLE_DIR / "evoke.yaml"
+    assert evoke_config.read_config(config_path).max_chunks == 2048
+    document = yaml.safe_load(config_path.read_text())
+    document["stream"].pop("max_chunks")
+    fallback = tmp_path / "evoke.yaml"
+    fallback.write_text(yaml.safe_dump(document))
+    assert evoke_config.read_config(fallback).max_chunks == 2048
+
+
+@pytest.mark.parametrize("completed", [511, 512, 1024, 2047])
+def test_extended_rollout_does_not_restart_early(completed: int) -> None:
+    """Keep the same world and held controls until the configured boundary."""
+    model, backend, messages = _ready_model()
+    model._config = SimpleNamespace(max_chunks=2048)
+    model._chunk_index = completed
+    model.state._restart_requested = False
+    model.state.pitch = 0.25
+
+    async def run() -> None:
+        snapshot = await model.process_input()
+        assert not snapshot.restart
+        assert snapshot.chunk_index == completed
+        assert snapshot.pitch == 0.25
+        await model.process_output(StepOutcome(result=model.generate(snapshot)))
+        assert model._chunk_index == completed + 1
+        assert not backend.reset_calls
+        assert model.state.pitch == 0.25
+        assert not any(
+            type(message).__name__ == "RolloutRestarted" for message in messages
+        )
 
     asyncio.run(run())

@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: lingbot-world-v1-fast-camera
-  version: v0.1.1
+  version: v0.1.2
   description: |
     Explore LingBot-World v1 Fast from an image, prompt, and six-axis camera motion.
   resources:
