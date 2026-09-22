@@ -1,5 +1,9 @@
 # Play Matrix-Game 3.0 through Reactor Runtime
 
+The adapter uses Reactor Runtime 3.5's native step loop: `process_input()`
+snapshots the current controls, `generate()` runs one native chunk, and
+`process_output()` publishes its video and state updates.
+
 Run the public [Matrix-Game 3.0 world model](https://github.com/SkyworkAI/Matrix-Game)
 as an interactive first-person Reactor backend. Use this recipe to start from an
 uploaded image or a bundled example, optionally condition the world with text,
@@ -23,7 +27,7 @@ cache and calls the upstream interactive pipeline directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.5, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.5.0, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import secrets
 import time
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -43,7 +46,26 @@ from matrix_game_2_types import (
 logger = get_logger(__name__)
 
 
-class MatrixGame2(ReactorPipeline):
+@dataclass(frozen=True)
+class MatrixGame2Input:
+    """Snapshot image conditioning and one chunk's controls."""
+
+    anchor_image: Path | UploadedFile
+    seed: int
+    restart: bool
+    action: ChunkAction
+
+
+@dataclass(frozen=True)
+class MatrixGame2Result:
+    """Carry generated frames and the controls actually consumed."""
+
+    frames: np.ndarray
+    seconds: float
+    action: ChunkAction
+
+
+class MatrixGame2(ReactorApp):
     """Generate a keyboard- and mouse-camera-controlled Matrix world from an image."""
 
     state: MatrixGame2State
@@ -58,7 +80,6 @@ class MatrixGame2(ReactorPipeline):
         self._seed = 0
         self._chunk_index = 0
         self._last_chunk_frames = 0
-        self._chunk_in_flight = False
 
     def load(self, config_path: Path | None) -> None:
         """Load the pinned universal distilled checkpoint once.
@@ -95,7 +116,6 @@ class MatrixGame2(ReactorPipeline):
         self.state._limit_reached = False
         self._chunk_index = 0
         self._last_chunk_frames = 0
-        self._chunk_in_flight = False
         self._clear_controls()
 
     @connected
@@ -123,7 +143,6 @@ class MatrixGame2(ReactorPipeline):
             self.state._limit_reached = False
             self._chunk_index = 0
             self._last_chunk_frames = 0
-            self._chunk_in_flight = False
             self._clear_controls()
 
     @event(
@@ -314,66 +333,61 @@ class MatrixGame2(ReactorPipeline):
         self._request_restart()
         return self._state_update()
 
-    async def inference(self) -> AsyncGenerator[MatrixGame2Output | None, None]:
-        """Generate and emit one official causal chunk per Reactor turn."""
-        backend = self._require_backend()
-        config = self._require_config()
-
-        while True:
-            if self.state._restart_requested:
-                selected_input = self._selected_input
-                if selected_input is None:
-                    yield None
-                    continue
-                self.state._restart_requested = False
-                image = load_input_image(selected_input)
-                backend.reset(image, self._seed)
-                self._chunk_index = 0
-                self._last_chunk_frames = 0
-                self.state._limit_reached = False
-                await self.send(self._state_update())
-
-            if self._selected_input is None or self.state._limit_reached:
-                yield None
-                continue
-
-            action = ChunkAction(
+    async def process_input(self) -> MatrixGame2Input:
+        """Snapshot an available rollout at its next chunk boundary."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an anchor image before generating.")
+        if self.state._limit_reached:
+            raise ApplicationError("Reset the world after reaching the rollout limit.")
+        return MatrixGame2Input(
+            anchor_image=self._selected_input,
+            seed=self._seed,
+            restart=self.state._restart_requested,
+            action=ChunkAction(
                 pressed_keys=tuple(sorted(self.state._pressed_keys)),
                 pitch=self.state.pitch,
                 yaw=self.state.yaw,
-            )
-            self._chunk_in_flight = True
-            started_at = time.perf_counter()
-            try:
-                frames = backend.generate_chunk(action)
-            finally:
-                self._chunk_in_flight = False
-            inference_seconds = time.perf_counter() - started_at
+            ),
+        )
 
-            self._chunk_index += 1
-            self._last_chunk_frames = int(frames.shape[0])
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._clear_controls()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                    )
-                )
+    def generate(self, input: MatrixGame2Input) -> MatrixGame2Result:
+        """Generate one official causal chunk from an immutable input snapshot."""
+        backend = self._require_backend()
+        if input.restart:
+            backend.reset(load_input_image(input.anchor_image), input.seed)
+        started = time.perf_counter()
+        frames = backend.generate_chunk(input.action)
+        return MatrixGame2Result(frames, time.perf_counter() - started, input.action)
+
+    async def process_output(self, outcome: StepOutcome) -> MatrixGame2Output:
+        """Publish the completed chunk and advance successful rollout progress."""
+        if outcome.error is not None:
+            raise outcome.error
+        result: MatrixGame2Result = outcome.result
+        self.state._restart_requested = False
+        self._chunk_index += 1
+        self._last_chunk_frames = int(result.frames.shape[0])
+        config = self._require_config()
+        if self._chunk_index >= config.max_chunks:
+            self.state._limit_reached = True
+            self._clear_controls()
             await self.send(
-                ChunkComplete(
-                    chunk=self._chunk_index,
-                    frames=self._last_chunk_frames,
-                    inference_seconds=inference_seconds,
-                    pressed_keys=list(action.pressed_keys),
-                    pitch=action.pitch,
-                    yaw=action.yaw,
+                RolloutLimitReached(
+                    completed_chunks=self._chunk_index, max_chunks=config.max_chunks
                 )
             )
-            await self.send(self._state_update())
-
-            yield MatrixGame2Output(main_video=frames)
+        await self.send(
+            ChunkComplete(
+                chunk=self._chunk_index,
+                frames=self._last_chunk_frames,
+                inference_seconds=result.seconds,
+                pressed_keys=list(result.action.pressed_keys),
+                pitch=result.action.pitch,
+                yaw=result.action.yaw,
+            )
+        )
+        await self.send(self._state_update())
+        return MatrixGame2Output(main_video=result.frames)
 
     def _request_restart(self) -> None:
         """Queue fresh image conditioning and release current controls and progress."""
@@ -412,7 +426,7 @@ class MatrixGame2(ReactorPipeline):
         """Return the one-based chunk expected to sample controls accepted now."""
         if self.state._restart_requested:
             return 1
-        return self._chunk_index + 1 + int(self._chunk_in_flight)
+        return self._chunk_index + 1
 
     def _state_update(self) -> StateUpdate:
         """Return a complete client-facing snapshot of the shared world state."""
@@ -424,7 +438,7 @@ class MatrixGame2(ReactorPipeline):
             image_name=selected.name if selected is not None else "",
             seed=self._seed,
             reset_queued=self.state._restart_requested,
-            chunk_in_flight=self._chunk_in_flight,
+            chunk_in_flight=False,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,
             next_chunk=None

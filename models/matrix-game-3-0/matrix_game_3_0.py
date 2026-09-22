@@ -8,17 +8,19 @@ latents, full action and pose history, denoising state, and streaming VAE cache.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -70,7 +72,18 @@ class _Backend(Protocol):
         """Release state owned by the completed rollout."""
 
 
-class MatrixGame30(ReactorPipeline):
+@dataclass(frozen=True)
+class MatrixGame30Input:
+    """Snapshot the conditions for one native Matrix iteration."""
+
+    anchor_image: Path | UploadedFile
+    prompt: str
+    seed: int
+    restart: bool
+    action: NativeAction
+
+
+class MatrixGame30(ReactorApp):
     """Generate an image-, prompt-, movement-, and view-controlled Matrix world."""
 
     state: MatrixGame30State
@@ -369,53 +382,50 @@ class MatrixGame30(ReactorPipeline):
         self._request_fresh_rollout()
         return self._state_update()
 
-    async def inference(self) -> AsyncGenerator[MatrixGame30Output | None, None]:
-        """Generate one official Matrix iteration at a time and emit every RGB frame."""
+    async def process_input(self) -> MatrixGame30Input:
+        """Snapshot an available world and its held controls."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an anchor image before generating.")
+        if self.state._limit_reached:
+            raise ApplicationError("Reset the world after reaching the rollout limit.")
+        return MatrixGame30Input(
+            anchor_image=self._selected_input,
+            prompt=self.state.prompt.strip(),
+            seed=self._seed,
+            restart=self.state._restart_requested,
+            action=action_from_controls(
+                self.state._pressed_keys, self.state.pitch, self.state.yaw
+            ),
+        )
+
+    def generate(self, input: MatrixGame30Input) -> NDArray[np.uint8]:
+        """Run one native iteration with the upstream rollout intact."""
         backend = self._backend
-        config = self._config
-        if backend is None or config is None:
+        if backend is None:
             raise RuntimeError("Matrix-Game 3.0 was not loaded")
+        if input.restart:
+            backend.reset(input.prompt, input.seed, input.anchor_image)
+        return backend.generate_chunk(input.action)
 
-        while True:
-            if self.state._restart_requested:
-                selected = self._selected_input
-                if selected is None:
-                    yield None
-                    continue
-                prompt = self.state.prompt.strip()
-                self.state._restart_requested = False
-                backend.reset(prompt, self._seed, selected)
-                self._chunk_index = 0
-
-            if self._selected_input is None:
-                yield None
-                continue
-
-            if self.state._limit_reached:
-                yield None
-                continue
-
-            action = action_from_controls(
-                self.state._pressed_keys,
-                self.state.pitch,
-                self.state.yaw,
-            )
-            chunk_index = self._chunk_index
-            frames = backend.generate_chunk(action)
-            frames = normalize_output_frames(frames, chunk_index)
-            self._chunk_index += 1
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._clear_controls()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                    )
+    async def process_output(self, outcome: StepOutcome) -> MatrixGame30Output:
+        """Publish every decoded frame and advance successful rollout progress."""
+        if outcome.error is not None:
+            raise outcome.error
+        frames = normalize_output_frames(outcome.result, self._chunk_index)
+        self.state._restart_requested = False
+        self._chunk_index += 1
+        config = self._require_config()
+        if self._chunk_index >= config.max_chunks:
+            self.state._limit_reached = True
+            self._clear_controls()
+            await self.send(
+                RolloutLimitReached(
+                    completed_chunks=self._chunk_index,
+                    max_chunks=config.max_chunks,
                 )
-            await self.send(self._state_update())
-
-            yield MatrixGame30Output(main_video=frames)
+            )
+        await self.send(self._state_update())
+        return MatrixGame30Output(main_video=frames)
 
     def _request_fresh_rollout(self) -> None:
         """Queue a fresh upstream rollout and clear controls and progress."""

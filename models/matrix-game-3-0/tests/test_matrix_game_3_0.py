@@ -4,11 +4,12 @@ import asyncio
 import io
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import numpy as np
+import pytest
 from PIL import Image
-from reactor_runtime import UploadedFile
+from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 
 from matrix_game_3_0 import MatrixGame30
 from matrix_game_3_0_backend import MatrixGame30Backend, action_from_controls
@@ -51,18 +52,13 @@ def test_session_waits_for_explicit_image_selection() -> None:
     model.on_session_started()
     message = model._state_update()
 
-    async def first_turn() -> object:
-        generator = model.inference()
-        output = await anext(generator)
-        await generator.aclose()
-        return output
-
     assert model._selected_input is None
     assert model.state._restart_requested is False
     assert message.image_source == "none"
     assert message.next_chunk is None
     assert message.next_chunk_frames is None
-    assert asyncio.run(first_turn()) is None
+    with pytest.raises(ApplicationError, match="anchor image"):
+        asyncio.run(model.process_input())
 
 
 def test_uploaded_image_and_prompt_start_a_fresh_rollout(tmp_path: Path) -> None:
@@ -174,3 +170,65 @@ def test_backend_bridges_one_action_to_each_unmodified_iteration(
     assert len(seen_actions) == 2
     assert module.get_current_action is original_action
     assert module.process_video is original_video
+
+
+def make_model():
+    model = MatrixGame30()
+    model.state = MatrixGame30State()
+    model._config = SimpleNamespace(
+        seed=42,
+        max_chunks=20,
+        chunk_latents=4,
+        upload_intrinsics=(1, 1, 0.5, 0.5),
+    )
+    model.send = AsyncMock()
+    model._selected_input = Path("anchor.png")
+    model.state._restart_requested = False
+    return model
+
+
+def test_input_waits_for_image_and_rejects_rollout_limit():
+    model = make_model()
+    model._selected_input = None
+    with pytest.raises(ApplicationError):
+        asyncio.run(model.process_input())
+    model._selected_input = Path("anchor.png")
+    model.state._limit_reached = True
+    with pytest.raises(ApplicationError):
+        asyncio.run(model.process_input())
+
+
+def test_failure_does_not_advance_progress():
+    model = make_model()
+    model.state._restart_requested = True
+    with pytest.raises(RuntimeError, match="failed"):
+        asyncio.run(model.process_output(StepOutcome(error=RuntimeError("failed"))))
+    assert model._chunk_index == 0
+    assert model.state._restart_requested
+
+
+def test_controls_are_snapshotted_and_native_chunks_remain_continuous():
+    model = make_model()
+    backend = Mock()
+    model._backend = backend
+
+    frames = np.zeros((57, 8, 8, 3), dtype=np.uint8)
+    backend.generate_chunk.return_value = frames
+    model.state.yaw = 0.25
+    snapshot = asyncio.run(model.process_input())
+    model.state.yaw = -0.25
+    assert snapshot.action.mouse[1] == 0.025
+    result = model.generate(snapshot)
+    asyncio.run(model.process_output(StepOutcome(result=result)))
+    assert model._chunk_index == 1
+    backend.reset.assert_not_called()
+    backend.generate_chunk.assert_called_once()
+    assert model.send.called
+    backend.generate_chunk.return_value = np.zeros((40, 8, 8, 3), dtype=np.uint8)
+    for _ in range(9):
+        snapshot = asyncio.run(model.process_input())
+        result = model.generate(snapshot)
+        asyncio.run(model.process_output(StepOutcome(result=result)))
+    assert model._chunk_index == 10
+    assert backend.generate_chunk.call_count == 10
+    backend.reset.assert_not_called()
