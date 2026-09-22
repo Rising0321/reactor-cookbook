@@ -183,9 +183,15 @@ def test_inference_yields_one_synchronized_native_chunk(tmp_path: Path) -> None:
     model._seed = 42
 
     async def generate() -> tuple[EchoWMOutput, EchoWMOutput]:
-        outputs = model.inference()
-        first = await anext(outputs)
-        second = await anext(outputs)
+        from reactor_runtime import StepOutcome
+
+        first = await model.process_output(
+            StepOutcome(result=model.generate(await model.process_input()))
+        )
+        for _ in range(9):
+            second = await model.process_output(
+                StepOutcome(result=model.generate(await model.process_input()))
+            )
         assert isinstance(first, EchoWMOutput)
         assert isinstance(second, EchoWMOutput)
         return first, second
@@ -196,7 +202,8 @@ def test_inference_yields_one_synchronized_native_chunk(tmp_path: Path) -> None:
     assert video.shape == (25, 704, 1280, 3)
     assert audio.shape == (1, 50_000)
     assert model._backend.reset_calls == 1
-    assert model._backend.chunk_calls == 2
+    assert model._backend.chunk_calls == 10
+    assert model._chunk_index == 10
 
 
 def test_rollout_reset_flushes_pending_media() -> None:

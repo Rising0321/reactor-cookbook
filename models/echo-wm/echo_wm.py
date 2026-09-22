@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import secrets
 import time
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
 import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -71,7 +73,33 @@ class _Backend(Protocol):
         """Release rollout state while retaining model weights."""
 
 
-class EchoWM(ReactorPipeline):
+@dataclass(frozen=True)
+class EchoStepState:
+    """Snapshot the anchor, prompt, and native camera controls for one block."""
+
+    image: Path | UploadedFile
+    prompt: str
+    seed: int
+    restart: bool
+    forward: float
+    strafe: float
+    pitch: float
+    yaw: float
+    fov_degrees: float
+
+
+@dataclass(frozen=True)
+class EchoStepResult:
+    """Carry synchronized media and native generation timings."""
+
+    video: np.ndarray
+    audio: np.ndarray
+    seconds: float
+    profile: dict[str, float]
+    input: EchoStepState
+
+
+class EchoWM(ReactorApp):
     """Generate a prompt-, image-, and pure-camera-controlled audiovisual world."""
 
     state: EchoWMState
@@ -424,110 +452,113 @@ class EchoWM(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    async def inference(self) -> AsyncGenerator[EchoWMOutput | None, None]:
-        """Generate and emit one native causal audio-video block per turn."""
+    async def process_input(self) -> EchoStepState:
+        """Snapshot a native audio-video step after an anchor is selected."""
+        if self._selected_image is None:
+            raise ApplicationError("Select an image before generating.")
+        prompt = (
+            self.state.prompt.strip()
+            if self.state._reset_requested
+            else self._active_prompt
+        )
+        if not prompt:
+            raise ApplicationError("Echo-WM requires a prompt before generating.")
+        snapshot = EchoStepState(
+            image=self._selected_image,
+            prompt=prompt,
+            seed=self._seed,
+            restart=self.state._reset_requested,
+            forward=self.state._forward,
+            strafe=self.state._strafe,
+            pitch=self.state._pitch,
+            yaw=self.state._yaw,
+            fov_degrees=self.state._fov_degrees,
+        )
+        self._generating = True
+        return snapshot
+
+    def generate(self, input: EchoStepState) -> EchoStepResult:
+        """Apply the input snapshot and decode one synchronized native block."""
         config = self._require_loaded()
         backend = self._backend
         planner = self._planner
         if backend is None or planner is None:
             raise RuntimeError("Echo-WM was not loaded")
-
-        while True:
-            if self.state._reset_requested:
-                selected = self._selected_image
-                if selected is None:
-                    yield None
-                    continue
-                prompt = self.state.prompt.strip()
-                if not prompt:
-                    raise RuntimeError("Echo-WM requires a prompt before reset")
-                self.state._reset_requested = False
-                self._generating = True
-                await self.send(self._state_update())
-                try:
-                    with materialized_image(selected, config.runtime_dir) as image:
-                        backend.reset(
-                            image=image,
-                            prompt=prompt,
-                            seed=self._seed,
-                            fov_degrees=self.state._fov_degrees,
-                        )
-                finally:
-                    self._generating = False
-                planner.reset()
-                self._chunk_index = 0
-                self._active_prompt = prompt
-                await self.send(self._state_update())
-
-            if self._selected_image is None:
-                yield None
-                continue
-
-            sampled_prompt = self._active_prompt
-            if sampled_prompt is None:
-                raise RuntimeError("Echo-WM rollout has no active prompt")
-            sampled_controls = {
-                "forward": self.state._forward,
-                "strafe": self.state._strafe,
-                "pitch": self.state._pitch,
-                "yaw": self.state._yaw,
-            }
-            sampled_fov = self.state._fov_degrees
-            camera = planner.plan_chunk(
-                **sampled_controls,
-                frame_count=config.frames_per_chunk,
-            )
-            self._generating = True
-            await self.send(self._state_update())
-            started = time.perf_counter()
-            try:
-                video, audio = backend.generate_chunk(
-                    camera,
-                    fov_degrees=sampled_fov,
+        if input.restart:
+            with materialized_image(input.image, config.runtime_dir) as image:
+                backend.reset(
+                    image=image,
+                    prompt=input.prompt,
+                    seed=input.seed,
+                    fov_degrees=input.fov_degrees,
                 )
-            finally:
-                self._generating = False
-            seconds = time.perf_counter() - started
-            profile = backend.last_profile
-            self._chunk_index += 1
-            logger.info(
-                "Echo-WM chunk complete",
+            planner.reset()
+        camera = planner.plan_chunk(
+            forward=input.forward,
+            strafe=input.strafe,
+            pitch=input.pitch,
+            yaw=input.yaw,
+            frame_count=config.frames_per_chunk,
+        )
+        started = time.perf_counter()
+        video, audio = backend.generate_chunk(camera, fov_degrees=input.fov_degrees)
+        return EchoStepResult(
+            video,
+            audio,
+            time.perf_counter() - started,
+            dict(backend.last_profile),
+            input,
+        )
+
+    async def process_output(self, outcome: StepOutcome) -> EchoWMOutput:
+        """Publish native media, generation timings, and rollout state."""
+        self._generating = False
+        if outcome.error is not None:
+            raise outcome.error
+        result: EchoStepResult = outcome.result
+        input = result.input
+        if input.restart:
+            self._chunk_index = 0
+        self.state._reset_requested = False
+        self._active_prompt = input.prompt
+        self._chunk_index += 1
+        profile = result.profile
+        logger.info(
+            "Echo-WM chunk complete",
+            chunk=self._chunk_index,
+            generation_seconds=round(result.seconds, 3),
+            **{name: round(value, 4) for name, value in profile.items()},
+        )
+        await self.send(
+            ChunkCompleted(
                 chunk=self._chunk_index,
-                generation_seconds=round(seconds, 3),
-                **{name: round(value, 4) for name, value in profile.items()},
+                video_frames=int(result.video.shape[0]),
+                audio_samples=int(result.audio.shape[-1]),
+                generation_seconds=round(result.seconds, 3),
+                denoise_seconds=_profile_value(profile, "denoise_seconds"),
+                cache_commit_seconds=_profile_value(profile, "cache_commit_seconds"),
+                video_decode_seconds=_profile_value(profile, "video_decode_seconds"),
+                audio_decode_seconds=_profile_value(profile, "audio_decode_seconds"),
+                cuda_total_seconds=_profile_value(profile, "cuda_total_seconds"),
+                prompt=input.prompt,
+                forward=input.forward,
+                strafe=input.strafe,
+                pitch=input.pitch,
+                yaw=input.yaw,
             )
+        )
+        config = self._require_loaded()
+        if self._chunk_index >= config.max_chunks:
+            self.state._reset_requested = True
             await self.send(
-                ChunkCompleted(
-                    chunk=self._chunk_index,
-                    video_frames=int(video.shape[0]),
-                    audio_samples=int(audio.shape[-1]),
-                    generation_seconds=round(seconds, 3),
-                    denoise_seconds=_profile_value(profile, "denoise_seconds"),
-                    cache_commit_seconds=_profile_value(
-                        profile, "cache_commit_seconds"
-                    ),
-                    video_decode_seconds=_profile_value(
-                        profile, "video_decode_seconds"
-                    ),
-                    audio_decode_seconds=_profile_value(
-                        profile, "audio_decode_seconds"
-                    ),
-                    cuda_total_seconds=_profile_value(profile, "cuda_total_seconds"),
-                    prompt=sampled_prompt,
-                    **sampled_controls,
+                AutomaticResetQueued(
+                    completed_chunks=self._chunk_index,
+                    max_chunks=config.max_chunks,
+                    seed=self._seed,
                 )
             )
-            if self._chunk_index >= config.max_chunks:
-                self.state._reset_requested = True
-                await self.send(
-                    AutomaticResetQueued(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                        seed=self._seed,
-                    )
-                )
-            await self.send(self._state_update())
-            yield EchoWMOutput(main_video=video, main_audio=audio)
+        await self.send(self._state_update())
+        return EchoWMOutput(main_video=result.video, main_audio=result.audio)
 
     def _warmup(self) -> None:
         """Generate configured throwaway chunks before accepting a session."""

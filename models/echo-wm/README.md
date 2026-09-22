@@ -27,8 +27,11 @@ one second of generated world time per chunk. Playout uses Echo-WM's native
 
 ## Run with the Reactor CLI
 
+The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+the current inputs, generates one native chunk, and publishes its media and state.
+
 This directory is a Reactor workspace. Its `reactor.yaml` manifest defines the
-Python 3.12 serving image, Reactor Runtime 3.2.5, CUDA and system dependencies,
+Python 3.12 serving image, Reactor Runtime 3.5.0, CUDA and system dependencies,
 the model entry point, GPU resource, recording tracks, and persistent weights
 directory. See the [Reactor CLI installation
 guide](https://docs.reactor.inc/deploy/platform/installation) and [build
