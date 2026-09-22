@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -14,18 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from reactor_runtime import UploadedFile
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _RESPONSE_PREFIX = "REACTOR_LINGBOT_V1_RESPONSE "
-_UPLOAD_SUFFIXES = {
-    "image/bmp": ".bmp",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
 
 
 @dataclass(frozen=True)
@@ -95,17 +88,22 @@ class LingBotWorkerBackend:
 
     def reset(
         self,
+        *,
         seed: int,
-        anchor_image: Path | UploadedFile,
+        anchor_image: Path | bytes,
+        suffix: str,
         intrinsics: Path,
         prompt: str,
     ) -> None:
-        """Start a fresh rollout from one image, calibration, and prompt."""
+        """Start a fresh rollout from one image, calibration, and prompt.
+
+        ``anchor_image`` is a file on disk, or encoded bytes that are written
+        to the worker's workspace as ``anchor_<n><suffix>`` for the call.
+        """
         upload_path: Path | None = None
-        if isinstance(anchor_image, UploadedFile):
-            suffix = _UPLOAD_SUFFIXES.get(anchor_image.mime_type.lower(), ".image")
+        if isinstance(anchor_image, bytes):
             upload_path = self._root / f"anchor_{self._request_id + 1}{suffix}"
-            upload_path.write_bytes(anchor_image.data)
+            upload_path.write_bytes(anchor_image)
             image_path = upload_path
         else:
             image_path = anchor_image
@@ -196,7 +194,7 @@ class LingBotWorkerBackend:
                 if not line.startswith(_RESPONSE_PREFIX):
                     self._recent_output.append(line)
                     if line:
-                        logger.info("LingBot worker", output=line[-1000:])
+                        logger.info("LingBot worker: %s", line[-1000:])
                     continue
                 response = json.loads(line.removeprefix(_RESPONSE_PREFIX))
                 if int(response.get("id", -2)) != request_id:
