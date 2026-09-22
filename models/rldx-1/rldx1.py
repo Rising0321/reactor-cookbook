@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
-"""RLDX-1 ported to the Reactor Runtime (ReactorPipeline pattern).
+"""RLDX-1 served through Reactor Runtime's native action-prediction step loop.
 
 Wraps the upstream ``RLDXPolicy`` (RLWRLD/RLDX-1) behind the runtime. The client
 (cpp_sdk) publishes the camera views as input tracks and sends the robot proprio
@@ -32,15 +32,19 @@ from typing import Any
 import numpy as np
 import yaml
 from reactor_runtime import (
-    Idle,
-    ReactorPipeline,
+    ApplicationError,
+    ReactorApp,
     ReadMode,
+    StepOutcome,
     connected,
+    disconnected,
     event,
+    session_ended,
     session_started,
 )
 
 from rldx1_rtc import (
+    RTCRequest,
     RTCRequestMailbox,
     build_rtc_request,
     resolve_rtc_timing,
@@ -200,7 +204,31 @@ def _align_by_capture(
     )
 
 
-class RLDXPipeline(ReactorPipeline):
+@dataclass(frozen=True)
+class RLDXStepState:
+    """An aligned observation, RTC request and publication metadata."""
+
+    observation: dict[str, Any] | None
+    options: dict[str, Any] | None
+    request: RTCRequest | None
+    source_capture_us: int | None
+    source_seq: int | None
+    view_skew_us: int | None
+    step: int
+    started_at: float | None
+    reset: bool
+    messages: tuple[ModelSchema | CommandError, ...]
+
+
+@dataclass(frozen=True)
+class RLDXStepResult:
+    """Native policy result paired with the observation that produced it."""
+
+    input: RLDXStepState
+    actions: dict[str, Any] | None
+
+
+class RLDXPipeline(ReactorApp):
     input: RLDXInput
     state: RLDXState
     buffer_size = 8
@@ -364,6 +392,27 @@ class RLDXPipeline(ReactorPipeline):
     @session_started
     def on_session_started(self) -> None:
         self._reset_memory()
+        self._clear_observation_window()
+
+    def _clear_observation_window(self) -> None:
+        """Release per-connection frame windows while retaining policy memory."""
+        maxlen = -min(self._video_deltas) + 1
+        self._bufs = {v: deque(maxlen=maxlen) for v in self._views}
+        self._recent = {v: deque(maxlen=_RECENT_FRAMES) for v in self._views}
+        self._step = 0
+        self._last_commit = None
+        self._last_replan = None
+
+    @disconnected
+    def on_disconnect(self) -> None:
+        """Discard windows when the last observer leaves the session."""
+        if not self.connected.is_set():
+            self._clear_observation_window()
+
+    @session_ended
+    def on_session_ended(self) -> None:
+        """Release buffered images at the end of the session."""
+        self._clear_observation_window()
 
     @connected
     async def on_connect(self) -> None:
@@ -426,10 +475,7 @@ class RLDXPipeline(ReactorPipeline):
         self.state._reset = True
 
     def _reset_memory(self) -> None:
-        try:
-            self._policy.reset()
-        except Exception:
-            pass
+        self._policy_reset_pending = True
         self._last_state = None
         self._state_degraded = False
         self._last_skew_us = None
@@ -479,181 +525,213 @@ class RLDXPipeline(ReactorPipeline):
             f"{reason}; skipping inference (state_fallback={self._state_fallback})"
         )
 
-    async def inference(self):
-        import cv2  # local: only needed at run time
-
+    async def process_input(self) -> RLDXStepState:
+        """Align incoming views and snapshot one client-triggered action request."""
         deltas = self._video_deltas
         step_s = (1.0 / self._control_hz) if self._control_hz > 0 else 0.0
         replan_s = (
-            (self._exec_horizon * step_s)
+            self._exec_horizon * step_s
             if self._pace and not self._rtc_timing.enabled
             else 0.0
         )
-        # Per-control-step window buffer: deep enough to reach the oldest offset.
         maxlen = -min(deltas) + 1
-
         views = self._views
-        bufs = {v: deque(maxlen=maxlen) for v in views}
-        # Per-view (capture stamp, frame) recency, aligned across views at commit.
-        recent = {v: deque(maxlen=_RECENT_FRAMES) for v in views}
-        step = 0
-        last_commit: float | None = None  # time.monotonic() of the last commit
-        last_replan: float | None = None  # time.monotonic() of the last get_action
+        messages = []
 
-        while True:
-            # Episode reset (clears RLDX memory + frame/state buffers).
-            if self.state._reset:
-                self.state._reset = False
-                self._reset_memory()
-                bufs = {v: deque(maxlen=maxlen) for v in views}
-                recent = {v: deque(maxlen=_RECENT_FRAMES) for v in views}
-                step = 0
-                last_commit = None
-                last_replan = None
-
-            # Collect the freshest frame per view (non-blocking), keeping its
-            # metadata attached until alignment selects the commit. Resize on
-            # read so the commit tick only picks between ready frames.
-            for v in views:
-                frames = getattr(self.input, v).try_read(1, mode=ReadMode.LATEST)
-                if frames:
-                    f = frames[0].data  # (H, W, 3) uint8 RGB
-                    if f.shape[0] != self._H or f.shape[1] != self._W:
-                        f = cv2.resize(f, (self._W, self._H))
-                    recent[v].append(
-                        _FrameCandidate(
-                            capture_time_us=frames[0].capture_time_us,
-                            data=f,
-                            metadata=frames[0].metadata,
-                        )
-                    )
-
-            # Handshake delivery guard (REA-4318): the @connected send can race
-            # the data channel opening and be dropped. Frames flowing prove the
-            # channel is up, so re-announce once after each connect.
-            if self._schema_pending and any(recent[v] for v in views):
-                self._schema_pending = False
-                await self.send(ModelSchema(**self._schema))
-
-            # Need at least one frame in every view before we can step.
-            if any(not recent[v] for v in views):
-                yield Idle
-                continue
-
-            now = time.monotonic()
-
-            # Commit one frame per view once per control step, downsampling the
-            # live stream to control_hz so the buffer holds one frame per control
-            # step (what delta_indices are expressed in) — independent of the
-            # client's publish fps. Which frame is the aligner's call: the three
-            # views are independent tracks and drift against each other, so
-            # "freshest per view" is not one instant.
-            if last_commit is None or (now - last_commit) >= step_s:
-                aligned = _align_by_capture(recent)
-                for v in views:
-                    bufs[v].append(aligned.frames[v])
-                self._frame_tags.clear()
-                for candidate in aligned.state_candidates:
-                    self._frame_tags.offer(
-                        candidate.metadata,
-                        capture_time_us=candidate.capture_time_us,
-                    )
-                self._last_skew_us = aligned.view_skew_us
-                last_commit = now
-
-            # RTC is client-triggered: timestamps identify the observation, but
-            # the client-owned execution cursor decides when a replacement plan
-            # may be installed. Never infer an RTC plan from server wall time.
-            rtc_request = self._rtc_requests.pending
-            if self._rtc_timing.enabled and rtc_request is None:
-                yield Idle
-                continue
-
-            # Pace re-planning to the execution cadence: don't re-plan until the
-            # client has had one exec_horizon of wall time to run the last chunk.
-            if replan_s and last_replan is not None and (now - last_replan) < replan_s:
-                yield Idle
-                continue
-
-            # Resolve robot state; never silently feeds zeros (REA-4319). Signal
-            # once per transition into a degraded state, not every tick.
-            robot_state, degraded = self._resolve_state()
-            source_capture_us, source_seq = self._frame_tags.stamp
-            if degraded is not None:
-                if not self._state_degraded:
-                    self._state_degraded = True
-                    await self.send(CommandError(command="state", reason=degraded))
-            else:
-                self._state_degraded = False
-            if robot_state is None:
-                yield Idle
-                continue
-
-            # Build the strided temporal window per view from the per-control-step
-            # buffer at the checkpoint's offsets (REA-4317). Output is
-            # (1, T, H, W, 3) with the most-recent frame last — as the policy's
-            # observation validator asserts (T == len(delta_indices)).
-            def window(v: str) -> np.ndarray:
-                hist = list(bufs[v])
-                idxs = _window_indices(deltas, 1, len(hist))
-                return np.stack([hist[i] for i in idxs])[None]
-
-            obs = {
-                **{f"video.{v}": window(v) for v in views},
-                **robot_state,
-                "annotation.human.action.task_description": (
-                    self.state.task_description or "pick up the mug",
-                ),
-            }
-
-            options = None
-            if rtc_request is not None:
-                # Consume only after frames and valid state are ready. The
-                # policy accepts physical-unit actions and normalizes them at
-                # its boundary before RTC prefix injection.
-                rtc_request = self._rtc_requests.take()
-                assert rtc_request is not None
-                if rtc_request.rtc_prefix_len:
-                    options = {
-                        "action_prefix": rtc_request.prefix_array(),
-                        "rtc_prefix_len": rtc_request.rtc_prefix_len,
-                    }
-
-            actions, _info = self._policy.get_action(obs, options)
-
-            def chunk(key: str) -> list:
-                return np.asarray(actions[f"action.{key}"][0]).astype(float).tolist()
-
-            await self.send(
-                ActionPrediction(
-                    end_effector_position=chunk("end_effector_position"),
-                    end_effector_rotation=chunk("end_effector_rotation"),
-                    gripper_close=chunk("gripper_close"),
-                    base_motion=chunk("base_motion"),
-                    control_mode=chunk("control_mode"),
-                    step=step,
-                    source_capture_us=source_capture_us,
-                    source_seq=source_seq,
-                    view_skew_us=self._last_skew_us,
-                    request_id=(
-                        rtc_request.request_id if rtc_request is not None else None
-                    ),
-                    plan_id=(
-                        rtc_request.request_id if rtc_request is not None else None
-                    ),
-                    base_plan_id=(
-                        rtc_request.base_plan_id if rtc_request is not None else None
-                    ),
-                    install_step=(
-                        rtc_request.install_step if rtc_request is not None else None
-                    ),
-                    rtc_prefix_len=(
-                        rtc_request.rtc_prefix_len if rtc_request is not None else None
-                    ),
+        def snapshot(
+            obs=None,
+            options=None,
+            rtc_request=None,
+            source_capture_us=None,
+            source_seq=None,
+            now=None,
+        ):
+            if obs is None and not messages and not self._policy_reset_pending:
+                raise ApplicationError(
+                    "Waiting for aligned observations and an eligible action request."
                 )
+            return RLDXStepState(
+                observation=obs,
+                options=options,
+                request=rtc_request,
+                source_capture_us=source_capture_us,
+                source_seq=source_seq,
+                view_skew_us=self._last_skew_us,
+                step=self._step,
+                started_at=now,
+                reset=self._policy_reset_pending,
+                messages=tuple(messages),
             )
-            if rtc_request is not None:
-                self._last_plan_id = rtc_request.request_id
-            last_replan = now
-            step += 1
-            yield Idle
+
+        # Episode reset (clears RLDX memory + frame/state buffers).
+        if self.state._reset:
+            self.state._reset = False
+            self._reset_memory()
+            self._bufs = {v: deque(maxlen=maxlen) for v in views}
+            self._recent = {v: deque(maxlen=_RECENT_FRAMES) for v in views}
+            self._step = 0
+            self._last_commit = None
+            self._last_replan = None
+
+        # Collect the freshest frame per view (non-blocking), keeping its
+        # metadata attached until alignment selects the commit. Resize on
+        # read so the commit tick only picks between ready frames.
+        for v in views:
+            frames = getattr(self.input, v).try_read(1, mode=ReadMode.LATEST)
+            if frames:
+                f = frames[0].data  # (H, W, 3) uint8 RGB
+                if f.shape[0] != self._H or f.shape[1] != self._W:
+                    import cv2
+
+                    f = cv2.resize(f, (self._W, self._H))
+                self._recent[v].append(
+                    _FrameCandidate(
+                        capture_time_us=frames[0].capture_time_us,
+                        data=f,
+                        metadata=frames[0].metadata,
+                    )
+                )
+
+        # Handshake delivery guard (REA-4318): the @connected send can race
+        # the data channel opening and be dropped. Frames flowing prove the
+        # channel is up, so re-announce once after each connect.
+        if self._schema_pending and any(self._recent[v] for v in views):
+            self._schema_pending = False
+            messages.append(ModelSchema(**self._schema))
+
+        # Need at least one frame in every view before we can step.
+        if any(not self._recent[v] for v in views):
+            return snapshot()
+
+        now = time.monotonic()
+
+        # Commit one frame per view once per control step, downsampling the
+        # live stream to control_hz so the buffer holds one frame per control
+        # step (what delta_indices are expressed in) — independent of the
+        # client's publish fps. Which frame is the aligner's call: the three
+        # views are independent tracks and drift against each other, so
+        # "freshest per view" is not one instant.
+        if self._last_commit is None or (now - self._last_commit) >= step_s:
+            aligned = _align_by_capture(self._recent)
+            for v in views:
+                self._bufs[v].append(aligned.frames[v])
+            self._frame_tags.clear()
+            for candidate in aligned.state_candidates:
+                self._frame_tags.offer(
+                    candidate.metadata,
+                    capture_time_us=candidate.capture_time_us,
+                )
+            self._last_skew_us = aligned.view_skew_us
+            self._last_commit = now
+
+        # RTC is client-triggered: timestamps identify the observation, but
+        # the client-owned execution cursor decides when a replacement plan
+        # may be installed. Never infer an RTC plan from server wall time.
+        rtc_request = self._rtc_requests.pending
+        if self._rtc_timing.enabled and rtc_request is None:
+            return snapshot()
+
+        # Pace re-planning to the execution cadence: don't re-plan until the
+        # client has had one exec_horizon of wall time to run the last chunk.
+        if (
+            replan_s
+            and self._last_replan is not None
+            and (now - self._last_replan) < replan_s
+        ):
+            return snapshot()
+
+        # Resolve robot state; never silently feeds zeros (REA-4319). Signal
+        # once per transition into a degraded state, not every tick.
+        robot_state, degraded = self._resolve_state()
+        source_capture_us, source_seq = self._frame_tags.stamp
+        if degraded is not None:
+            if not self._state_degraded:
+                self._state_degraded = True
+                messages.append(CommandError(command="state", reason=degraded))
+        else:
+            self._state_degraded = False
+        if robot_state is None:
+            return snapshot()
+
+        # Build the strided temporal window per view from the per-control-step
+        # buffer at the checkpoint's offsets (REA-4317). Output is
+        # (1, T, H, W, 3) with the most-recent frame last — as the policy's
+        # observation validator asserts (T == len(delta_indices)).
+        def window(v: str) -> np.ndarray:
+            hist = list(self._bufs[v])
+            idxs = _window_indices(deltas, 1, len(hist))
+            return np.stack([hist[i] for i in idxs])[None]
+
+        obs = {
+            **{f"video.{v}": window(v) for v in views},
+            **robot_state,
+            "annotation.human.action.task_description": (
+                self.state.task_description or "pick up the mug",
+            ),
+        }
+
+        options = None
+        if rtc_request is not None:
+            # Consume only after frames and valid state are ready. The
+            # policy accepts physical-unit actions and normalizes them at
+            # its boundary before RTC prefix injection.
+            rtc_request = self._rtc_requests.take()
+            assert rtc_request is not None
+            if rtc_request.rtc_prefix_len:
+                options = {
+                    "action_prefix": rtc_request.prefix_array(),
+                    "rtc_prefix_len": rtc_request.rtc_prefix_len,
+                }
+
+        return snapshot(obs, options, rtc_request, source_capture_us, source_seq, now)
+
+    def generate(self, input: RLDXStepState) -> RLDXStepResult:
+        """Run one native policy prediction with its original RTC prefix."""
+        if input.reset:
+            try:
+                self._policy.reset()
+            except Exception:  # noqa: BLE001, S110 - retain the upstream reset tolerance
+                pass
+        if input.observation is None:
+            return RLDXStepResult(input=input, actions=None)
+        actions, _info = self._policy.get_action(input.observation, input.options)
+        return RLDXStepResult(input=input, actions=actions)
+
+    async def process_output(self, outcome: StepOutcome) -> None:
+        """Publish the action chunk and advance the acknowledged plan chain."""
+        if outcome.error is not None:
+            raise outcome.error
+        result: RLDXStepResult = outcome.result
+        input = result.input
+        self._policy_reset_pending = False
+        for message in input.messages:
+            await self.send(message)
+        if result.actions is None:
+            return
+
+        def chunk(key: str) -> list:
+            return np.asarray(result.actions[f"action.{key}"][0]).astype(float).tolist()
+
+        request = input.request
+        await self.send(
+            ActionPrediction(
+                end_effector_position=chunk("end_effector_position"),
+                end_effector_rotation=chunk("end_effector_rotation"),
+                gripper_close=chunk("gripper_close"),
+                base_motion=chunk("base_motion"),
+                control_mode=chunk("control_mode"),
+                step=input.step,
+                source_capture_us=input.source_capture_us,
+                source_seq=input.source_seq,
+                view_skew_us=input.view_skew_us,
+                request_id=request.request_id if request else None,
+                plan_id=request.request_id if request else None,
+                base_plan_id=request.base_plan_id if request else None,
+                install_step=request.install_step if request else None,
+                rtc_prefix_len=request.rtc_prefix_len if request else None,
+            )
+        )
+        if request is not None:
+            self._last_plan_id = request.request_id
+        self._last_replan = input.started_at
+        self._step += 1

@@ -3,6 +3,12 @@
 This recipe deploys RLDX-1 on one NVIDIA Blackwell GPU. It contains the
 Reactor adapter and the vendored RLDX-1 inference source used by the model image.
 
+RLDX-1 is a vision-language-action policy: camera views, robot proprioception,
+and a language instruction produce robot action chunks. It does not generate
+video. Reactor Runtime 3.5's `process_input()` aligns and snapshots observations,
+`generate()` predicts one action chunk, and `process_output()` sends
+`action_prediction`. The client retains ownership of the RTC execution cursor.
+
 The default configuration enables guided Real-Time Chunking (RTC):
 
 - action horizon: 16 control steps;
