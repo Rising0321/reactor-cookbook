@@ -32,9 +32,13 @@ mounted weights cache; later containers reuse those files.
 ## Run
 
 This directory is a `reactor` workspace: `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.5 image, while `requirements.txt` lists
+controls its Reactor Runtime 3.5.0 image, while `requirements.txt` lists
 DIAMOND's serving dependencies. The host needs the CLI and Docker from the
 prerequisites above.
+
+The `ReactorApp` step loop snapshots keyboard and mouse controls, runs one
+upstream world step, and publishes one video frame. Spawn selection and
+controller changes take effect at step boundaries.
 
 ```sh
 cd models/diamond-csgo-world-model

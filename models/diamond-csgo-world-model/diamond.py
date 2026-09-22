@@ -8,7 +8,8 @@ for every world-model step.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,8 @@ from reactor_runtime import (
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -72,7 +74,28 @@ def _weights_cache_path() -> Path:
     return get_weights_path() / "diamond-csgo-world-model" / "huggingface"
 
 
-class Diamond(ReactorPipeline):
+@dataclass(frozen=True)
+class DiamondStepState:
+    """Snapshot one step's controller, reset request and native human inputs."""
+
+    controller: str
+    restart: bool
+    pressed_keys: frozenset[str]
+    pressed_mouse_buttons: frozenset[str]
+    delta_x: float
+    delta_y: float
+
+
+@dataclass(frozen=True)
+class DiamondStepResult:
+    """Carry one frame and the input effects of the completed world step."""
+
+    frame: np.ndarray
+    clear_controls: bool
+    consumed_mouse: bool
+
+
+class Diamond(ReactorApp):
     """Stream one shared Counter-Strike world controlled by native game inputs."""
 
     fps = PLAYBACK_FPS
@@ -211,6 +234,7 @@ class Diamond(ReactorPipeline):
         self._rng = np.random.default_rng(self._seed)
         self._reset_requested = True
         self._reset_world()
+        self._clear_controls()
 
     @session_ended
     def _end_session(self) -> None:
@@ -466,32 +490,52 @@ class Diamond(ReactorPipeline):
             return self._action_changed(delta_x=delta_x, delta_y=delta_y)
         return self._action_changed()
 
-    def inference(self) -> Iterator[DiamondOutput | None]:
-        """Generate CSGO frames while applying the latest client controls."""
+    async def process_input(self) -> DiamondStepState:
+        """Snapshot the next frame's native keyboard and mouse controls."""
+        self.state.controller = self._controller
+        return DiamondStepState(
+            controller=self._controller,
+            restart=self._reset_requested,
+            pressed_keys=self.state._pressed_keys,
+            pressed_mouse_buttons=self.state._pressed_mouse_buttons,
+            delta_x=self.state._delta_x,
+            delta_y=self.state._delta_y,
+        )
+
+    def generate(self, input: DiamondStepState) -> DiamondStepResult:
+        """Emit a spawn frame or perform one unchanged upstream world step."""
         if self._world is None or self._agent is None or self._encode_action is None:
             raise RuntimeError("DIAMOND model was not loaded")
+        if input.restart:
+            self._reset_world()
+        if self._initial_observation is not None:
+            observation = self._initial_observation
+            self._initial_observation = None
+            return DiamondStepResult(to_video_frame(observation), input.restart, False)
+        action = self._next_action(input)
+        observation, _reward, ended, truncated, _info = self._world.step(action)
+        terminal = (
+            bool(ended.item())
+            or bool(truncated.item())
+            or self._replay_trajectory_finished()
+        )
+        if terminal:
+            self._reset_requested = True
+        return DiamondStepResult(
+            to_video_frame(observation), terminal or input.controller == "replay", True
+        )
 
-        self.state.controller = self._controller
-        while True:
-            if self._reset_requested:
-                self._reset_world()
-
-            if self._initial_observation is not None:
-                observation = self._initial_observation
-                self._initial_observation = None
-                yield DiamondOutput(main_video=to_video_frame(observation))
-                continue
-
-            action = self._next_action()
-            observation, _reward, ended, truncated, _info = self._world.step(action)
-            if (
-                bool(ended.item())
-                or bool(truncated.item())
-                or self._replay_trajectory_finished()
-            ):
-                self._reset_requested = True
-                self._clear_controls()
-            yield DiamondOutput(main_video=to_video_frame(observation))
+    async def process_output(self, outcome: StepOutcome) -> DiamondOutput:
+        """Apply completed-step input effects and publish its frame."""
+        if outcome.error is not None:
+            raise outcome.error
+        result: DiamondStepResult = outcome.result
+        if result.clear_controls:
+            self._clear_controls()
+        elif result.consumed_mouse:
+            self.state._delta_x = 0.0
+            self.state._delta_y = 0.0
+        return DiamondOutput(main_video=result.frame)
 
     def _reset_world(self) -> None:
         """Reset the shared world and retain its initial frame for emission."""
@@ -503,7 +547,6 @@ class Diamond(ReactorPipeline):
         self._initial_observation = observation
         self._replay_step = 0
         self._reset_requested = False
-        self._clear_controls()
 
     def _current_observation(self) -> Any:
         """Return the latest full-resolution observation in the shared world."""
@@ -586,10 +629,9 @@ class Diamond(ReactorPipeline):
         self._pending_scene = None
         return True
 
-    def _next_action(self) -> Any:
+    def _next_action(self, input: DiamondStepState) -> Any:
         """Return the next human or recorded replay action."""
-        if self._controller == "replay":
-            self._clear_controls()
+        if input.controller == "replay":
             if self._replay_step == 0:
                 action = self._world.act_buffer[0, -1].clone()
             else:
@@ -598,17 +640,13 @@ class Diamond(ReactorPipeline):
             return action
 
         assert self._encode_action is not None
-        keys = [self._key_codes[key] for key in KEYS if key in self.state._pressed_keys]
-        delta_x = self.state._delta_x
-        delta_y = self.state._delta_y
-        self.state._delta_x = 0.0
-        self.state._delta_y = 0.0
+        keys = [self._key_codes[key] for key in KEYS if key in input.pressed_keys]
         action = self._action_type(
             keys,
-            delta_x,
-            delta_y,
-            "left" in self.state._pressed_mouse_buttons,
-            "right" in self.state._pressed_mouse_buttons,
+            input.delta_x,
+            input.delta_y,
+            "left" in input.pressed_mouse_buttons,
+            "right" in input.pressed_mouse_buttons,
         )
         return self._encode_action(action, device=self._agent.device)
 

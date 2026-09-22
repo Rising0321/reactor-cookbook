@@ -11,8 +11,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 import yaml
-from reactor_runtime import UploadedFile
+from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
 import evoke_config
@@ -23,6 +24,19 @@ from evoke_types import CommandApplied, EvokeOutput, EvokeState, StateUpdate
 
 EXAMPLE_DIR = Path(__file__).parents[1]
 STABILITY_PROMPT = evoke_config.read_config(EXAMPLE_DIR / "evoke.yaml").stability_prompt
+
+
+def test_session_waits_for_explicit_conditioning():
+    model, backend, _ = _ready_model()
+    model._config = SimpleNamespace(
+        seed=42, stability_prompt=STABILITY_PROMPT, max_chunks=512
+    )
+    model.on_session_started()
+    assert model._media is None and model._input_source == "none"
+    with pytest.raises(ApplicationError):
+        asyncio.run(model.process_input())
+    assert not backend.reset_calls and not backend.generate_calls
+
 
 CACHE_ENVIRONMENT = {
     "UV_CACHE_DIR": ".cache/uv",
@@ -138,7 +152,7 @@ def test_reactor_manifest_declares_generated_gpu_build() -> None:
     assert document["$schema"] == "reactor/v1"
     assert document["model"]["resources"]["gpu"]["count"] == 1
     assert document["runtime"]["weights_path"] == "~/.cache/reactor_registry/evoke"
-    assert document["build"]["runtime_version"] == "3.2.5"
+    assert document["build"]["runtime_version"] == "3.5.0"
     assert document["build"]["python_requirements"] == "requirements.txt"
     assert "git" in document["build"]["system_packages"]
     assert not (EXAMPLE_DIR / "Dockerfile").exists()
@@ -223,9 +237,10 @@ def test_inference_requests_exactly_one_native_chunk() -> None:
     model, backend, messages = _ready_model()
 
     async def collect() -> list[Any]:
-        generator = model.inference()
-        output = await anext(generator)
-        await generator.aclose()
+        snapshot = await model.process_input()
+        output = await model.process_output(
+            StepOutcome(result=model.generate(snapshot))
+        )
         return [output]
 
     outputs = asyncio.run(collect())
@@ -305,3 +320,43 @@ def test_pose_upload_accepts_upstream_matrix_shapes() -> None:
     )
 
     validate_uploaded_pose(upload)
+
+
+def test_step_snapshot_preserves_conditioning_and_errors() -> None:
+    """Use the sampled prompt throughout generation and propagate failures."""
+    model, backend, _ = _ready_model()
+
+    async def run() -> None:
+        snapshot = await model.process_input()
+        model.state.prompt = "A different world"
+        await model.process_output(StepOutcome(result=model.generate(snapshot)))
+        assert backend.generate_calls[0][2] == "A coral reef"
+        assert model._chunk_index == 1
+        with pytest.raises(RuntimeError, match="failed"):
+            await model.process_output(StepOutcome(error=RuntimeError("failed")))
+        assert model._chunk_index == 1
+
+    asyncio.run(run())
+
+
+def test_automatic_restart_effects_belong_to_output(monkeypatch: Any) -> None:
+    """Snapshot a neutral fresh rollout without sending or flushing in input."""
+    model, backend, messages = _ready_model()
+    model._chunk_index = 512
+    model.state._restart_requested = False
+    model.state.forward = 1.0
+    flushes = []
+    monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
+
+    async def run() -> None:
+        snapshot = await model.process_input()
+        assert not messages and not flushes
+        assert snapshot.restart and snapshot.chunk_index == 0
+        assert snapshot.forward == 0.0
+        await model.process_output(StepOutcome(result=model.generate(snapshot)))
+        assert model._chunk_index == 1
+        assert len(backend.reset_calls) == 1
+        assert flushes == [None]
+        assert model.state.forward == 0.0
+
+    asyncio.run(run())

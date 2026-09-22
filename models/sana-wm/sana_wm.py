@@ -8,17 +8,19 @@ advances those three persistent states once and emits one 24-frame video chunk.
 from __future__ import annotations
 
 import secrets
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
 import numpy as np
 from PIL import Image, ImageOps
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -140,7 +142,32 @@ def _validate_intrinsics(file: UploadedFile) -> None:
         )
 
 
-class SanaWM(ReactorPipeline):
+@dataclass(frozen=True)
+class SanaWMStepState:
+    """Snapshot native image, calibration, trajectory and held controls."""
+
+    image: Path | UploadedFile
+    prompt: str
+    seed: int
+    intrinsics: Path | UploadedFile | None
+    trajectory: np.ndarray | None
+    controls: frozenset[Control]
+    restart: bool
+    automatic_restart: bool
+
+
+@dataclass(frozen=True)
+class SanaWMStepResult:
+    """Carry the native chunk and finite-trajectory completion state."""
+
+    frames: np.ndarray | None
+    prompt: str
+    chunk_index: int
+    trajectory_frames: int
+    input: SanaWMStepState
+
+
+class SanaWM(ReactorApp):
     """Generate an image-, prompt-, and camera-controllable SANA-WM world."""
 
     state: SanaWMState
@@ -153,6 +180,7 @@ class SanaWM(ReactorPipeline):
         self._selected_image: Path | UploadedFile | None = None
         self._image_source: Literal["uploaded", "built_in"] | None = None
         self._intrinsics_input: Path | UploadedFile | None = None
+        self._pending_intrinsics: UploadedFile | None = None
         self._intrinsics_source: IntrinsicsSource | None = None
         self._trajectory: np.ndarray | None = None
         self._trajectory_name: str | None = None
@@ -190,6 +218,7 @@ class SanaWM(ReactorPipeline):
         self._image_source = None
         self._intrinsics_input = None
         self._intrinsics_source = None
+        self._pending_intrinsics = None
         self._trajectory = None
         self._trajectory_name = None
         self._active_prompt = None
@@ -225,7 +254,7 @@ class SanaWM(ReactorPipeline):
         name="set_image",
         description=(
             "Select an uploaded first frame and begin continuous 24-frame chunk generation. "
-            "An optional native intrinsics .npy avoids Pi3X estimation. "
+            "Use set_intrinsics separately to upload native camera calibration. "
             "Emits `image_selected` and `state_update` on success, or `command_error` when an "
             "upload is empty, too large, undecodable, or has an unsupported calibration shape."
         ),
@@ -244,26 +273,16 @@ class SanaWM(ReactorPipeline):
             max_length=4096,
             moderate=True,
             description=(
-                "Optional non-empty scene description. An empty value preserves the active "
-                "prompt or uses a generic continuation prompt."
-            ),
-        ),
-        intrinsics: UploadedFile | None = InputField(  # noqa: B008
-            default=None,
-            moderate=True,
-            description=(
-                "Optional NumPy .npy calibration shaped (4,), (F,4), (3,3), or (F,3,3) in "
-                "input-image pixels. Pi3X estimates calibration when omitted."
+                "Optional scene description. Empty text uses a neutral continuation prompt "
+                "without carrying over a previous sample's scene."
             ),
         ),
     ) -> ImageSelected:
         """Validate uploads and queue a fresh continuously generated world."""
         _validate_image(image)
-        if intrinsics is not None:
-            _validate_intrinsics(intrinsics)
-        effective_prompt = (
-            prompt.strip() or self.state.prompt.strip() or _DEFAULT_PROMPT
-        )
+        intrinsics = self._pending_intrinsics
+        self._pending_intrinsics = None
+        effective_prompt = prompt.strip() or _DEFAULT_PROMPT
         self._selected_image = image
         self._image_source = "uploaded"
         self._intrinsics_input = intrinsics
@@ -280,6 +299,27 @@ class SanaWM(ReactorPipeline):
         )
         await self._send_state_update()
         return message
+
+    @event(
+        name="set_intrinsics",
+        description="Upload camera calibration as NumPy .npy, separately from the image. Before image selection it applies to the next upload; after selection it restarts the current world. Emits state_update.",
+    )
+    async def set_intrinsics(
+        self,
+        intrinsics: UploadedFile = InputField(  # noqa: B008
+            moderate=True,
+            description="Camera intrinsics .npy shaped (4,), (F,4), (3,3), or (F,3,3), in image pixels. This is calibration data, not an image.",
+        ),
+    ) -> StateUpdate:
+        """Validate calibration without exposing a second image-upload field."""
+        _validate_intrinsics(intrinsics)
+        if self._selected_image is None:
+            self._pending_intrinsics = intrinsics
+        else:
+            self._intrinsics_input = intrinsics
+            self._intrinsics_source = "uploaded"
+            self._queue_reset()
+        return self._state_update()
 
     @event(
         name="random_image",
@@ -532,82 +572,97 @@ class SanaWM(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[SanaWMOutput | None, None]:
-        """Advance and emit one native upstream chunk off-loop."""
-        backend = self._backend
+    async def process_input(self) -> SanaWMStepState:
+        """Snapshot one chunk's native conditions and automatic reset boundary."""
+        if self._selected_image is None:
+            raise ApplicationError("Select an image before generating.")
         config = self._require_config()
+        automatic_restart = (
+            self._chunk_index >= config.max_chunks and not self.state._reset_requested
+        )
+        if self.state._trajectory_exhausted and not (
+            self.state._reset_requested or automatic_restart
+        ):
+            raise ApplicationError(
+                "Select a new trajectory or reset before generating."
+            )
+        snapshot = SanaWMStepState(
+            image=self._selected_image,
+            prompt=self.state.prompt,
+            seed=self._seed,
+            intrinsics=self._intrinsics_input,
+            trajectory=self._trajectory.copy()
+            if self._trajectory is not None
+            else None,
+            controls=frozenset()
+            if automatic_restart
+            else frozenset(self._ordered_controls()),
+            restart=self.state._reset_requested or automatic_restart,
+            automatic_restart=automatic_restart,
+        )
+        self._chunk_in_flight = True
+        self._generating = True
+        return snapshot
+
+    def generate(self, input: SanaWMStepState) -> SanaWMStepResult:
+        """Advance the native sampler, refiner and VAE caches once."""
+        backend = self._backend
         if backend is None:
             raise RuntimeError("SANA-WM backend was not loaded")
-        while True:
-            if self._selected_image is None:
-                yield None
-                continue
+        if input.restart:
+            backend.reset(
+                input.image,
+                input.prompt,
+                input.seed,
+                intrinsics_source=input.intrinsics,
+                trajectory=input.trajectory,
+            )
+        try:
+            frames = backend.generate_chunk(set(input.controls))
+        except TrajectoryCompleteError:
+            frames = None
+        return SanaWMStepResult(
+            frames=frames,
+            prompt=input.prompt,
+            chunk_index=backend.chunk_index,
+            trajectory_frames=backend.trajectory_frames or 0,
+            input=input,
+        )
 
-            if (
-                self._chunk_index >= config.max_chunks
-                and not self.state._reset_requested
-            ):
-                replaced = self._chunk_index
-                self._queue_reset()
-                await self.send(
-                    RolloutResetQueued(
-                        trigger="automatic_chunk_limit",
-                        seed=self._seed,
-                        replaced_chunks=replaced,
-                    )
+    async def process_output(self, outcome: StepOutcome) -> SanaWMOutput | None:
+        """Publish a chunk or announce the end of a finite camera trajectory."""
+        self._chunk_in_flight = False
+        self._generating = False
+        if outcome.error is not None:
+            raise outcome.error
+        result: SanaWMStepResult = outcome.result
+        if result.input.restart:
+            self.output.flush()
+            self.state._trajectory_exhausted = False
+        if result.input.automatic_restart:
+            self._clear_controls()
+            await self.send(
+                RolloutResetQueued(
+                    trigger="automatic_chunk_limit",
+                    seed=result.input.seed,
+                    replaced_chunks=self._chunk_index,
                 )
-                await self._send_state_update()
-
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                self._generating = True
-                self.output.flush()
-                await self._send_state_update()
-                try:
-                    backend.reset(
-                        self._selected_image,
-                        self.state.prompt,
-                        self._seed,
-                        intrinsics_source=self._intrinsics_input,
-                        trajectory=self._trajectory,
-                    )
-                    self._chunk_index = 0
-                    self._active_prompt = self.state.prompt
-                finally:
-                    self._generating = False
-                await self._send_state_update()
-
-            if self.state._trajectory_exhausted:
-                yield None
-                continue
-
-            controls = set(self._ordered_controls())
-            self._chunk_in_flight = True
-            self._generating = True
-            await self._send_state_update()
-            trajectory_exhausted = False
-            try:
-                frames = backend.generate_chunk(controls)
-            except TrajectoryCompleteError:
-                trajectory_exhausted = True
-            finally:
-                self._chunk_in_flight = False
-                self._generating = False
-            if trajectory_exhausted:
-                self.state._trajectory_exhausted = True
-                trajectory_frames = backend.trajectory_frames or 0
-                await self.send(
-                    TrajectoryExhausted(
-                        completed_chunks=self._chunk_index,
-                        trajectory_frames=trajectory_frames,
-                    )
+            )
+        self.state._reset_requested = False
+        self._active_prompt = result.prompt
+        self._chunk_index = result.chunk_index
+        if result.frames is None:
+            self.state._trajectory_exhausted = True
+            await self.send(
+                TrajectoryExhausted(
+                    completed_chunks=self._chunk_index,
+                    trajectory_frames=result.trajectory_frames,
                 )
-                await self._send_state_update()
-                yield None
-                continue
-            self._chunk_index = backend.chunk_index
+            )
             await self._send_state_update()
-            yield SanaWMOutput(main_video=frames)
+            return None
+        await self._send_state_update()
+        return SanaWMOutput(main_video=result.frames)
 
     def _require_config(self) -> SanaWMConfig:
         """Return loaded configuration or raise an internal lifecycle error."""

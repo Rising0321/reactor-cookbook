@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 import yaml
+from reactor_runtime import StepOutcome
 from reactor_runtime.interface.model.contract import ModelContract
 from reactor_runtime.manifest import load_config
 
@@ -99,6 +100,12 @@ def _stub_video(monkeypatch: pytest.MonkeyPatch, observed: list[np.ndarray]) -> 
     monkeypatch.setattr(pipeline_module, "to_video_frame", convert)
 
 
+def _step(model: Any) -> Any:
+    input = asyncio.run(model.process_input())
+    result = model.generate(input)
+    return asyncio.run(model.process_output(StepOutcome(result=result)))
+
+
 def test_contract_uses_session_hooks_and_documents_side_effects() -> None:
     """Expose session-scoped lifecycle hooks and a complete public schema."""
     contract = ModelContract.of(Diamond)
@@ -180,20 +187,17 @@ def test_playout_uses_fixed_rate_with_short_buffer() -> None:
 
 
 def test_reconnect_preserves_the_session_world(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the shared world alive when the pipeline generator is recreated."""
+    """Keep the shared world alive between connected viewers' steps."""
     model = _ready_model()
     world = model._world
     _stub_video(monkeypatch, [])
     model._start_session()
 
-    first_connection = model.inference()
-    assert isinstance(next(first_connection), DiamondOutput)
-    assert isinstance(next(first_connection), DiamondOutput)
-    first_connection.close()
+    assert isinstance(_step(model), DiamondOutput)
+    assert isinstance(_step(model), DiamondOutput)
 
     model.state = DiamondState()
-    second_connection = model.inference()
-    assert isinstance(next(second_connection), DiamondOutput)
+    assert isinstance(_step(model), DiamondOutput)
     assert world.reset_count == 1
     assert len(world.actions) == 2
 
@@ -215,6 +219,38 @@ def test_session_end_discards_a_queued_scene() -> None:
     assert model._initial_observation is not None
 
 
+def test_ten_steps_keep_the_world_and_consume_mouse_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read snapshot controls without resetting the autoregressive world."""
+    model = _ready_model()
+    _stub_video(monkeypatch, [])
+    _step(model)
+    for index in range(10):
+        model.state._pressed_keys = frozenset({"w"})
+        model.state._delta_x = float(index + 1)
+        input = asyncio.run(model.process_input())
+        state = model.state
+        model.state = None
+        result = model.generate(input)
+        model.state = state
+        asyncio.run(model.process_output(StepOutcome(result=result)))
+        assert model._world.actions[-1].mouse_x == index + 1
+        assert model.state._delta_x == 0
+        assert model.state._pressed_keys == frozenset({"w"})
+    assert model._world.reset_count == 1
+    assert len(model._world.actions) == 10
+
+
+def test_failed_step_does_not_consume_controls() -> None:
+    """Propagate upstream failures without acknowledging a completed action."""
+    model = _ready_model()
+    model.state._delta_x = 10
+    with pytest.raises(RuntimeError, match="failed"):
+        asyncio.run(model.process_output(StepOutcome(error=RuntimeError("failed"))))
+    assert model.state._delta_x == 10
+
+
 def test_queued_scene_is_emitted_before_the_first_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -231,7 +267,7 @@ def test_queued_scene_is_emitted_before_the_first_action(
     observed: list[np.ndarray] = []
     _stub_video(monkeypatch, observed)
 
-    output = next(model.inference())
+    output = _step(model)
 
     assert isinstance(output, DiamondOutput)
     np.testing.assert_array_equal(observed, [uploaded[:, -1]])
@@ -285,7 +321,7 @@ def test_manifest_defines_the_runtime_entrypoint_and_generated_image() -> None:
     build = manifest["build"]
 
     assert config.model_ref == "diamond:Diamond"
-    assert build["runtime_version"] == "3.2.5"
+    assert build["runtime_version"] == "3.5.0"
     assert build["python_requirements"] == "requirements.txt"
     assert build["cuda_version"] == "12.8.1"
     assert build["python_version"] == "3.12"

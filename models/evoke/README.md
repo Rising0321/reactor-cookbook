@@ -1,5 +1,8 @@
 # Run EVOKE through Reactor Runtime
 
+The adapter uses Reactor Runtime 3.5's native step loop with typed input snapshots
+and one native chunk per generation step.
+
 Run the public [Alaya-EVOKE world model](https://github.com/AlayaLab/Evoke) as
 an interactive Reactor backend. Use this recipe to start an autoregressive
 world from an image, reference video, or text prompt, apply six-axis camera
@@ -28,7 +31,7 @@ license before commercial use.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.5 image, while `requirements.txt` lists the
+controls its Reactor Runtime 3.5.0 image, while `requirements.txt` lists the
 adapter's serving dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -107,6 +110,10 @@ load once in `load()`; reset clears rollout state without starting another
 worker.
 
 ## Inputs and controls
+
+Sessions wait for explicit conditioning; connecting never selects the bundled
+image or starts generation. Upload an image/video or invoke `start_text`.
+An omitted image prompt uses the scene-neutral stability text in `evoke.yaml`.
 
 The commands cover all three upstream conditioning modes:
 

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -70,7 +72,37 @@ class _Backend(Protocol):
     def end_session(self) -> None: ...
 
 
-class Evoke(ReactorPipeline):
+@dataclass(frozen=True)
+class EvokeStepState:
+    """Snapshot the conditioning and camera controls for one native chunk."""
+
+    mode: str
+    media: Path | UploadedFile | None
+    pose: UploadedFile | None
+    prompt: str
+    seed: int
+    source_fps: int
+    source_height: int
+    source_width: int
+    forward: float
+    strafe: float
+    vertical: float
+    pitch: float
+    yaw: float
+    roll: float
+    restart: bool
+    chunk_index: int
+
+
+@dataclass(frozen=True)
+class EvokeStepResult:
+    """Carry decoded frames and the input boundary that produced them."""
+
+    frames: np.ndarray
+    input: EvokeStepState
+
+
+class Evoke(ReactorApp):
     """Generate an autoregressive EVOKE world from image, video, or text conditioning."""
 
     state: EvokeState
@@ -131,13 +163,13 @@ class Evoke(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize a built-in i2v world before its first viewer connects."""
+        """Wait for explicit image, video, or text conditioning."""
         config = self._require_config()
         self._mode = "i2v"
-        self._media = config.default_image
+        self._media = None
         self._pose = None
-        self._input_source = "built_in"
-        self._input_name = config.default_image.name
+        self._input_source = "none"
+        self._input_name = ""
         self._pose_name = ""
         self.state.prompt = config.stability_prompt
         self.state._restart_requested = True
@@ -541,67 +573,99 @@ class Evoke(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[EvokeOutput | None, None]:
-        """Generate and stream one native chunk at a time from the active rollout."""
-        while True:
-            backend = self._backend
-            planner = self._planner
-            if backend is None or planner is None:
-                raise RuntimeError("EVOKE was not loaded")
-            if self.state._restart_requested:
-                backend.reset(
-                    mode=self._mode,
-                    media=self._media,
-                    pose=self._pose,
-                    prompt=self.state.prompt,
-                    seed=self._seed,
-                    source_fps=self._source_fps,
-                    source_height=self._source_height,
-                    source_width=self._source_width,
-                )
-                planner.reset()
-                self._chunk_index = 0
-                self.state._restart_requested = False
-                await self.send(self._state_update())
-
-            trajectory = None
-            if self._mode != "t2v":
-                trajectory = planner.plan_chunk(
-                    strafe=self.state.strafe,
-                    vertical=self.state.vertical,
-                    forward=self.state.forward,
-                    pitch=self.state.pitch,
-                    yaw=self.state.yaw,
-                    roll=self.state.roll,
-                    frame_count=CAMERA_POSES_PER_CHUNK,
-                )
-            frames = backend.generate_chunk(
-                trajectory,
-                seed=self._seed,
-                prompt=self.state.prompt,
+    async def process_input(self) -> EvokeStepState:
+        """Snapshot controls and apply the native rollout-length boundary."""
+        if self._mode != "t2v" and self._media is None:
+            raise ApplicationError(
+                "conditioning_required",
+                "Upload an image or select text/video conditioning first.",
             )
-            frames = normalize_output_frames(frames)
-            expected = 33 if self._mode == "t2v" and self._chunk_index == 0 else 36
-            if int(frames.shape[0]) != expected:
-                raise RuntimeError(
-                    f"EVOKE chunk {self._chunk_index + 1} produced {frames.shape[0]} frames; "
-                    f"expected {expected}"
-                )
-            self._chunk_index += 1
-            await self.send(self._state_update())
-            yield EvokeOutput(main_video=frames)
+        config = self._require_config()
+        automatic_restart = self._chunk_index >= config.max_chunks
+        return EvokeStepState(
+            mode=self._mode,
+            media=self._media,
+            pose=self._pose,
+            prompt=self.state.prompt,
+            seed=self._seed,
+            source_fps=self._source_fps,
+            source_height=self._source_height,
+            source_width=self._source_width,
+            forward=0.0 if automatic_restart else self.state.forward,
+            strafe=0.0 if automatic_restart else self.state.strafe,
+            vertical=0.0 if automatic_restart else self.state.vertical,
+            pitch=0.0 if automatic_restart else self.state.pitch,
+            yaw=0.0 if automatic_restart else self.state.yaw,
+            roll=0.0 if automatic_restart else self.state.roll,
+            restart=self.state._restart_requested or automatic_restart,
+            chunk_index=0 if automatic_restart else self._chunk_index,
+        )
 
-            config = self._require_config()
-            if self._chunk_index >= config.max_chunks:
-                replaced = self._chunk_index
-                self._request_restart()
-                await self.send(
-                    RolloutRestarted(
-                        replaced_chunks=replaced,
-                        max_chunks=config.max_chunks,
-                        seed=self._seed,
-                    )
+    def generate(self, input: EvokeStepState) -> EvokeStepResult:
+        """Advance the persistent upstream backend by one native chunk."""
+        backend, planner = self._backend, self._planner
+        if backend is None or planner is None:
+            raise RuntimeError("EVOKE was not loaded")
+        if input.restart:
+            backend.reset(
+                mode=input.mode,
+                media=input.media,
+                pose=input.pose,
+                prompt=input.prompt,
+                seed=input.seed,
+                source_fps=input.source_fps,
+                source_height=input.source_height,
+                source_width=input.source_width,
+            )
+            planner.reset()
+        trajectory = None
+        if input.mode != "t2v":
+            trajectory = planner.plan_chunk(
+                strafe=input.strafe,
+                vertical=input.vertical,
+                forward=input.forward,
+                pitch=input.pitch,
+                yaw=input.yaw,
+                roll=input.roll,
+                frame_count=CAMERA_POSES_PER_CHUNK,
+            )
+        frames = normalize_output_frames(
+            backend.generate_chunk(
+                trajectory,
+                seed=input.seed,
+                prompt=input.prompt,
+            )
+        )
+        expected = 33 if input.mode == "t2v" and input.chunk_index == 0 else 36
+        if int(frames.shape[0]) != expected:
+            raise RuntimeError(
+                f"EVOKE chunk {input.chunk_index + 1} produced {frames.shape[0]} frames; "
+                f"expected {expected}"
+            )
+        return EvokeStepResult(frames=frames, input=input)
+
+    async def process_output(self, outcome: StepOutcome) -> EvokeOutput:
+        """Publish the completed chunk and its shared state."""
+        if outcome.error is not None:
+            raise outcome.error
+        result: EvokeStepResult = outcome.result
+        if (
+            result.input.restart
+            and self._chunk_index >= self._require_config().max_chunks
+        ):
+            replaced = self._chunk_index
+            self._request_restart()
+            await self.send(
+                RolloutRestarted(
+                    replaced_chunks=replaced,
+                    max_chunks=self._require_config().max_chunks,
+                    seed=result.input.seed,
                 )
+            )
+        self.state._restart_requested = False
+        self._chunk_index = result.input.chunk_index + 1
+        await self.send(self._state_update())
+        return EvokeOutput(main_video=result.frames)
 
     def _request_restart(self) -> None:
         self.output.flush()

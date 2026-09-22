@@ -8,11 +8,28 @@ during training. It emits one RGB frame for every autoregressive model step.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    event,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
+from reactor_runtime.paths import get_weights_path
+
 from opendreamer_types import (
     DEMO_CHOICES,
     ActionChanged,
@@ -36,19 +53,6 @@ from opendreamer_utils import (
     upstream_root,
     verify_source_revision,
 )
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
-from reactor_runtime.paths import get_weights_path
 
 logger = get_logger(__name__)
 
@@ -109,7 +113,21 @@ _CAMERA_DELTA_MAX = 200.0
 FRAMES_PER_CHUNK = 1
 
 
-class OpenDreamer(ReactorPipeline):
+@dataclass(frozen=True)
+class OpenDreamerStepState:
+    """Snapshot one native step's controls and optional rollout conditioning."""
+
+    seed: int
+    restart: bool
+    conditioning: RolloutConditioning | None
+    pressed_keys: frozenset[str]
+    pressed_mouse_buttons: frozenset[str]
+    delta_x: float
+    delta_y: float
+    wheel_delta: int
+
+
+class OpenDreamer(ReactorApp):
     """Stream an interactive Minecraft rollout from a dataset demo or uploaded image."""
 
     state: OpenDreamerState
@@ -133,6 +151,11 @@ class OpenDreamer(ReactorPipeline):
         self._conditioning_source = "random"
         self._uploaded_conditioning: RolloutConditioning | None = None
         self._demo_rng = np.random.default_rng()
+        self._rollout_rng: Any = None
+        self._dynamics_cache: Any = None
+        self._tokenizer_cache: Any = None
+        self._conditioning: RolloutConditioning | None = None
+        self._observation_index = 0
 
     def load(self, config_path: Path | None) -> None:
         """Load the public OpenDreamer source and checkpoint once.
@@ -376,6 +399,11 @@ class OpenDreamer(ReactorPipeline):
         self._clear_controls()
         self._uploaded_conditioning = None
         self._conditioning_source = "random"
+        self._rollout_rng = None
+        self._dynamics_cache = None
+        self._tokenizer_cache = None
+        self._conditioning = None
+        self._observation_index = 0
 
     @event(
         name="set_key_state",
@@ -649,8 +677,28 @@ class OpenDreamer(ReactorPipeline):
         self.state._reset_requested = True
         self._clear_controls()
 
-    def inference(self) -> Iterator[OpenDreamerOutput | None]:
-        """Generate Minecraft frames from the current starting scene and player controls."""
+    async def process_input(self) -> OpenDreamerStepState:
+        """Snapshot controls and refuse a step until conditioning is available."""
+        conditioning = (
+            self._select_conditioning()
+            if self.state._reset_requested
+            else self._conditioning
+        )
+        if conditioning is None:
+            raise ApplicationError("Select conditioning before generating.")
+        return OpenDreamerStepState(
+            seed=self.state._seed,
+            restart=self.state._reset_requested,
+            conditioning=conditioning if self.state._reset_requested else None,
+            pressed_keys=self.state._pressed_keys,
+            pressed_mouse_buttons=self.state._pressed_mouse_buttons,
+            delta_x=self.state._delta_x,
+            delta_y=self.state._delta_y,
+            wheel_delta=self.state._wheel_delta,
+        )
+
+    def generate(self, input: OpenDreamerStepState) -> np.ndarray | None:
+        """Observe one conditioning frame or generate one native Minecraft frame."""
         if (
             self._config is None
             or self._next_frame_jit is None
@@ -661,58 +709,56 @@ class OpenDreamer(ReactorPipeline):
         jax = self._deps["jax"]
         jnp = self._deps["jnp"]
 
-        rng = jax.random.PRNGKey(self.state._seed)
-        dynamics_cache = self._empty_dynamics_cache
-        tokenizer_cache = self._empty_tokenizer_cache
-        conditioning: RolloutConditioning | None = None
-        observation_index = 0
-        self.state._reset_requested = True
-
         with mesh_context(jax, self._mesh):
-            while True:
-                if self.state._reset_requested:
-                    self.state._reset_requested = False
-                    rng = jax.random.PRNGKey(self.state._seed)
-                    dynamics_cache = self._empty_dynamics_cache
-                    tokenizer_cache = self._empty_tokenizer_cache
-                    conditioning = self._select_conditioning()
-                    observation_index = 0
-
-                if conditioning is None:
-                    yield None
-                    continue
-
-                if observation_index < conditioning.frames.shape[0]:
-                    dynamics_cache, tokenizer_cache = self._observe_frame_jit(
-                        self._tokenizer,
-                        self._dynamics,
-                        jnp.asarray(conditioning.frames[observation_index]),
-                        self._action_at(conditioning.actions, observation_index),
-                        dynamics_cache,
-                        tokenizer_cache,
-                    )
-                    jax.block_until_ready((dynamics_cache, tokenizer_cache))
-                    observation_index += 1
-                    yield None
-                    continue
-
-                action = self._build_action()
-                rng, step_rng = jax.random.split(rng)
-                frame, dynamics_cache, tokenizer_cache, rng = self._next_frame_jit(
+            if input.restart:
+                self._rollout_rng = jax.random.PRNGKey(input.seed)
+                self._dynamics_cache = self._empty_dynamics_cache
+                self._tokenizer_cache = self._empty_tokenizer_cache
+                self._conditioning = input.conditioning
+                self._observation_index = 0
+            conditioning = self._conditioning
+            if conditioning is None:
+                raise RuntimeError("OpenDreamer has no rollout conditioning")
+            if self._observation_index < conditioning.frames.shape[0]:
+                self._dynamics_cache, self._tokenizer_cache = self._observe_frame_jit(
+                    self._tokenizer,
+                    self._dynamics,
+                    jnp.asarray(conditioning.frames[self._observation_index]),
+                    self._action_at(conditioning.actions, self._observation_index),
+                    self._dynamics_cache,
+                    self._tokenizer_cache,
+                )
+                jax.block_until_ready((self._dynamics_cache, self._tokenizer_cache))
+                self._observation_index += 1
+                return None
+            action = self._build_action(input)
+            self._rollout_rng, step_rng = jax.random.split(self._rollout_rng)
+            frame, self._dynamics_cache, self._tokenizer_cache, self._rollout_rng = (
+                self._next_frame_jit(
                     self._tokenizer,
                     self._dynamics,
                     action,
                     self._latent_shape,
-                    dynamics_cache,
-                    tokenizer_cache,
+                    self._dynamics_cache,
+                    self._tokenizer_cache,
                     step_rng,
                 )
-                jax.block_until_ready(frame)
-                self._consume_transient_controls()
-                output = np.asarray(frame[0, 0])
-                if output.dtype != np.uint8:
-                    output = np.clip(output, 0, 255).astype(np.uint8)
-                yield OpenDreamerOutput(main_video=np.ascontiguousarray(output))
+            )
+            jax.block_until_ready(frame)
+            output = np.asarray(frame[0, 0])
+            if output.dtype != np.uint8:
+                output = np.clip(output, 0, 255).astype(np.uint8)
+            return np.ascontiguousarray(output)
+
+    async def process_output(self, outcome: StepOutcome) -> OpenDreamerOutput | None:
+        """Acknowledge conditioning or publish a generated frame and consume deltas."""
+        if outcome.error is not None:
+            raise outcome.error
+        self.state._reset_requested = False
+        if outcome.result is None:
+            return None
+        self._consume_transient_controls()
+        return OpenDreamerOutput(main_video=outcome.result)
 
     def _select_conditioning(self) -> RolloutConditioning | None:
         """Return the uploaded sequence or resolve the active configured demo."""
@@ -782,23 +828,23 @@ class OpenDreamer(ReactorPipeline):
             continuous=take(actions.continuous),
         )
 
-    def _build_action(self) -> Any:
+    def _build_action(self, input: OpenDreamerStepState) -> Any:
         """Build one upstream ``Actions`` value from the current Reactor state."""
         jnp = self._deps["jnp"]
         action_type = self._deps["action_type"]
         mouse_to_categorical = self._deps["mouse_to_categorical"]
         binary = np.zeros((1, len(self._key_to_index)), dtype=np.int32)
-        for key in self.state._pressed_keys:
+        for key in input.pressed_keys:
             binary[0, self._key_to_index[_KEY_TO_VPT_NAME[key]]] = 1
-        for button in self.state._pressed_mouse_buttons:
+        for button in input.pressed_mouse_buttons:
             binary[0, self._key_to_index[_BUTTON_TO_VPT_NAME[button]]] = 1
-        if self.state._wheel_delta < 0:
+        if input.wheel_delta < 0:
             binary[0, self._key_to_index["mouse.wheel_neg"]] = 1
-        elif self.state._wheel_delta > 0:
+        elif input.wheel_delta > 0:
             binary[0, self._key_to_index["mouse.wheel_pos"]] = 1
         categorical = mouse_to_categorical(
-            np.asarray([self.state._delta_x], dtype=np.float32),
-            np.asarray([self.state._delta_y], dtype=np.float32),
+            np.asarray([input.delta_x], dtype=np.float32),
+            np.asarray([input.delta_y], dtype=np.float32),
         )
         return action_type(
             binary=jnp.asarray(binary, dtype=jnp.int32),
