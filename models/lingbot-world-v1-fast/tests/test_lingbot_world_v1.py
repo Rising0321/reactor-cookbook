@@ -15,6 +15,13 @@ from reactor_runtime import ApplicationError, CommandError, StepOutcome, Uploade
 import lingbot_world_v1
 from lingbot_world_v1 import LingBotWorldV1
 from lingbot_world_v1_camera import CameraMotionPlanner, MotionConfig
+from lingbot_world_v1_model import (
+    AnchorImage,
+    LingbotV1Input,
+    LingbotV1Model,
+    LingbotV1Result,
+    NoAnchor,
+)
 from lingbot_world_v1_types import (
     CameraMotionChanged,
     ImageSelected,
@@ -117,37 +124,45 @@ def test_camera_controls_require_an_image() -> None:
         asyncio.run(world.set_forward(1.0))
 
 
-class FakeBackend:
-    """Record model calls and return native first/subsequent chunk shapes."""
+class FakeModel:
+    """Stand in for the model half: record inputs, return native chunk shapes."""
 
     def __init__(self) -> None:
-        self.resets: list[tuple[Any, ...]] = []
-        self.calls: list[tuple[np.ndarray, str]] = []
-        self.index = 0
-        self.ended = False
+        self.inputs: list[LingbotV1Input] = []
+        self.world_id: int | None = None
+        self.chunk_index = 0
+        self.resets = 0
 
-    def reset(self, *args: Any) -> None:
-        self.resets.append(args)
-        self.index = 0
+    def generate(self, input: LingbotV1Input) -> LingbotV1Result:
+        self.inputs.append(input)
+        if input.world_id != self.world_id:
+            assert input.anchor is not None, "a fresh world must carry its anchor"
+            self.world_id = input.world_id
+            self.chunk_index = 0
+        self.chunk_index += 1
+        frames = np.zeros((9 if self.chunk_index == 1 else 12, 8, 8, 3), dtype=np.uint8)
+        return LingbotV1Result(
+            frames=frames, world_id=input.world_id, chunk_index=self.chunk_index
+        )
 
-    def generate_chunk(self, camera: np.ndarray, prompt: str) -> np.ndarray:
-        self.calls.append((camera.copy(), prompt))
-        frames = np.zeros((9 if self.index == 0 else 12, 8, 8, 3), dtype=np.uint8)
-        self.index += 1
-        return frames
-
-    def end_session(self) -> None:
-        self.ended = True
+    def reset(self) -> None:
+        self.resets += 1
+        self.world_id = None
+        self.chunk_index = 0
 
 
-def _loaded_world() -> tuple[Any, FakeBackend, list[Any]]:
+def _loaded_world() -> tuple[Any, FakeModel, list[Any]]:
     world, messages = _world()
-    backend = FakeBackend()
-    world._backend = backend
+    model = FakeModel()
+    world._engine = model
     world._planner = CameraMotionPlanner(MotionConfig(1.0, 8.0))
     world.on_session_started()
     asyncio.run(world.random_image())
-    return world, backend, messages
+    return world, model, messages
+
+
+def _anchors(model: FakeModel) -> list[AnchorImage]:
+    return [input.anchor for input in model.inputs if input.anchor is not None]
 
 
 async def _step(world: Any) -> Any:
@@ -164,24 +179,44 @@ def test_refused_step_does_not_touch_model() -> None:
 
 
 def test_generate_reads_only_the_input_snapshot() -> None:
-    world, backend, _ = _loaded_world()
+    world, model, _ = _loaded_world()
     input = asyncio.run(world.process_input())
     with pytest.raises(FrozenInstanceError):
         input.prompt = "mutated"
     world.state = None
     result = world.generate(input)
     assert result.frames.shape == (9, 8, 8, 3)
-    assert backend.calls[0][1] == input.prompt
-    assert backend.resets[0] == (
-        input.seed,
-        input.anchor_image,
-        input.intrinsics,
-        input.prompt,
+    assert model.inputs[0] is input
+    assert input.anchor is not None
+    assert input.anchor.image == Path("sample.jpg")
+    assert input.anchor.intrinsics == Path("intrinsics.npy")
+    assert input.anchor.seed == 42
+    assert input.poses.shape == (3, 4, 4)
+
+
+def test_anchor_crosses_once_per_world() -> None:
+    world, model, _ = _loaded_world()
+    asyncio.run(_step(world))
+    asyncio.run(_step(world))
+    assert [input.anchor is not None for input in model.inputs] == [True, False]
+    assert world.state._applied_world_id == world.state._world_id
+
+
+def test_uploaded_anchor_crosses_as_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    world, model, _ = _loaded_world()
+    monkeypatch.setattr(
+        lingbot_world_v1, "validate_uploaded_image", lambda _image: None
     )
+    upload = UploadedFile(name="anchor.png", mime_type="image/png", data=b"image")
+    asyncio.run(world.set_image(upload, ""))
+    asyncio.run(_step(world))
+    anchor = _anchors(model)[-1]
+    assert anchor.image == b"image"
+    assert anchor.suffix == ".png"
 
 
 def test_ten_continuous_actions_preserve_rollout() -> None:
-    world, backend, messages = _loaded_world()
+    world, model, messages = _loaded_world()
 
     async def run() -> None:
         for index in range(10):
@@ -194,30 +229,32 @@ def test_ten_continuous_actions_preserve_rollout() -> None:
         await _step(world)
 
     asyncio.run(run())
-    assert len(backend.resets) == 1
-    assert len(backend.calls) == 11
-    assert backend.calls[-1][1] == "The same lake at sunset"
+    assert len(_anchors(model)) == 1
+    assert len(model.inputs) == 11
+    assert model.inputs[-1].prompt == "The same lake at sunset"
     assert messages[-1].next_chunk == 12
     assert "fps" not in vars(LingBotWorldV1)
     assert "inference" not in vars(LingBotWorldV1)
 
 
 def test_reset_restarts_at_first_native_chunk() -> None:
-    world, backend, _ = _loaded_world()
+    world, model, _ = _loaded_world()
     asyncio.run(_step(world))
     asyncio.run(world.set_forward(1.0))
     asyncio.run(world.reset(123))
     output = asyncio.run(_step(world))
     assert output.main_video.shape[0] == 9
-    assert len(backend.resets) == 2
-    assert backend.resets[-1][0] == 123
+    anchors = _anchors(model)
+    assert len(anchors) == 2
+    assert anchors[-1].seed == 123
+    assert model.inputs[-1].world_id != model.inputs[0].world_id
     assert world._chunk_index == 1
     assert world.state.forward == 0
-    np.testing.assert_array_equal(backend.calls[-1][0][0], np.eye(4))
+    np.testing.assert_array_equal(model.inputs[-1].poses[0], np.eye(4))
 
 
 def test_limit_emits_last_chunk_then_refuses_until_reset() -> None:
-    world, backend, messages = _loaded_world()
+    world, model, messages = _loaded_world()
     world._config.max_chunks = 2
     asyncio.run(_step(world))
     output = asyncio.run(_step(world))
@@ -227,9 +264,18 @@ def test_limit_emits_last_chunk_then_refuses_until_reset() -> None:
         asyncio.run(world.process_input())
     with pytest.raises(CommandError):
         asyncio.run(world.set_prompt("new prompt"))
-    assert len(backend.calls) == 2
+    assert len(model.inputs) == 2
     asyncio.run(world.reset(-1))
     assert asyncio.run(_step(world)).main_video.shape[0] == 9
+
+
+def test_chunk_time_is_the_runtime_measurement() -> None:
+    world, _, messages = _loaded_world()
+    input = asyncio.run(world.process_input())
+    result = world.generate(input)
+    asyncio.run(world.process_output(StepOutcome(result=result, elapsed=0.37)))
+    assert world._last_chunk_seconds == 0.37
+    assert messages[-1].last_chunk_seconds == 0.37
 
 
 def test_model_failure_propagates_without_claiming_a_completed_chunk() -> None:
@@ -239,14 +285,91 @@ def test_model_failure_propagates_without_claiming_a_completed_chunk() -> None:
     with pytest.raises(RuntimeError, match="worker failed"):
         asyncio.run(world.process_output(StepOutcome(error=error, elapsed=0.1)))
     assert world._chunk_index == 0
-    assert world.state._restart_requested
+    assert world.state._applied_world_id is None
     assert len(messages) == count
 
 
 def test_session_end_releases_rollout_and_clears_selection() -> None:
-    world, backend, _ = _loaded_world()
+    world, model, _ = _loaded_world()
     asyncio.run(_step(world))
     world.on_session_ended()
-    assert backend.ended
+    assert model.resets == 1
     assert world._selected_input is None
     assert world._chunk_index == 0
+
+
+class FakeBackend:
+    """Stand in for the worker subprocess behind the model half."""
+
+    def __init__(self) -> None:
+        self.resets: list[dict[str, Any]] = []
+        self.chunks: list[tuple[np.ndarray, str]] = []
+        self.ended = 0
+
+    def reset(self, **kwargs: Any) -> None:
+        self.resets.append(kwargs)
+
+    def generate_chunk(self, poses: np.ndarray, prompt: str) -> np.ndarray:
+        self.chunks.append((poses, prompt))
+        return np.zeros((12, 8, 8, 3), dtype=np.uint8)
+
+    def end_session(self) -> None:
+        self.ended += 1
+
+
+def _model() -> tuple[LingbotV1Model, FakeBackend]:
+    model = LingbotV1Model()
+    backend = FakeBackend()
+    model._backend = backend
+    return model, backend
+
+
+def _input(world_id: int, anchor: AnchorImage | None) -> LingbotV1Input:
+    return LingbotV1Input(
+        world_id=world_id,
+        anchor=anchor,
+        prompt="a lake",
+        poses=np.tile(np.eye(4, dtype=np.float32), (3, 1, 1)),
+    )
+
+
+_ANCHOR = AnchorImage(
+    image=b"png-bytes", suffix=".png", intrinsics=Path("intrinsics.npy"), seed=7
+)
+
+
+def test_model_starts_a_world_on_an_unseen_id_and_counts_its_chunks() -> None:
+    model, backend = _model()
+    first = model.generate(_input(1, _ANCHOR))
+    second = model.generate(_input(1, None))
+    assert len(backend.resets) == 1
+    assert backend.resets[0] == {
+        "seed": 7,
+        "anchor_image": b"png-bytes",
+        "suffix": ".png",
+        "intrinsics": Path("intrinsics.npy"),
+        "prompt": "a lake",
+    }
+    assert (first.world_id, first.chunk_index) == (1, 1)
+    assert (second.world_id, second.chunk_index) == (1, 2)
+    assert len(backend.chunks) == 2
+
+
+def test_model_refuses_an_unseen_world_without_an_anchor() -> None:
+    model, backend = _model()
+    with pytest.raises(NoAnchor):
+        model.generate(_input(1, None))
+    assert backend.resets == []
+    assert backend.chunks == []
+
+
+def test_model_reset_forgets_the_world_so_the_anchor_crosses_again() -> None:
+    model, backend = _model()
+    model.generate(_input(1, _ANCHOR))
+    model.reset()
+    assert backend.ended == 1
+    with pytest.raises(NoAnchor):
+        model.generate(_input(1, None))
+    result = model.generate(_input(1, _ANCHOR))
+    assert result.chunk_index == 1
+    assert len(backend.resets) == 2
