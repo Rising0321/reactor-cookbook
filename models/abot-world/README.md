@@ -14,6 +14,9 @@ upstream 21-latent local-attention window.
 
 ## Run locally
 
+The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+the current inputs, generates one native chunk, and publishes its media and state.
+
 Install the [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation)
 and Docker with the NVIDIA Container Toolkit, then run the model from this
 directory. At native resolution the distilled model uses about 23 GB of VRAM;

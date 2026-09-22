@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import secrets
 import time
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -62,7 +64,27 @@ class _Backend(Protocol):
         """Release causal state owned by the completed session."""
 
 
-class DreamXWorld(ReactorPipeline):
+@dataclass(frozen=True)
+class DreamXStepState:
+    """Snapshot the image and controls consumed by one native chunk."""
+
+    image: Path | UploadedFile
+    prompt: str
+    pressed_keys: frozenset[str]
+    seed: int
+    restart: bool
+
+
+@dataclass(frozen=True)
+class DreamXStepResult:
+    """Carry one decoded chunk and its generation duration."""
+
+    frames: np.ndarray
+    seconds: float
+    input: DreamXStepState
+
+
+class DreamXWorld(ReactorApp):
     """Generate an image-, prompt-, and keyboard-controllable DreamX world."""
 
     state: DreamXWorldState
@@ -332,75 +354,68 @@ class DreamXWorld(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    async def inference(self) -> AsyncGenerator[DreamXWorldOutput | None, None]:
-        """Generate and emit one upstream-native chunk at a time."""
+    async def process_input(self) -> DreamXStepState:
+        """Snapshot one native step after an image is selected."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        prompt = self.state.prompt.strip()
+        if not prompt:
+            raise ApplicationError("DreamX-World requires a non-empty prompt.")
+        snapshot = DreamXStepState(
+            image=self._selected_input,
+            prompt=prompt,
+            pressed_keys=self.state._pressed_keys,
+            seed=self._seed,
+            restart=self.state._reset_requested,
+        )
+        self._generating = True
+        return snapshot
+
+    def generate(self, input: DreamXStepState) -> DreamXStepResult:
+        """Apply the snapshot and generate one upstream-native chunk."""
         backend = self._backend
-        config = self._require_config()
         if backend is None:
             raise RuntimeError("DreamX-World was not loaded")
+        started = time.perf_counter()
+        if input.restart:
+            backend.reset(input.seed, input.image)
+        frames = backend.generate_chunk(input.prompt, input.pressed_keys)
+        return DreamXStepResult(frames, time.perf_counter() - started, input)
 
-        while True:
-            selected = self._selected_input
-            if selected is None:
-                yield None
-                continue
-
-            started = time.perf_counter()
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                self._generating = True
-                await self.send(self._state_update())
-                try:
-                    backend.reset(self._seed, selected)
-                finally:
-                    self._generating = False
-                self._chunk_index = 0
-                self._active_prompt = ""
-
-            prompt = self.state.prompt.strip()
-            if not prompt:
-                raise RuntimeError("DreamX-World requires a non-empty prompt")
-            pressed_keys = self.state._pressed_keys
-            self._generating = True
-            try:
-                frames = backend.generate_chunk(
-                    prompt,
-                    pressed_keys,
-                )
-            finally:
-                self._generating = False
-
-            self._chunk_index += 1
-            self._active_prompt = prompt
-            elapsed = time.perf_counter() - started
+    async def process_output(self, outcome: StepOutcome) -> DreamXWorldOutput:
+        """Publish a completed chunk and queue bounded rollout resets."""
+        self._generating = False
+        if outcome.error is not None:
+            raise outcome.error
+        result: DreamXStepResult = outcome.result
+        input = result.input
+        if input.restart:
+            self._chunk_index = 0
+        self.state._reset_requested = False
+        self._chunk_index += 1
+        self._active_prompt = input.prompt
+        await self.send(
+            ChunkGenerated(
+                chunk=self._chunk_index,
+                frames=int(result.frames.shape[0]),
+                prompt=input.prompt,
+                pressed_keys=[key for key in _CAMERA_KEYS if key in input.pressed_keys],
+                inference_seconds=round(result.seconds, 3),
+            )
+        )
+        if self._chunk_index >= self._require_config().max_chunks_per_rollout:
+            self._clear_controls()
+            self.state._reset_requested = True
             await self.send(
-                ChunkGenerated(
-                    chunk=self._chunk_index,
-                    frames=int(frames.shape[0]),
-                    prompt=prompt,
-                    pressed_keys=[key for key in _CAMERA_KEYS if key in pressed_keys],
-                    inference_seconds=round(elapsed, 3),
+                RolloutResetQueued(
+                    trigger="automatic_chunk_limit",
+                    seed=self._seed,
+                    completed_chunks=self._chunk_index,
+                    applies_to_chunk=1,
                 )
             )
-            await self.send(self._state_update())
-            yield DreamXWorldOutput(main_video=frames)
-
-            if (
-                self._chunk_index >= config.max_chunks_per_rollout
-                and not self.state._reset_requested
-                and selected is self._selected_input
-            ):
-                completed = self._chunk_index
-                self._request_reset()
-                await self.send(
-                    RolloutResetQueued(
-                        trigger="automatic_chunk_limit",
-                        seed=self._seed,
-                        completed_chunks=completed,
-                        applies_to_chunk=1,
-                    )
-                )
-                await self.send(self._state_update())
+        await self.send(self._state_update())
+        return DreamXWorldOutput(main_video=result.frames)
 
     def _select_image(
         self,

@@ -102,12 +102,17 @@ def test_inference_emits_one_complete_frame_batch(monkeypatch: MonkeyPatch) -> N
     """Preserve chunk timing by emitting every decoded frame in one turn."""
 
     class Backend:
+        def __init__(self) -> None:
+            self.resets = 0
+            self.prompts: list[str] = []
+
         def reset(self, _seed: int, _image: Path) -> None:
-            return None
+            self.resets += 1
 
         def generate_chunk(
             self, _prompt: str, _pressed_keys: frozenset[str]
         ) -> np.ndarray:
+            self.prompts.append(_prompt)
             return np.zeros((9, 8, 8, 3), dtype=np.uint8)
 
     world = dreamx_world.DreamXWorld()
@@ -122,7 +127,16 @@ def test_inference_emits_one_complete_frame_batch(monkeypatch: MonkeyPatch) -> N
     world._select_image(Path("selected.jpg"), "uploaded", "A coherent world")
 
     async def generate_first_chunk() -> Any:
-        return await anext(world.inference())
+        for index in range(10):
+            world.state.prompt = f"Scene {index}"
+            snapshot = await world.process_input()
+            world.state.prompt = "A later input"
+            result = world.generate(snapshot)
+            output = await world.process_output(dreamx_world.StepOutcome(result=result))
+            assert world._backend.prompts[-1] == f"Scene {index}"
+        assert world._chunk_index == 10
+        assert world._backend.resets == 1
+        return output
 
     output = asyncio.run(generate_first_chunk())
 

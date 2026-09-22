@@ -10,16 +10,18 @@ changes and resets initialize a fresh autoregressive world.
 from __future__ import annotations
 
 import secrets
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -75,7 +77,27 @@ class _FrameCapture:
         self.frames.append(np.asarray(frame))
 
 
-class ABotWorld(ReactorPipeline):
+@dataclass(frozen=True)
+class ABotStepState:
+    """Snapshot the anchor, prompt, seed, and native keyboard controls."""
+
+    image: Path | UploadedFile
+    prompt: str
+    seed: int
+    restart: bool
+    action: dict[str, bool]
+    sampled_keys: frozenset[str]
+
+
+@dataclass(frozen=True)
+class ABotStepResult:
+    """Carry one native decoded chunk and its input snapshot."""
+
+    frames: np.ndarray
+    input: ABotStepState
+
+
+class ABotWorld(ReactorApp):
     """Generate a prompt-, image-, and keyboard-controlled ABot world."""
 
     state: ABotWorldState
@@ -424,55 +446,56 @@ class ABotWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[ABotWorldOutput | None, None]:
-        """Generate one native causal chunk per turn and emit its RGB frame batch."""
-        while True:
-            selected_input = self._selected_input
-            if selected_input is None or self.state._limit_reached:
-                yield None
-                continue
+    async def process_input(self) -> ABotStepState:
+        """Snapshot controls once an anchor and an available rollout exist."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        if self.state._limit_reached:
+            raise ApplicationError("Reset the world after reaching the rollout limit.")
+        action, sampled = sample_key_snapshot(
+            self.state._pressed_keys, self.state._activated_keys
+        )
+        self.state._activated_keys = frozenset()
+        self._reset_in_flight = self.state._reset_requested
+        self._chunk_in_flight = True
+        return ABotStepState(
+            image=self._selected_input,
+            prompt=self.state.prompt,
+            seed=self.state._seed,
+            restart=self.state._reset_requested,
+            action=action,
+            sampled_keys=sampled,
+        )
 
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                self._reset_in_flight = True
-                self.output.flush()
-                try:
-                    self._reset_rollout(
-                        selected_input,
-                        self.state.prompt,
-                        self.state._seed,
-                    )
-                finally:
-                    self._reset_in_flight = False
-                await self._send_state_update()
+    def generate(self, input: ABotStepState) -> ABotStepResult:
+        """Apply one immutable input snapshot to the native causal pipeline."""
+        if input.restart:
+            self._reset_rollout(input.image, input.prompt, input.seed)
+        return ABotStepResult(self._generate_chunk(input.prompt, input.action), input)
 
-            action, sampled = sample_key_snapshot(
-                self.state._pressed_keys,
-                self.state._activated_keys,
-            )
-            self.state._activated_keys = frozenset()
-            prompt = self.state.prompt
-            self._chunk_in_flight = True
-            try:
-                frames = self._generate_chunk(prompt, action)
-            finally:
-                self._chunk_in_flight = False
-            self._sampled_keys = sampled
-            self._active_prompt = prompt
-            self._chunk_index += 1
-
-            config = self._require_config()
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._clear_controls()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                    )
+    async def process_output(self, outcome: StepOutcome) -> ABotWorldOutput:
+        """Publish the decoded chunk and the resulting rollout state."""
+        self._reset_in_flight = False
+        self._chunk_in_flight = False
+        if outcome.error is not None:
+            raise outcome.error
+        result: ABotStepResult = outcome.result
+        self.state._reset_requested = False
+        self._sampled_keys = result.input.sampled_keys
+        self._active_prompt = result.input.prompt
+        self._chunk_index += 1
+        config = self._require_config()
+        if self._chunk_index >= config.max_chunks:
+            self.state._limit_reached = True
+            self._clear_controls()
+            await self.send(
+                RolloutLimitReached(
+                    completed_chunks=self._chunk_index,
+                    max_chunks=config.max_chunks,
                 )
-            await self._send_state_update()
-            yield ABotWorldOutput(main_video=frames)
+            )
+        await self._send_state_update()
+        return ABotWorldOutput(main_video=result.frames)
 
     def _reset_rollout(
         self,
@@ -507,7 +530,6 @@ class ABotWorld(ReactorPipeline):
         self._active_prompt = prompt
         self._sampled_keys = frozenset()
         self._chunk_index = 0
-        self.state._limit_reached = False
 
     def _generate_chunk(self, prompt: str, action: dict[str, bool]) -> np.ndarray:
         """Run one upstream autoregressive block and cached VAE decode."""

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import secrets
 import time
-from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -56,7 +59,28 @@ logger = get_logger(__name__)
 _DEFAULT_UPLOAD_PROMPT = "Continue the world shown in the reference image."
 
 
-class HYWorld15(ReactorPipeline):
+@dataclass(frozen=True)
+class HYWorld15StepState:
+    """Carry image conditioning and native controls for one step."""
+
+    image: Path | UploadedFile
+    prompt: str
+    seed: int
+    control: CameraControl
+    restart: bool
+    chunk: int
+
+
+@dataclass(frozen=True)
+class HYWorld15StepResult:
+    """Carry decoded frames and the exact controls used to produce them."""
+
+    frames: np.ndarray
+    input: HYWorld15StepState
+    seconds: float
+
+
+class HYWorld15(ReactorApp):
     """Generate an image-, prompt-, and camera-controllable HY-World 1.5 world."""
 
     state: HYWorld15State
@@ -346,90 +370,83 @@ class HYWorld15(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[HYWorld15Output | None, None]:
-        """Generate and emit one native causal chunk at a time."""
-        backend = self._require_backend()
-        planner = self._require_planner()
-        config = self._require_config()
-        while True:
-            if self.state._restart_requested:
-                selected = self._selected_input
-                if selected is None:
-                    yield None
-                    continue
-                prompt = self.state.prompt.strip()
-                if not prompt:
-                    raise RuntimeError("HY-World 1.5 requires a non-empty prompt")
-                self.state._restart_requested = False
-                self._generating = True
-                await self._send_state_update()
-                try:
-                    image = load_reference_image(selected)
-                    backend.reset(
-                        image=image,
-                        prompt=prompt,
-                        seed=self._seed,
-                    )
-                finally:
-                    self._generating = False
-                planner.reset()
-                self._chunk_index = 0
-                self._active_prompt = None
-                self.state._limit_reached = False
-                await self._send_state_update()
-
-            if self.state._limit_reached:
-                yield None
-                continue
-            if self._selected_input is None:
-                yield None
-                continue
-
-            prompt = self.state.prompt.strip()
-            control = CameraControl(
+    async def process_input(self) -> HYWorld15StepState:
+        """Snapshot one native chunk's conditioning and controls."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        if self.state._limit_reached and not self.state._restart_requested:
+            raise ApplicationError("Reset the world after reaching the rollout limit.")
+        prompt = self.state.prompt.strip()
+        if not prompt:
+            raise ApplicationError("HY-World 1.5 requires a non-empty prompt.")
+        snapshot = HYWorld15StepState(
+            image=self._selected_input,
+            prompt=prompt,
+            seed=self._seed,
+            control=CameraControl(
                 forward=self.state._forward,
                 strafe=self.state._strafe,
                 pitch=self.state._pitch,
                 yaw=self.state._yaw,
-            )
-            camera = planner.plan(control)
-            chunk = self._chunk_index + 1
-            self._generating = True
-            await self._send_state_update()
-            started = time.perf_counter()
-            try:
-                frames = backend.generate_chunk(camera, prompt)
-            finally:
-                self._generating = False
-            generation_seconds = time.perf_counter() - started
-            frames = normalize_output_frames(frames, first_chunk=chunk == 1)
+            ),
+            restart=self.state._restart_requested,
+            chunk=self._chunk_index + 1,
+        )
+        self._generating = True
+        return snapshot
 
-            self._chunk_index = chunk
-            self._active_prompt = prompt
+    def generate(self, input: HYWorld15StepState) -> HYWorld15StepResult:
+        """Apply conditioning and advance the native autoregressive backend."""
+        backend = self._require_backend()
+        planner = self._require_planner()
+        if input.restart:
+            backend.reset(
+                image=load_reference_image(input.image),
+                prompt=input.prompt,
+                seed=input.seed,
+            )
+            planner.reset()
+        camera = planner.plan(input.control)
+        started = time.perf_counter()
+        frames = backend.generate_chunk(camera, input.prompt)
+        seconds = time.perf_counter() - started
+        frames = normalize_output_frames(frames, first_chunk=input.chunk == 1)
+        return HYWorld15StepResult(frames=frames, input=input, seconds=seconds)
+
+    async def process_output(self, outcome: StepOutcome) -> HYWorld15Output:
+        """Publish completed frames and their sampled controls."""
+        self._generating = False
+        if outcome.error is not None:
+            raise outcome.error
+        result: HYWorld15StepResult = outcome.result
+        input = result.input
+        self.state._restart_requested = False
+        self._chunk_index = input.chunk
+        self._active_prompt = input.prompt
+        await self.send(
+            ChunkCompleted(
+                chunk=input.chunk,
+                frames=13 if input.chunk == 1 else 16,
+                prompt=input.prompt,
+                generation_seconds=result.seconds,
+                forward=input.control.forward,
+                strafe=input.control.strafe,
+                pitch=input.control.pitch,
+                yaw=input.control.yaw,
+            )
+        )
+        config = self._require_config()
+        if self._chunk_index >= config.max_chunks:
+            self.state._limit_reached = True
+            self._release_camera()
             await self.send(
-                ChunkCompleted(
-                    chunk=chunk,
-                    frames=13 if chunk == 1 else 16,
-                    prompt=prompt,
-                    generation_seconds=generation_seconds,
-                    forward=control.forward,
-                    strafe=control.strafe,
-                    pitch=control.pitch,
-                    yaw=control.yaw,
+                RolloutLimitReached(
+                    completed_chunks=self._chunk_index,
+                    max_chunks=config.max_chunks,
                 )
             )
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._release_camera()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                    )
-                )
-            await self._send_state_update()
-
-            yield HYWorld15Output(main_video=frames)
+        await self._send_state_update()
+        return HYWorld15Output(main_video=result.frames)
 
     def _request_restart(self) -> None:
         """Queue a fresh causal world and clear prior playout, camera, and progress."""

@@ -12,9 +12,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 from PIL import Image
 from pytest import MonkeyPatch
-from reactor_runtime import UploadedFile
+from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
 RECIPE_DIR = Path(__file__).parents[1]
@@ -164,7 +165,8 @@ def test_image_selection_queues_and_generates_first_chunk(
     assert model.state._restart_requested is True
 
     async def generate_first_chunk() -> Any:
-        return await anext(model.inference())
+        snapshot = await model.process_input()
+        return await model.process_output(StepOutcome(result=model.generate(snapshot)))
 
     output = asyncio.run(generate_first_chunk())
     assert isinstance(output, HYWorld15Output)
@@ -194,18 +196,43 @@ def test_prompt_applies_at_next_chunk_boundary() -> None:
     asyncio.run(model.set_image(_image_upload(), "First prompt"))
 
     async def drain_first_chunk() -> None:
-        stream = model.inference()
-        await anext(stream)
-        await stream.aclose()
+        snapshot = await model.process_input()
+        await model.process_output(StepOutcome(result=model.generate(snapshot)))
 
     asyncio.run(drain_first_chunk())
     asyncio.run(model.set_prompt("Second prompt"))
 
     async def generate_next_chunk() -> Any:
-        return await anext(model.inference())
+        snapshot = await model.process_input()
+        return await model.process_output(StepOutcome(result=model.generate(snapshot)))
 
     output = asyncio.run(generate_next_chunk())
     assert isinstance(output, HYWorld15Output)
     assert output.main_video.shape == (16, 8, 8, 3)
     assert [prompt for _, prompt in backend.calls] == ["First prompt", "Second prompt"]
     assert model._chunk_index == 2
+
+
+def test_step_snapshot_waiting_limit_and_error_cleanup() -> None:
+    """Gate unavailable worlds and keep generation independent of shared inputs."""
+    model, backend = _ready_model()
+
+    async def run() -> None:
+        with pytest.raises(ApplicationError):
+            await model.process_input()
+        await model.set_image(_image_upload(), "First prompt")
+        snapshot = await model.process_input()
+        model.state.prompt = "Second prompt"
+        await model.process_output(StepOutcome(result=model.generate(snapshot)))
+        assert backend.calls[0][1] == "First prompt"
+        assert model._active_prompt == "First prompt"
+        model.state._limit_reached = True
+        with pytest.raises(ApplicationError):
+            await model.process_input()
+        model._generating = True
+        with pytest.raises(RuntimeError, match="failed"):
+            await model.process_output(StepOutcome(error=RuntimeError("failed")))
+        assert not model._generating
+        assert model._chunk_index == 1
+
+    asyncio.run(run())

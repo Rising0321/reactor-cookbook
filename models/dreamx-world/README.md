@@ -34,8 +34,11 @@ from chunk 1.
 
 ## Run
 
+The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+the current inputs, generates one native chunk, and publishes its media and state.
+
 The `build` block in `reactor.yaml` controls the model image: Reactor Runtime
-3.2.5, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
+3.5.0, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
 Reactor's [build configuration](https://docs.reactor.inc/deploy/platform/build)
 for the supported fields. The host needs only the prerequisites above.
 
