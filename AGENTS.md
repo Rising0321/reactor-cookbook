@@ -18,6 +18,48 @@ works.
 - Keep each example self-contained; a change to one model must not reach
   into another model's folder.
 
+## Two authoring shapes under `models/`
+
+The runtime's current authoring surface is a `ReactorApp` written as two
+halves: an application half the runtime drives one step at a time
+(`process_input()`, `generate()`, `process_output()`) and a model half that
+owns the weights and imports nothing from the runtime, meeting on a step input
+and a step result. GUIDELINES.md states the rules; the reference for them is
+the runtime's
+[Application and Model](https://docs.reactor.inc/deploy/development/reactor-app/application-and-model)
+page, its
+[`application-model-isolation`](https://github.com/reactor-team/reactor-runtime/blob/main/skills/application-model-isolation/SKILL.md)
+skill, and its
+[`examples/waypoint`](https://github.com/reactor-team/reactor-runtime/tree/main/examples/waypoint).
+In this repo, `models/lingbot-world-v1-fast/` is the model written that way:
+`lingbot_world_v1.py` is the application half, `lingbot_world_v1_model.py`
+the model half, and its `tests/` drive both without a GPU.
+
+Most other folders are still the previous shape, a `ReactorPipeline` whose
+`inference()` generator mixes the client checks, the model call, and the
+messages in one loop. They run unchanged on the current runtime and are moved
+one at a time. Three rules follow, for an agent editing or reviewing here:
+
+- **New model code is a `ReactorApp` in two halves.** Do not write a new
+  `inference()` loop, and do not copy one from a neighbouring folder.
+- **A routine change to a previous-shape model is not a port.** A version
+  bump, a dependency roll, a prompt or description change: make it on the
+  shape the folder has. A change to how the folder's loop decides a step,
+  what the model receives, or what a step emits is the moment to port it,
+  as its own PR.
+- **A port is a split, not a translation, and it moves no client surface.**
+  The runtime's
+  [`porting-to-reactor-app`](https://github.com/reactor-team/reactor-runtime/blob/main/skills/porting-to-reactor-app/SKILL.md)
+  skill is the method; this repo carries no copy of it. Render
+  `python -m reactor_runtime.schema` before and after and diff: commands,
+  messages, tracks, and descriptions must be byte-identical. Review a port
+  against the split: nothing from `reactor_runtime` in the model half; the
+  application reads the model only through the result; `ApplicationError`
+  only in `process_input()`, the model's own exceptions out of `generate()`;
+  every message an explicit `await self.send()` in `process_output()`;
+  `reset()` without arguments; the step time read from `outcome.elapsed`,
+  not measured again.
+
 ## Layout
 
 - `models/` — deployable models; each folder is a `reactor` CLI workspace

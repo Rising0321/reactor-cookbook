@@ -104,12 +104,35 @@ are documented in [`example_images`](example_images).
 
 ## Runtime boundary
 
-`LingBotWorldV1` uses the `ReactorApp` step loop. `process_input()` creates a
-`LingbotV1State` snapshot of the selected image, prompt, seed, and camera
-controls. `generate()` runs one native chunk from that snapshot, and
-`process_output()` publishes its video and state messages. Commands take
-effect between chunks; generation waits for an image and stops at the rollout
-limit. Playback follows measured generation throughput.
+The model is written as two halves that meet on two dataclasses.
+
+`lingbot_world_v1.py` is the **application half**, the `ReactorApp` the
+runtime drives one step at a time. It owns everything a client can see:
+the state and the commands, the messages, and the three step hooks.
+`process_input()` refuses a step until an anchor image is selected and
+while the rollout limit holds; otherwise it turns the held camera axes into
+relative camera poses and builds a `LingbotV1Input`. `generate()` is one
+line that forwards that input to the model half. `process_output()` maps
+the `LingbotV1Result` onto `main_video`, sends `rollout_limit_reached` and
+`state_update`, and reports the chunk time the runtime measured. Commands
+run between steps, so a step always reads one consistent state.
+
+`lingbot_world_v1_model.py` is the **model half**. It imports nothing from
+the runtime and knows nothing about clients. `LingbotV1Model` has three
+methods: `load()` starts the worker process and loads the weights once;
+`generate()` takes one `LingbotV1Input` and returns one `LingbotV1Result`;
+`reset()` forgets the current world and releases its caches. The weights and
+the causal state live in the worker subprocess behind `upstream_backend.py`
+and `worker.py`, so this half is also the one that could run in its own
+process without a change.
+
+A fresh world is asked for with an id, not a flag. `set_image`,
+`random_image`, and `reset` bump the world id the application holds; the next
+`process_input()` sees the model has not reported that id yet and carries the
+anchor image on the input; the result echoes the id, and from then on the
+input carries no image. The model half starts a new world when it receives an
+id it has not applied, and raises `NoAnchor` if that input carries no image.
+Playback follows the measured generation time of each step.
 
 LingBot-World Fast is an autoregressive video model. The included
 `InteractiveFastRollout` runs its native three-latent, four-timestep boundary as
