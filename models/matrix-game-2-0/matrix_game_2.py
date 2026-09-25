@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import secrets
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
+from matrix_game_2_assets import (
+    prepare_runtime_assets,
+    read_config,
+    validate_uploaded_image,
+)
+from matrix_game_2_backend import FRAMES_PER_CHUNK, ChunkAction
+from matrix_game_2_model import (
+    MatrixGame2Anchor,
+    MatrixGame2Input,
+    MatrixGame2Model,
+    MatrixGame2Result,
+)
+from matrix_game_2_types import (
+    KEYBOARD_KEYS,
+    ActionChanged,
+    CameraMotionChanged,
+    ChunkComplete,
+    MatrixGame2Config,
+    MatrixGame2Output,
+    MatrixGame2State,
+    RolloutLimitReached,
+    StateUpdate,
+)
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -24,45 +44,7 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
-from matrix_game_2_assets import (
-    load_input_image,
-    prepare_runtime_assets,
-    read_config,
-    validate_uploaded_image,
-)
-from matrix_game_2_backend import FRAMES_PER_CHUNK, ChunkAction, MatrixGame2Backend
-from matrix_game_2_types import (
-    KEYBOARD_KEYS,
-    ActionChanged,
-    CameraMotionChanged,
-    ChunkComplete,
-    MatrixGame2Config,
-    MatrixGame2Output,
-    MatrixGame2State,
-    RolloutLimitReached,
-    StateUpdate,
-)
-
 logger = get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class MatrixGame2Input:
-    """Snapshot image conditioning and one chunk's controls."""
-
-    anchor_image: Path | UploadedFile
-    seed: int
-    restart: bool
-    action: ChunkAction
-
-
-@dataclass(frozen=True)
-class MatrixGame2Result:
-    """Carry generated frames and the controls actually consumed."""
-
-    frames: np.ndarray
-    seconds: float
-    action: ChunkAction
 
 
 class MatrixGame2(ReactorApp):
@@ -74,7 +56,7 @@ class MatrixGame2(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: MatrixGame2Config | None = None
-        self._backend: MatrixGame2Backend | None = None
+        self._engine = MatrixGame2Model()
         self._selected_input: Path | UploadedFile | None = None
         self._image_source = "none"
         self._seed = 0
@@ -89,14 +71,13 @@ class MatrixGame2(ReactorApp):
         """
         config = read_config(config_path)
         model_path = prepare_runtime_assets(config)
-        backend = MatrixGame2Backend(
+        self._engine.load(
             source_path=config.source_path,
             model_path=model_path,
             checkpoint_file=config.checkpoint_file,
             max_latent_frames=config.max_latent_frames,
         )
         self._config = config
-        self._backend = backend
         self._seed = config.seed
         logger.info(
             "Matrix-Game-2.0 model ready",
@@ -112,7 +93,7 @@ class MatrixGame2(ReactorApp):
         self._selected_input = None
         self._image_source = "none"
         self._seed = config.seed
-        self.state._restart_requested = False
+        self.state._applied_world_id = None
         self.state._limit_reached = False
         self._chunk_index = 0
         self._last_chunk_frames = 0
@@ -132,14 +113,12 @@ class MatrixGame2(ReactorApp):
     @session_ended
     def on_session_ended(self) -> None:
         """Release image data and causal caches owned by the completed session."""
-        backend = self._backend
         try:
-            if backend is not None:
-                backend.end_rollout()
+            self._engine.reset()
         finally:
             self._selected_input = None
             self._image_source = "none"
-            self.state._restart_requested = False
+            self.state._applied_world_id = None
             self.state._limit_reached = False
             self._chunk_index = 0
             self._last_chunk_frames = 0
@@ -339,10 +318,16 @@ class MatrixGame2(ReactorApp):
             raise ApplicationError("Select an anchor image before generating.")
         if self.state._limit_reached:
             raise ApplicationError("Reset the world after reaching the rollout limit.")
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            selected = self._selected_input
+            anchor = MatrixGame2Anchor(
+                image=selected.data if isinstance(selected, UploadedFile) else selected,
+                seed=self._seed,
+            )
         return MatrixGame2Input(
-            anchor_image=self._selected_input,
-            seed=self._seed,
-            restart=self.state._restart_requested,
+            world_id=self.state._world_id,
+            anchor=anchor,
             action=ChunkAction(
                 pressed_keys=tuple(sorted(self.state._pressed_keys)),
                 pitch=self.state.pitch,
@@ -351,24 +336,21 @@ class MatrixGame2(ReactorApp):
         )
 
     def generate(self, input: MatrixGame2Input) -> MatrixGame2Result:
-        """Generate one official causal chunk from an immutable input snapshot."""
-        backend = self._require_backend()
-        if input.restart:
-            backend.reset(load_input_image(input.anchor_image), input.seed)
-        started = time.perf_counter()
-        frames = backend.generate_chunk(input.action)
-        return MatrixGame2Result(frames, time.perf_counter() - started, input.action)
+        """Forward one immutable input to the independent model."""
+        return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> MatrixGame2Output:
         """Publish the completed chunk and advance successful rollout progress."""
         if outcome.error is not None:
+            # Missing anchors and exhausted worlds are refused before inference.
+            # Other failures must end the session rather than silently reset it.
             raise outcome.error
         result: MatrixGame2Result = outcome.result
-        self.state._restart_requested = False
-        self._chunk_index += 1
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
         self._last_chunk_frames = int(result.frames.shape[0])
         config = self._require_config()
-        if self._chunk_index >= config.max_chunks:
+        if result.complete:
             self.state._limit_reached = True
             self._clear_controls()
             await self.send(
@@ -380,7 +362,7 @@ class MatrixGame2(ReactorApp):
             ChunkComplete(
                 chunk=self._chunk_index,
                 frames=self._last_chunk_frames,
-                inference_seconds=result.seconds,
+                inference_seconds=outcome.elapsed,
                 pressed_keys=list(result.action.pressed_keys),
                 pitch=result.action.pitch,
                 yaw=result.action.yaw,
@@ -393,7 +375,7 @@ class MatrixGame2(ReactorApp):
         """Queue fresh image conditioning and release current controls and progress."""
         self.output.flush()
         self._clear_controls()
-        self.state._restart_requested = True
+        self.state._world_id += 1
         self.state._limit_reached = False
         self._chunk_index = 0
         self._last_chunk_frames = 0
@@ -424,7 +406,7 @@ class MatrixGame2(ReactorApp):
 
     def _next_control_chunk(self) -> int:
         """Return the one-based chunk expected to sample controls accepted now."""
-        if self.state._restart_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
         return self._chunk_index + 1
 
@@ -437,7 +419,8 @@ class MatrixGame2(ReactorApp):
             image_source=self._image_source,
             image_name=selected.name if selected is not None else "",
             seed=self._seed,
-            reset_queued=self.state._restart_requested,
+            reset_queued=selected is not None
+            and self.state._world_id != self.state._applied_world_id,
             chunk_in_flight=False,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,
@@ -456,9 +439,3 @@ class MatrixGame2(ReactorApp):
         if self._config is None:
             raise RuntimeError("Matrix-Game-2.0 was not loaded")
         return self._config
-
-    def _require_backend(self) -> MatrixGame2Backend:
-        """Return the loaded upstream backend or raise a lifecycle error."""
-        if self._backend is None:
-            raise RuntimeError("Matrix-Game-2.0 was not loaded")
-        return self._backend

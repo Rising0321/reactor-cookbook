@@ -1,8 +1,11 @@
 # Play Matrix-Game-2.0 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop: `process_input()`
-snapshots the current controls, `generate()` runs one native chunk, and
-`process_output()` publishes its video and state updates.
+The adapter uses Reactor Runtime 3.5's native step loop. `matrix_game_2.py`
+handles client commands and publishes video and state updates;
+`matrix_game_2_model.py` owns model loading, causal state, and one-chunk
+generation without a Runtime dependency. Typed inputs and results carry a
+world identifier, with the starting image sent only until the model confirms
+that world. Chunk timing comes from the runtime's step outcome.
 
 Run SkyworkAI's public
 [Matrix-Game-2.0](https://github.com/SkyworkAI/Matrix-Game) universal distilled
