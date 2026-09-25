@@ -69,7 +69,7 @@ def ready_model(monkeypatch):
     model._model._observe_frame_jit = observe
     model._model._next_frame_jit = generate
     monkeypatch.setattr(opendreamer_model, "mesh_context", lambda *args: nullcontext())
-    model.state._reset_requested = True
+    model.state._applied_world_id = None
     return model, calls
 
 
@@ -125,7 +125,7 @@ def test_missing_conditioning_refuses_and_error_does_not_consume_input(monkeypat
     with pytest.raises(RuntimeError, match="failed"):
         asyncio.run(model.process_output(StepOutcome(error=RuntimeError("failed"))))
     assert model.state._delta_x == 9
-    assert model.state._reset_requested
+    assert model.state._applied_world_id != model._world_id
 
 
 def test_model_boundary_imports_without_runtime():
@@ -243,7 +243,7 @@ def test_upload_reset_and_stale_ack(monkeypatch):
     assert app._uploaded_conditioning.actions is None
     assert app._uploaded_conditioning.frames.shape == (2, 8, 8, 3)
     assert asyncio.run(app.process_output(StepOutcome(result=initial))) is None
-    assert app.state._reset_requested
+    assert app.state._applied_world_id != app._world_id
     snapshot = asyncio.run(app.process_input())
     assert snapshot.world_id != initial.world_id
     assert snapshot.anchor.conditioning is app._uploaded_conditioning

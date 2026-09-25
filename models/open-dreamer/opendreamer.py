@@ -116,7 +116,6 @@ class OpenDreamer(ReactorApp):
         self._world_id = uuid4().hex
         self._last_result = None
         self.state._seed = self._config.seed
-        self.state._reset_requested = True
         self._conditioning_source = self._random_demo_name()
         self._uploaded_conditioning = None
         self._clear_controls()
@@ -405,17 +404,20 @@ class OpenDreamer(ReactorApp):
         """Queue fresh autoregressive state and discard pending media."""
         self.output.flush()
         self._world_id = uuid4().hex
-        self.state._reset_requested = True
         self._clear_controls()
 
     async def process_input(self) -> OpenDreamerStepState:
-        """Snapshot controls and supply an anchor until the model acknowledges it."""
+        """Snapshot controls and supply an anchor until the model acknowledges it.
+
+        The anchor rides on the input only while the model has not reported the
+        current world id back on a result, so it crosses once per fresh world.
+        """
         conditioning = self._select_conditioning()
         if conditioning is None:
             raise ApplicationError("Select conditioning before generating.")
         anchor = (
             OpenDreamerAnchor(conditioning, self.state._seed)
-            if self.state._reset_requested
+            if self._world_id != self.state._applied_world_id
             else None
         )
         return OpenDreamerStepState(
@@ -441,7 +443,7 @@ class OpenDreamer(ReactorApp):
         if result.world_id != self._world_id:
             return None
         self._last_result = result
-        self.state._reset_requested = False
+        self.state._applied_world_id = result.world_id
         if result.frame is None:
             return None
         self._consume_transient_controls()

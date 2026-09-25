@@ -148,5 +148,5 @@ class OpenDreamerState(InputState):
     _delta_x: float = 0.0
     _delta_y: float = 0.0
     _wheel_delta: int = 0
-    _reset_requested: bool = True
+    _applied_world_id: str | None = None
     _seed: int = 0
