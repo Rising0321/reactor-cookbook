@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: hy-world-1-5
-  version: v0.1.1
+  version: v0.1.2
   description: |
     Play HY-World 1.5 with image, prompt, and native four-axis camera controls.
   resources:

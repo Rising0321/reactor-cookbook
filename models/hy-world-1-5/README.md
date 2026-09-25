@@ -1,7 +1,9 @@
 # HY-World 1.5 example
 
-The adapter uses Reactor Runtime 3.5's native step loop with typed input snapshots
-and one native chunk per generation step.
+The adapter uses Reactor Runtime 3.5's native step loop. `hy_world_1_5.py`
+owns commands and camera planning; `hy_world_1_5_model.py` owns inference and
+causal state. Frozen inputs and results carry one native chunk per step, with
+a world ID acknowledging when a new reference has been applied.
 
 Serve the public
 [HY-WorldPlay](https://github.com/Tencent-Hunyuan/HY-WorldPlay) distilled
