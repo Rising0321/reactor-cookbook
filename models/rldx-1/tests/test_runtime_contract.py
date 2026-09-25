@@ -82,7 +82,9 @@ def test_ten_native_steps_preserve_rtc_observations_and_reset(monkeypatch):
             ]
         }, {}
 
-    p._policy = SimpleNamespace(reset=lambda: resets.append(True), get_action=predict)
+    p._engine._policy = SimpleNamespace(
+        reset=lambda: resets.append(True), get_action=predict
+    )
 
     async def send(message):
         sent.append(message)
@@ -147,16 +149,20 @@ def test_ten_native_steps_preserve_rtc_observations_and_reset(monkeypatch):
         assert not any(p._bufs.values()) and not any(p._recent.values())
         assert p._last_plan_id == 9, "disconnect must not reset the policy plan chain"
         await p.reset()
+        assert p._last_replan is None and p._last_commit is None
         await drive(await p.process_input())
-        assert p._step == 0 and p._last_plan_id is None
+        assert p._last_completed_predictions == 0 and p._last_plan_id is None
         with pytest.raises(RuntimeError, match="policy failure"):
             await p.process_output(StepOutcome(error=RuntimeError("policy failure")))
+        p.on_session_ended()
+        assert p._engine._episode_id is None and p._publication is None
+        assert not any(p._bufs.values())
 
     asyncio.run(run())
     predictions = [message for message in sent if isinstance(message, ActionPrediction)]
     assert [message.request_id for message in predictions] == list(range(10))
     assert [message.step for message in predictions] == list(range(10))
-    assert len(calls) == 10 and len(resets) == 2
+    assert len(calls) == 10 and len(resets) == 3
 
 
 def test_declared_input_tracks():
