@@ -1,7 +1,9 @@
 # Run EVOKE through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop with typed input snapshots
-and one native chunk per generation step.
+The adapter uses Reactor Runtime 3.5's native step loop. `evoke.py` owns commands
+and camera planning; `evoke_model.py` owns the persistent inference worker and
+rollout state. Frozen inputs and results carry one native chunk per step and
+acknowledge new conditioning through a world ID.
 
 Run the public [Alaya-EVOKE world model](https://github.com/AlayaLab/Evoke) as
 an interactive Reactor backend. Use this recipe to start an autoregressive
