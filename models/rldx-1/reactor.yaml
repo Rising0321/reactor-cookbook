@@ -23,7 +23,7 @@ model:
 runtime:
   import: rldx1:RLDXPipeline
   config: config.yml
-  weights_path: ./weights
+  weights_path: "hf://RLWRLD/RLDX-1-FT-ROBOCASA"
 
 build:
   runtime_version: "3.5.0"
