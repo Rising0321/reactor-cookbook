@@ -156,6 +156,11 @@ Commands return typed, command-correlated messages for the client timeline:
 
 Message delivery stays outside the blocking GPU inference call.
 
+`dreamx_world.py` owns commands, camera planning, and messages. Its step hooks
+pass frozen inputs to `dreamx_world_model.py`, which owns the native backend and
+returns frames, the applied world ID, and chunk progress. An image crosses this
+boundary only until the first successful chunk acknowledges its world ID.
+
 ## Recording
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
