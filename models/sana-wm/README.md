@@ -156,6 +156,11 @@ SANA-WM does not emit audio.
 
 ## Notes
 
+The application plans native camera poses and handles commands and messages.
+`sana_wm_model.py` owns the streaming backend and returns frames with the applied
+world ID and chunk progress. Image and calibration inputs cross that boundary
+once per acknowledged world; a finite trajectory stops at its final full chunk.
+
 - `sana_wm.yaml` pins the public SANA source, SANA-WM checkpoint, Gemma text
   encoder, Pi3X source and checkpoint, inference memory lengths, camera motion,
   and five built-in scenes.
