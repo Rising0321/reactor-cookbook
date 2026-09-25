@@ -9,11 +9,24 @@ reusing the rollout's KV cache, dynamic visual context, and Patch Memory.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
-import numpy as np
+from matrix_game_3_5_camera import CameraMotionPlanner, MotionConfig
+from matrix_game_3_5_config import MatrixConfig, prepare_runtime, read_config
+from matrix_game_3_5_images import validate_uploaded_image
+from matrix_game_3_5_model import (
+    OUTPUT_FRAMES_PER_CHUNK,
+    MatrixGame35Anchor,
+    MatrixGame35Input,
+    MatrixGame35Model,
+    MatrixGame35Result,
+)
+from matrix_game_3_5_types import (
+    MatrixGame35Output,
+    MatrixGame35State,
+    RolloutLimitReached,
+    StateUpdate,
+)
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -25,69 +38,17 @@ from reactor_runtime import (
     connected,
     disconnected,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
 from reactor_runtime.log import get_logger
-
-from matrix_game_3_5_camera import CameraMotionPlanner, MotionConfig
-from matrix_game_3_5_config import MatrixConfig, prepare_runtime, read_config
-from matrix_game_3_5_images import (
-    OUTPUT_FRAMES_PER_CHUNK,
-    normalize_output_frames,
-    validate_uploaded_image,
-)
-from matrix_game_3_5_types import (
-    MatrixGame35Output,
-    MatrixGame35State,
-    RolloutLimitReached,
-    StateUpdate,
-)
-from upstream_backend import MatrixWorkerBackend, WorkerSettings
+from upstream_backend import WorkerSettings
 
 logger = get_logger(__name__)
 
 FPS = 16
 _CAMERA_POSES_PER_CHUNK = OUTPUT_FRAMES_PER_CHUNK
-
-
-class _Backend(Protocol):
-    """Define the blocking model operations used by the Reactor loop."""
-
-    def reset(
-        self,
-        seed: int,
-        anchor_image: Path | UploadedFile,
-        prompt: str,
-    ) -> None:
-        """Reset the causal rollout from an image and text condition."""
-
-    def generate_chunk(
-        self,
-        trajectory_c2w: np.ndarray,
-        seed: int,
-        prompt: str,
-    ) -> np.ndarray:
-        """Generate one RGB chunk for camera and text conditions."""
-
-    def end_session(self) -> None:
-        """Release causal state owned by the completed session."""
-
-
-@dataclass(frozen=True)
-class MatrixGame35Input:
-    """Snapshot all conditions for one native camera-controlled chunk."""
-
-    anchor_image: Path | UploadedFile
-    prompt: str
-    seed: int
-    restart: bool
-    forward: float
-    strafe: float
-    vertical: float
-    pitch: float
-    yaw: float
-    roll: float
 
 
 class MatrixGame35(ReactorApp):
@@ -99,7 +60,7 @@ class MatrixGame35(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: MatrixConfig | None = None
-        self._backend: _Backend | None = None
+        self._engine = MatrixGame35Model()
         self._planner: CameraMotionPlanner | None = None
         self._selected_input: Path | UploadedFile | None = None
         self._default_prompt = ""
@@ -112,7 +73,7 @@ class MatrixGame35(ReactorApp):
         Args:
             config_path: Path to ``matrix_game_3_5.yaml`` from ``reactor.yaml``.
         """
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         initial_pose, intrinsics = prepare_runtime(config)
         self._config = config
         self._default_prompt = config.default_prompt
@@ -125,7 +86,7 @@ class MatrixGame35(ReactorApp):
                 rotation_degrees_per_second=config.rotation_degrees_per_second,
             ),
         )
-        self._backend = MatrixWorkerBackend(
+        self._engine.load(
             WorkerSettings(
                 python_executable=config.worker_python,
                 source_path=config.source_path,
@@ -159,7 +120,7 @@ class MatrixGame35(ReactorApp):
         self.state.prompt = self._default_prompt
         self._seed = config.seed
         self._clear_controls()
-        self.state._restart_requested = True
+        self.state._applied_world_id = None
         self.state._limit_reached = False
         self._chunk_index = 0
 
@@ -171,13 +132,11 @@ class MatrixGame35(ReactorApp):
     @session_ended
     def on_session_ended(self) -> None:
         """Release causal state and controls owned by the completed world."""
-        backend = self._backend
         try:
-            if backend is not None:
-                backend.end_session()
+            self._engine.reset()
         finally:
             self._clear_controls()
-            self.state._restart_requested = True
+            self.state._applied_world_id = None
             self.state._limit_reached = False
             self._selected_input = None
             self._chunk_index = 0
@@ -458,52 +417,58 @@ class MatrixGame35(ReactorApp):
             raise ApplicationError("Select an anchor image before generating.")
         if self.state._limit_reached:
             raise ApplicationError("Reset the world after reaching the rollout limit.")
-        return MatrixGame35Input(
-            anchor_image=self._selected_input,
-            prompt=self.state.prompt,
-            seed=self._seed,
-            restart=self.state._restart_requested,
-            forward=self.state.forward,
+        if not self.state.prompt.strip():
+            raise ApplicationError("Set a prompt before generating.")
+        planner = self._planner
+        if planner is None:
+            raise RuntimeError("Matrix-Game-3.5 was not loaded")
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            selected = self._selected_input
+            if isinstance(selected, UploadedFile):
+                suffix = {
+                    "image/bmp": ".bmp",
+                    "image/jpeg": ".jpg",
+                    "image/png": ".png",
+                    "image/webp": ".webp",
+                }.get(selected.mime_type.lower(), Path(selected.name).suffix.lower())
+                image = selected.data
+            else:
+                image, suffix = selected, selected.suffix
+            anchor = MatrixGame35Anchor(image=image, suffix=suffix, seed=self._seed)
+            planner.reset()
+        trajectory = planner.plan_block(
             strafe=self.state.strafe,
             vertical=self.state.vertical,
+            forward=self.state.forward,
             pitch=self.state.pitch,
             yaw=self.state.yaw,
             roll=self.state.roll,
-        )
-
-    def generate(self, input: MatrixGame35Input) -> np.ndarray:
-        """Generate one native chunk with the persistent upstream rollout."""
-        backend = self._backend
-        planner = self._planner
-        if backend is None or planner is None:
-            raise RuntimeError("Matrix-Game-3.5 was not loaded")
-        if input.restart:
-            if not input.prompt.strip():
-                raise RuntimeError("Matrix-Game-3.5 requires a non-empty prompt")
-            backend.reset(input.seed, input.anchor_image, input.prompt.strip())
-            planner.reset()
-        trajectory = planner.plan_block(
-            strafe=input.strafe,
-            vertical=input.vertical,
-            forward=input.forward,
-            pitch=input.pitch,
-            yaw=input.yaw,
-            roll=input.roll,
             frame_count=_CAMERA_POSES_PER_CHUNK,
         )
-        return backend.generate_chunk(trajectory, input.seed, input.prompt)
+        return MatrixGame35Input(
+            world_id=self.state._world_id,
+            anchor=anchor,
+            prompt=self.state.prompt,
+            trajectory=trajectory,
+        )
+
+    def generate(self, input: MatrixGame35Input) -> MatrixGame35Result:
+        """Forward one prepared trajectory to the native model."""
+        return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> MatrixGame35Output:
         """Publish a completed chunk and its updated shared world state."""
         if outcome.error is not None:
+            # Readiness is checked before inference; unexpected worker failures are fatal.
             raise outcome.error
-        frames = normalize_output_frames(outcome.result)
-        self.state._restart_requested = False
-        self._chunk_index += 1
+        result: MatrixGame35Result = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
         config = self._config
         if config is None:
             raise RuntimeError("Matrix-Game-3.5 was not loaded")
-        if self._chunk_index >= config.max_chunks:
+        if result.complete:
             self.state._limit_reached = True
             self._clear_controls()
             await self.send(
@@ -512,7 +477,7 @@ class MatrixGame35(ReactorApp):
                 )
             )
         await self.send(self._state_update())
-        return MatrixGame35Output(main_video=frames)
+        return MatrixGame35Output(main_video=result.frames)
 
     def _clear_controls(self) -> None:
         """Return every camera axis to neutral."""
@@ -526,14 +491,14 @@ class MatrixGame35(ReactorApp):
     def _request_restart(self) -> None:
         """Queue a fresh causal rollout and release active camera motion."""
         self._clear_controls()
-        self.state._restart_requested = True
+        self.state._world_id += 1
         self.state._limit_reached = False
         self._chunk_index = 0
         self.output.flush()
 
     def _next_control_chunk(self) -> int:
         """Return the one-based chunk expected to consume new camera motion."""
-        if self.state._restart_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
         return self._chunk_index + 1
 
