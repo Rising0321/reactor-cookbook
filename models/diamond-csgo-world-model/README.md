@@ -8,6 +8,10 @@ mouse actions, stream generated video, and record the session.
 The adapter uses a pinned DIAMOND source snapshot and calls its public CSGO
 inference components directly.
 
+`diamond.py` handles controls and video output. `diamond_model.py` owns the
+native world and reports each completed step through a typed result. Scene
+selection travels with a world ID and is acknowledged after its initial frame.
+
 ## Prerequisites
 
 - The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation) and a
