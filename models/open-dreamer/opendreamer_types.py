@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-import numpy as np
 from reactor_runtime import (
     InputState,
     MessageField,
@@ -14,43 +9,6 @@ from reactor_runtime import (
     Output,
     Video,
 )
-
-DEMO_CHOICES = ["demo_1", "demo_2", "demo_3"]
-
-
-@dataclass(frozen=True)
-class DemoConfig:
-    """Describe a dataset window available as a starting scene."""
-
-    name: str
-    video: Path
-    actions: Path
-    start_frame: int
-
-
-@dataclass(frozen=True)
-class OpenDreamerConfig:
-    """Hold validated model, checkpoint, and conditioning settings."""
-
-    source_revision: str
-    checkpoint_repo_id: str
-    checkpoint_revision: str
-    platform: str
-    seed: int
-    num_steps: int
-    tau_ctx_target: float
-    conditioning_frames: int
-    demos: tuple[DemoConfig, ...]
-    warmup_steps: int
-    memory_fraction: float
-
-
-@dataclass(frozen=True)
-class RolloutConditioning:
-    """Pair consecutive Minecraft frames with their aligned player actions."""
-
-    frames: np.ndarray
-    actions: Any
 
 
 class OpenDreamerOutput(Output):
