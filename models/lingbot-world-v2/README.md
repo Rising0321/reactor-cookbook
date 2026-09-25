@@ -1,8 +1,10 @@
 # Play LingBot-World-V2 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop: `process_input()`
-snapshots the current controls, `generate()` runs one native chunk, and
-`process_output()` publishes its video and state updates.
+The adapter uses Reactor Runtime 3.5's native step loop. The application plans
+camera poses in `process_input()`, forwards one chunk to `LingbotV2Model` in
+`generate()`, and publishes video and state updates in `process_output()`.
+The model owns the native causal rollout. Frozen input and result dataclasses
+carry a world ID, with the anchor sent until a completed chunk acknowledges it.
 
 Run the public [LingBot-World-V2 world model](https://github.com/Robbyant/lingbot-world-v2)
 as an interactive Reactor backend. Start from an uploaded or built-in image,

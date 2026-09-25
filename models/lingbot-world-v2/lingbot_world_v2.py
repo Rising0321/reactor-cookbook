@@ -10,28 +10,9 @@ six-axis controls.
 from __future__ import annotations
 
 import secrets
-import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 import numpy as np
-from reactor_runtime import (
-    ApplicationError,
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorApp,
-    StepOutcome,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
-
 from lingbot_world_v2_assets import (
     BuiltInScene,
     LingBotConfig,
@@ -43,10 +24,15 @@ from lingbot_world_v2_backend import (
     RGB_FPS,
     STEADY_CHUNK_FRAMES,
     TEMPORAL_STRIDE,
-    LingBotBackend,
 )
 from lingbot_world_v2_camera import CameraMotionPlanner
 from lingbot_world_v2_images import load_scene_camera, validate_uploaded_image
+from lingbot_world_v2_model import (
+    LingbotV2Anchor,
+    LingbotV2Input,
+    LingbotV2Model,
+    LingbotV2Result,
+)
 from lingbot_world_v2_types import (
     CameraMotionChanged,
     ChunkCompleted,
@@ -58,64 +44,24 @@ from lingbot_world_v2_types import (
     RolloutResetQueued,
     StateUpdate,
 )
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    get_weights_path,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
-
-
-class _Backend(Protocol):
-    """Define blocking public-model operations used by the Reactor loop."""
-
-    def reset(
-        self,
-        *,
-        image: Path | UploadedFile,
-        prompt: str,
-        seed: int,
-        intrinsics: np.ndarray,
-    ) -> None:
-        """Start a fresh native causal rollout."""
-
-    def generate_chunk(self, *, prompt: str, relative_poses: np.ndarray) -> np.ndarray:
-        """Generate one native causal chunk."""
-
-    def end_session(self) -> None:
-        """Release rollout state while retaining weights."""
-
-
-@dataclass(frozen=True)
-class LingbotV2Input:
-    """Snapshot image conditioning and held controls for one causal chunk."""
-
-    selected: BuiltInScene | UploadedFile
-    prompt: str
-    seed: int
-    restart: bool
-    forward: float
-    strafe: float
-    vertical: float
-    pitch: float
-    yaw: float
-    roll: float
-
-    def camera_controls(self) -> dict[str, float]:
-        """Return the six native camera axes."""
-        return {
-            "forward": self.forward,
-            "strafe": self.strafe,
-            "vertical": self.vertical,
-            "pitch": self.pitch,
-            "yaw": self.yaw,
-            "roll": self.roll,
-        }
-
-
-@dataclass(frozen=True)
-class LingbotV2Result:
-    """Carry generated frames, timing, and the consumed conditions."""
-
-    frames: np.ndarray
-    seconds: float
-    input: LingbotV2Input
 
 
 class LingBotWorldV2(ReactorApp):
@@ -127,7 +73,7 @@ class LingBotWorldV2(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: LingBotConfig | None = None
-        self._backend: _Backend | None = None
+        self._engine = LingbotV2Model()
         self._planner: CameraMotionPlanner | None = None
         self._selected_input: BuiltInScene | UploadedFile | None = None
         self._image_source = "none"
@@ -141,15 +87,16 @@ class LingBotWorldV2(ReactorApp):
         Args:
             config_path: Path to ``lingbot_world_v2.yaml`` from ``reactor.yaml``.
         """
-        config = read_config(config_path)
-        prepare_runtime_assets(config)
+        weights_root = get_weights_path()
+        config = read_config(config_path, weights_root)
+        prepare_runtime_assets(config, weights_root)
         self._config = config
         self._seed = config.seed
         self._planner = CameraMotionPlanner(
             fps=RGB_FPS,
             rotation_degrees_per_second=config.rotation_degrees_per_second,
         )
-        self._backend = LingBotBackend(config)
+        self._engine.load(config)
         logger.info(
             "LingBot-World-V2 model ready",
             source_revision=config.source_revision,
@@ -163,7 +110,7 @@ class LingBotWorldV2(ReactorApp):
         """Initialize an empty shared world before its first viewer connects."""
         config = self._require_loaded()
         self.state.prompt = ""
-        self.state._reset_requested = False
+        self.state._applied_world_id = None
         self._clear_camera()
         self._selected_input = None
         self._image_source = "none"
@@ -175,13 +122,12 @@ class LingBotWorldV2(ReactorApp):
     def on_session_ended(self) -> None:
         """Release causal rollout state when the shared session ends."""
         self._clear_camera()
-        self.state._reset_requested = False
+        self.state._applied_world_id = None
         self._selected_input = None
         self._image_source = "none"
         self._chunk_index = 0
         self._limit_reached = False
-        if self._backend is not None:
-            self._backend.end_session()
+        self._engine.reset()
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
@@ -428,70 +374,61 @@ class LingBotWorldV2(ReactorApp):
             raise ApplicationError("Select an anchor image before generating.")
         if self._limit_reached:
             raise ApplicationError("Reset the world after reaching the rollout limit.")
-        return LingbotV2Input(
-            selected=self._selected_input,
-            prompt=self.state.prompt,
-            seed=self._seed,
-            restart=self.state._reset_requested,
-            forward=self.state._forward,
-            strafe=self.state._strafe,
-            vertical=self.state._vertical,
-            pitch=self.state._pitch,
-            yaw=self.state._yaw,
-            roll=self.state._roll,
-        )
-
-    def generate(self, input: LingbotV2Input) -> LingbotV2Result:
-        """Generate one native chunk while preserving upstream causal state."""
+        if not self.state.prompt.strip():
+            raise ApplicationError("Set a prompt before generating.")
         config = self._require_loaded()
-        backend = self._backend
         planner = self._planner
-        if backend is None or planner is None:
+        if planner is None:
             raise RuntimeError("LingBot-World-V2 was not loaded")
-        if input.restart:
-            if isinstance(input.selected, BuiltInScene):
-                image = input.selected.image
-                initial_pose, intrinsics = load_scene_camera(input.selected)
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            if isinstance(self._selected_input, BuiltInScene):
+                image = self._selected_input.image
+                initial_pose, intrinsics = load_scene_camera(self._selected_input)
             else:
-                image = input.selected
+                image = self._selected_input.data
                 initial_pose = np.eye(4, dtype=np.float32)
                 intrinsics = np.asarray(config.upload_intrinsics, dtype=np.float32)
-            prompt = input.prompt.strip()
-            if not prompt:
-                raise RuntimeError("LingBot-World-V2 requires a prompt before reset")
-            backend.reset(
-                image=image, prompt=prompt, seed=input.seed, intrinsics=intrinsics
+            anchor = LingbotV2Anchor(
+                image=image, seed=self._seed, intrinsics=intrinsics
             )
             planner.reset(initial_pose)
         relative_poses = planner.plan_chunk(
-            **input.camera_controls(),
+            **self._camera_controls(),
             latent_frames=config.chunk_latents,
             temporal_stride=TEMPORAL_STRIDE,
         )
-        started = time.perf_counter()
-        frames = backend.generate_chunk(
-            prompt=input.prompt, relative_poses=relative_poses
+        return LingbotV2Input(
+            world_id=self.state._world_id,
+            anchor=anchor,
+            prompt=self.state.prompt,
+            poses=relative_poses,
         )
-        return LingbotV2Result(frames, time.perf_counter() - started, input)
+
+    def generate(self, input: LingbotV2Input) -> LingbotV2Result:
+        """Forward one prepared chunk to the native model."""
+        return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> LingBotWorldV2Output:
         """Publish generated frames and the exact conditions consumed."""
         if outcome.error is not None:
+            # Readiness and limits are refused before inference; GPU failures are fatal.
             raise outcome.error
         result: LingbotV2Result = outcome.result
-        self.state._reset_requested = False
-        self._chunk_index += 1
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
         config = self._require_loaded()
-        if self._chunk_index >= config.max_chunks:
+        controls = self._camera_controls()
+        if result.complete:
             self._limit_reached = True
             self._clear_camera()
         await self.send(
             ChunkCompleted(
                 chunk=self._chunk_index,
                 frames=int(result.frames.shape[0]),
-                generation_seconds=round(result.seconds, 3),
-                prompt=result.input.prompt,
-                **result.input.camera_controls(),
+                generation_seconds=round(outcome.elapsed, 3),
+                prompt=result.prompt,
+                **controls,
             )
         )
         if self._limit_reached:
@@ -528,7 +465,7 @@ class LingBotWorldV2(ReactorApp):
         """Queue a fresh rollout and clear controls, progress, and limit state."""
         self.output.flush()
         self._clear_camera()
-        self.state._reset_requested = True
+        self.state._world_id += 1
         self._chunk_index = 0
         self._limit_reached = False
 
@@ -556,7 +493,7 @@ class LingBotWorldV2(ReactorApp):
 
     def _next_chunk(self) -> int:
         """Return the one-based chunk expected to consume newly accepted input."""
-        if self.state._reset_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
         return self._chunk_index + 1
 
@@ -580,7 +517,10 @@ class LingBotWorldV2(ReactorApp):
             image_source=self._image_source,
             image_name=image_name,
             seed=self._seed,
-            reset_queued=self.state._reset_requested,
+            reset_queued=(
+                selected is not None
+                and self.state._world_id != self.state._applied_world_id
+            ),
             completed_chunks=self._chunk_index,
             next_chunk=next_chunk,
             next_chunk_frames=next_frames,
@@ -593,3 +533,14 @@ class LingBotWorldV2(ReactorApp):
             yaw=self.state._yaw,
             roll=self.state._roll,
         )
+
+    def _camera_controls(self) -> dict[str, float]:
+        """Read held camera axes under the runtime's step lock."""
+        return {
+            "forward": self.state._forward,
+            "strafe": self.state._strafe,
+            "vertical": self.state._vertical,
+            "pitch": self.state._pitch,
+            "yaw": self.state._yaw,
+            "roll": self.state._roll,
+        }
