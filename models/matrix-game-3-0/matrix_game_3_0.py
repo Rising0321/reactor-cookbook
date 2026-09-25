@@ -8,12 +8,28 @@ latents, full action and pose history, denoising state, and streaming VAE cache.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 import numpy as np
-from numpy.typing import NDArray
+from matrix_game_3_0_assets import MatrixGame30Config, prepare_assets, read_config
+from matrix_game_3_0_backend import action_from_controls
+from matrix_game_3_0_images import validate_uploaded_image
+from matrix_game_3_0_model import (
+    FRAMES_PER_CHUNK,
+    MatrixGame30Anchor,
+    MatrixGame30Input,
+    MatrixGame30Model,
+    MatrixGame30Result,
+)
+from matrix_game_3_0_types import (
+    MOVEMENT_KEYS,
+    ControlsChanged,
+    MatrixGame30Output,
+    MatrixGame30State,
+    MovementKey,
+    RolloutLimitReached,
+    StateUpdate,
+)
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -25,62 +41,13 @@ from reactor_runtime import (
     connected,
     disconnected,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
 from reactor_runtime.log import get_logger
 
-from matrix_game_3_0_assets import MatrixGame30Config, prepare_assets, read_config
-from matrix_game_3_0_backend import (
-    MatrixGame30Backend,
-    NativeAction,
-    action_from_controls,
-)
-from matrix_game_3_0_images import (
-    FRAMES_PER_CHUNK,
-    normalize_output_frames,
-    validate_uploaded_image,
-)
-from matrix_game_3_0_types import (
-    MOVEMENT_KEYS,
-    ControlsChanged,
-    MatrixGame30Output,
-    MatrixGame30State,
-    MovementKey,
-    RolloutLimitReached,
-    StateUpdate,
-)
-
 logger = get_logger(__name__)
-
-
-class _Backend(Protocol):
-    """Define the blocking upstream operations used by the Reactor loop."""
-
-    def reset(
-        self,
-        prompt: str,
-        seed: int,
-        anchor_image: Path | UploadedFile,
-    ) -> None:
-        """Start a fresh official autoregressive rollout."""
-
-    def generate_chunk(self, action: NativeAction) -> NDArray[np.uint8]:
-        """Generate exactly one native Matrix iteration."""
-
-    def end_session(self) -> None:
-        """Release state owned by the completed rollout."""
-
-
-@dataclass(frozen=True)
-class MatrixGame30Input:
-    """Snapshot the conditions for one native Matrix iteration."""
-
-    anchor_image: Path | UploadedFile
-    prompt: str
-    seed: int
-    restart: bool
-    action: NativeAction
 
 
 class MatrixGame30(ReactorApp):
@@ -92,7 +59,7 @@ class MatrixGame30(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: MatrixGame30Config | None = None
-        self._backend: _Backend | None = None
+        self._engine = MatrixGame30Model()
         self._selected_input: Path | UploadedFile | None = None
         self._seed = 0
         self._chunk_index = 0
@@ -105,12 +72,11 @@ class MatrixGame30(ReactorApp):
         Args:
             config_path: Path to ``matrix_game_3_0.yaml`` from ``reactor.yaml``.
         """
-        config = read_config(config_path)
-        prepare_assets(config)
-        backend = MatrixGame30Backend(config)
-        backend.load()
+        weights_root = get_weights_path()
+        config = read_config(config_path, weights_root)
+        prepare_assets(config, weights_root)
+        self._engine.load(config)
         self._config = config
-        self._backend = backend
         self._seed = config.seed
         logger.info(
             "Matrix-Game 3.0 model ready",
@@ -134,7 +100,7 @@ class MatrixGame30(ReactorApp):
         self.state._pressed_keys = frozenset()
         self.state.pitch = 0.0
         self.state.yaw = 0.0
-        self.state._restart_requested = False
+        self.state._applied_world_id = None
         self.state._limit_reached = False
 
     @connected
@@ -151,13 +117,14 @@ class MatrixGame30(ReactorApp):
     @session_ended
     def on_session_ended(self) -> None:
         """Release autoregressive state owned by the completed session."""
-        backend = self._backend
         try:
-            if backend is not None:
-                backend.end_session()
+            self._engine.reset()
         finally:
             self._selected_input = None
             self._chunk_index = 0
+            self.state._applied_world_id = None
+            self.state._limit_reached = False
+            self._clear_controls()
 
     @event(
         name="set_prompt",
@@ -388,34 +355,37 @@ class MatrixGame30(ReactorApp):
             raise ApplicationError("Select an anchor image before generating.")
         if self.state._limit_reached:
             raise ApplicationError("Reset the world after reaching the rollout limit.")
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            image = self._selected_input
+            anchor = MatrixGame30Anchor(
+                image=image.data if isinstance(image, UploadedFile) else image,
+                prompt=self.state.prompt.strip(),
+                seed=self._seed,
+            )
         return MatrixGame30Input(
-            anchor_image=self._selected_input,
-            prompt=self.state.prompt.strip(),
-            seed=self._seed,
-            restart=self.state._restart_requested,
+            world_id=self.state._world_id,
+            anchor=anchor,
             action=action_from_controls(
                 self.state._pressed_keys, self.state.pitch, self.state.yaw
             ),
         )
 
-    def generate(self, input: MatrixGame30Input) -> NDArray[np.uint8]:
-        """Run one native iteration with the upstream rollout intact."""
-        backend = self._backend
-        if backend is None:
-            raise RuntimeError("Matrix-Game 3.0 was not loaded")
-        if input.restart:
-            backend.reset(input.prompt, input.seed, input.anchor_image)
-        return backend.generate_chunk(input.action)
+    def generate(self, input: MatrixGame30Input) -> MatrixGame30Result:
+        """Forward one native iteration to the independent model."""
+        return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> MatrixGame30Output:
         """Publish every decoded frame and advance successful rollout progress."""
         if outcome.error is not None:
+            # Missing images and exhausted worlds are refused before inference.
+            # Unexpected failures must not be hidden by a silent memory reset.
             raise outcome.error
-        frames = normalize_output_frames(outcome.result, self._chunk_index)
-        self.state._restart_requested = False
-        self._chunk_index += 1
+        result: MatrixGame30Result = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
         config = self._require_config()
-        if self._chunk_index >= config.max_chunks:
+        if result.complete:
             self.state._limit_reached = True
             self._clear_controls()
             await self.send(
@@ -425,13 +395,13 @@ class MatrixGame30(ReactorApp):
                 )
             )
         await self.send(self._state_update())
-        return MatrixGame30Output(main_video=frames)
+        return MatrixGame30Output(main_video=result.frames)
 
     def _request_fresh_rollout(self) -> None:
         """Queue a fresh upstream rollout and clear controls and progress."""
         self.output.flush()
         self._clear_controls()
-        self.state._restart_requested = True
+        self.state._world_id += 1
         self.state._limit_reached = False
         self._chunk_index = 0
 
@@ -482,7 +452,8 @@ class MatrixGame30(ReactorApp):
             image_source=image_source,
             image_name=selected.name if selected is not None else "",
             seed=self._seed,
-            restart_queued=self.state._restart_requested,
+            restart_queued=selected is not None
+            and self.state._world_id != self.state._applied_world_id,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,
             next_chunk=next_chunk,

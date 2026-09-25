@@ -1,8 +1,11 @@
 # Play Matrix-Game 3.0 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop: `process_input()`
-snapshots the current controls, `generate()` runs one native chunk, and
-`process_output()` publishes its video and state updates.
+The adapter uses Reactor Runtime 3.5's native step loop. `matrix_game_3_0.py`
+handles client commands and publishes video and state updates;
+`matrix_game_3_0_model.py` owns the native rollout and its successful chunk
+count without a Runtime dependency. Typed inputs identify each world and
+carry its image, prompt, and seed until a result confirms initialization.
+Each generation call advances one official iteration.
 
 Run the public [Matrix-Game 3.0 world model](https://github.com/SkyworkAI/Matrix-Game)
 as an interactive first-person Reactor backend. Use this recipe to start from an
