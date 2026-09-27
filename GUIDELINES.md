@@ -32,9 +32,16 @@ skill; `models/lingbot-world-v1-fast/` is the example in this repo.
 - **The model half** is a plain class in `<model>_model.py` with `load()`,
   `generate(input)`, and `reset()`. It imports nothing from
   `reactor_runtime` and knows nothing about clients, tracks, or commands. It
-  owns the weights, the caches, the worker process if there is one, and its
-  own chunk count, and it raises its own exception types when it cannot step
-  from the state it holds. `reset()` takes no arguments.
+  owns the weights, the caches, and its own chunk count, and it raises its
+  own exception types when it cannot step from the state it holds. `reset()`
+  takes no arguments.
+- **Its own process, or one per GPU**, is the runtime's `DistributedRunner`.
+  The application wraps the model half in it in `load()`
+  (`self._engine = DistributedRunner(<Model>Model, world_size=N, load_kwargs={...})`),
+  and `generate()` stays one line. The runner owns the worker processes, the
+  transport, and their teardown; the model half spawns nothing and takes
+  only picklable arguments in `load()`. Only rank 0's result reaches the
+  application. `models/lingbot-world-v1-fast/` shows it.
 - **The inner contract** is two frozen dataclasses the model half owns,
   `<Model>Input` and `<Model>Result`, made of plain values and CPU
   `numpy` arrays. They are the only things that cross between the halves.
@@ -70,10 +77,12 @@ modules use the model name as a prefix and split along fixed seams:
 | `<model>_backend.py` | The in-process upstream model wrapper (GPU code) the model half calls |
 | `<model>_camera.py`, `<model>_images.py` | Optional camera-planning and image helpers, used by the application half |
 
-Models that must isolate the upstream model in a subprocess (conflicting
-dependencies, patched source) use `upstream_backend.py` + `worker.py` +
-`download_snapshot.py`, a documented `*.patch`, and `<model>_config.py`
-instead of `<model>_backend.py` / `<model>_assets.py`. Everything else about
+Models whose upstream cannot share the runtime's Python environment
+(conflicting dependencies) run it in a separate interpreter with
+`upstream_backend.py` + `worker.py`. A model that only needs its own process
+or several GPUs uses `DistributedRunner` and keeps `<model>_backend.py`.
+Either kind may carry `download_snapshot.py`, a documented `*.patch`, and
+`<model>_config.py` in place of `<model>_assets.py`. Everything else about
 them follows the same rules.
 
 Also uniform across models: a `.dockerignore`, an `example_images/` folder
@@ -134,7 +143,8 @@ carry the mark — it does nothing for them.
   with every shipped change, sized to the schema impact — any command,
   message, or field change is at least a minor bump.
 - `build.runtime_version` pins the current Reactor Runtime release, 3.5.0
-  or later for a `ReactorApp`. Models still on the previous shape pin the
+  or later for a `ReactorApp` and 3.6.0 or later for one that uses
+  `DistributedRunner`. Models still on the previous shape pin the
   release they were verified on until they move; a move bumps the pin and
   `model.version` together.
 - `requirements.txt` starts with the shared two-line header explaining that

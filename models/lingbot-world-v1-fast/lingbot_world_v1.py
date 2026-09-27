@@ -64,6 +64,10 @@ from lingbot_world_v1_types import (
 logger = get_logger(__name__)
 
 FRAMES_PER_CHUNK = 12
+# The first chunk of a world encodes the anchor image and prompt, and with more
+# than one GPU it also runs the first sequence-parallel collectives, which set up
+# the communicators. Later chunks take a fraction of this.
+CALL_TIMEOUT_SECONDS = 180.0
 
 
 class LingBotWorldV1(ReactorApp):
@@ -101,10 +105,20 @@ class LingBotWorldV1(ReactorApp):
                 rotation_degrees_per_latent=config.rotation_degrees_per_latent,
             )
         )
+        self._start_engine(config)
+        logger.info(
+            "LingBot-World v1 Fast ready",
+            source_revision=config.source_revision,
+            fast_revision=config.fast_checkpoint.revision,
+            context_latents=config.context_latents,
+        )
+
+    def _start_engine(self, config: LingBotConfig) -> None:
+        """Start the model half in its worker processes and wait for every rank to load."""
         self._engine = DistributedRunner(
             LingbotV1Model,
             world_size=config.world_size,
-            call_timeout=180.0,
+            call_timeout=CALL_TIMEOUT_SECONDS,
             load_kwargs={
                 "settings": WorkerSettings(
                     source_path=config.source_path,
@@ -118,12 +132,6 @@ class LingBotWorldV1(ReactorApp):
             },
         )
         self._engine.start()
-        logger.info(
-            "LingBot-World v1 Fast ready",
-            source_revision=config.source_revision,
-            fast_revision=config.fast_checkpoint.revision,
-            context_latents=config.context_latents,
-        )
 
     @session_started
     def on_session_started(self) -> None:
@@ -151,10 +159,20 @@ class LingBotWorldV1(ReactorApp):
 
     @session_ended
     def on_session_ended(self) -> None:
-        """Release causal caches while retaining loaded weights."""
+        """Release causal caches while retaining loaded weights.
+
+        A worker that crashed, hung, or fell out of step with the others leaves
+        the runner refusing every call. The session that hit it has ended with
+        that error; the workers are replaced here, so the next session starts
+        on freshly loaded ones.
+        """
         try:
-            if self._engine is not None:
+            if self._engine is not None and self._engine.healthy:
                 self._engine.reset()
+            elif self._engine is not None:
+                logger.error("LingBot-World v1 workers failed; restarting them")
+                self._engine.shutdown()
+                self._start_engine(self._require_config())
         finally:
             self._clear_controls()
             self._selected_input = None

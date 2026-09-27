@@ -18,6 +18,8 @@ ftfy
 scipy
 huggingface-hub>=0.34,<1
 einops
+# Not imported by the model: they let `pip install --no-build-isolation
+# flash-attn` in reactor.yaml's `build.run` compile when no wheel matches.
 ninja
 packaging
 wheel

@@ -40,6 +40,7 @@ class LingBotBackend:
         from wan.interactive_fast import InteractiveFastRollout
 
         self._torch = torch
+        self._rank = rank
         self._runtime_root = Path(settings.runtime_root).resolve()
         self._runtime_root.mkdir(parents=True, exist_ok=True)
         config = WAN_CONFIGS["i2v-A14B"]
@@ -119,7 +120,12 @@ class LingBotBackend:
         self._active = True
 
     def generate_chunk(self, relative_c2ws: np.ndarray, prompt: str) -> np.ndarray:
-        """Return one native chunk as contiguous CPU RGB frames."""
+        """Return one native chunk as contiguous CPU RGB frames.
+
+        Every rank runs the chunk, since its collectives need all of them, but
+        only rank 0's frames reach the application. The other ranks return an
+        empty array instead of copying the chunk off the GPU.
+        """
         if not self._active:
             raise RuntimeError("reset LingBot before generating a chunk")
         poses = np.asarray(relative_c2ws, dtype=np.float32)
@@ -128,6 +134,8 @@ class LingBotBackend:
                 "LingBot relative camera poses must be finite with shape (3, 4, 4)"
             )
         video = self._rollout.generate_chunk(poses, prompt)
+        if self._rank != 0:
+            return np.empty((0, 0, 0, 3), dtype=np.uint8)
         frames = (
             video.permute(1, 2, 3, 0)
             .add(1.0)

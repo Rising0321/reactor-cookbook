@@ -129,13 +129,18 @@ def test_camera_controls_require_an_image() -> None:
 
 
 class FakeModel:
-    """Stand in for the model half: record inputs, return native chunk shapes."""
+    """Stand in for the runner around the model half: record inputs, return chunk shapes."""
 
     def __init__(self) -> None:
         self.inputs: list[LingbotV1Input] = []
         self.world_id: int | None = None
         self.chunk_index = 0
         self.resets = 0
+        self.healthy = True
+        self.shutdowns = 0
+
+    def shutdown(self) -> None:
+        self.shutdowns += 1
 
     def generate(self, input: LingbotV1Input) -> LingbotV1Result:
         self.inputs.append(input)
@@ -300,6 +305,22 @@ def test_session_end_releases_rollout_and_clears_selection() -> None:
     assert model.resets == 1
     assert world._selected_input is None
     assert world._chunk_index == 0
+
+
+def test_session_end_replaces_workers_that_failed() -> None:
+    # A crashed, hung, or desynchronized worker leaves the runner refusing
+    # every call. Resetting it would raise; the workers are replaced instead.
+    world, model, _ = _loaded_world()
+    started: list[Any] = []
+    world._start_engine = started.append
+    model.healthy = False
+
+    world.on_session_ended()
+
+    assert model.resets == 0
+    assert model.shutdowns == 1
+    assert started == [world._config]
+    assert world._selected_input is None
 
 
 class FakeBackend:
@@ -472,6 +493,23 @@ def test_config_rejects_unsupported_world_sizes(
     config_path.write_text(source.replace("world_size: 1", f"world_size: {world_size}"))
     with pytest.raises(ValueError, match="world_size"):
         lingbot_world_v1.read_config(config_path)
+
+
+def test_only_rank_0_copies_its_frames_off_the_gpu() -> None:
+    from lingbot_world_v1_backend import LingBotBackend
+
+    chunks: list[str] = []
+    backend = LingBotBackend.__new__(LingBotBackend)
+    backend._rank = 1
+    backend._active = True
+    backend._rollout = SimpleNamespace(
+        generate_chunk=lambda poses, prompt: chunks.append(prompt)
+    )
+
+    frames = backend.generate_chunk(np.zeros((3, 4, 4), dtype=np.float32), "a lake")
+
+    assert chunks == ["a lake"]  # the rank still ran the chunk and its collectives
+    assert frames.size == 0
 
 
 def test_model_passes_runner_rank_to_native_backend(
