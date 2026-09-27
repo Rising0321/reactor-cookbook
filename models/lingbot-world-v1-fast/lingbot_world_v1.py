@@ -28,8 +28,10 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
+from reactor_runtime.distributed import DistributedRunner
 from reactor_runtime.log import get_logger
 
+from lingbot_world_v1_backend import WorkerSettings
 from lingbot_world_v1_camera import CameraMotionPlanner, MotionConfig
 from lingbot_world_v1_config import (
     LingBotConfig,
@@ -58,11 +60,14 @@ from lingbot_world_v1_types import (
     RolloutResetQueued,
     StateUpdate,
 )
-from upstream_backend import WorkerSettings
 
 logger = get_logger(__name__)
 
 FRAMES_PER_CHUNK = 12
+# The first chunk of a world encodes the anchor image and prompt, and with more
+# than one GPU it also runs the first sequence-parallel collectives, which set up
+# the communicators. Later chunks take a fraction of this.
+CALL_TIMEOUT_SECONDS = 180.0
 
 
 class LingBotWorldV1(ReactorApp):
@@ -74,7 +79,7 @@ class LingBotWorldV1(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: LingBotConfig | None = None
-        self._engine: LingbotV1Model | None = None
+        self._engine: DistributedRunner | None = None
         self._planner: CameraMotionPlanner | None = None
         self._selected_input: Path | UploadedFile | None = None
         self._selected_intrinsics: Path | None = None
@@ -100,25 +105,33 @@ class LingBotWorldV1(ReactorApp):
                 rotation_degrees_per_latent=config.rotation_degrees_per_latent,
             )
         )
-        self._engine = LingbotV1Model()
-        self._engine.load(
-            WorkerSettings(
-                python_executable=config.worker_python,
-                source_path=config.source_path,
-                checkpoint_dir=config.checkpoint.path,
-                runtime_root=config.runtime_root,
-                max_chunks=config.max_chunks,
-                context_latents=config.context_latents,
-                max_area=config.max_area,
-                shift=config.shift,
-            )
-        )
+        self._start_engine(config)
         logger.info(
             "LingBot-World v1 Fast ready",
             source_revision=config.source_revision,
             fast_revision=config.fast_checkpoint.revision,
             context_latents=config.context_latents,
         )
+
+    def _start_engine(self, config: LingBotConfig) -> None:
+        """Start the model half in its worker processes and wait for every rank to load."""
+        self._engine = DistributedRunner(
+            LingbotV1Model,
+            world_size=config.world_size,
+            call_timeout=CALL_TIMEOUT_SECONDS,
+            load_kwargs={
+                "settings": WorkerSettings(
+                    source_path=config.source_path,
+                    checkpoint_dir=config.checkpoint.path,
+                    runtime_root=config.runtime_root,
+                    max_chunks=config.max_chunks,
+                    context_latents=config.context_latents,
+                    max_area=config.max_area,
+                    shift=config.shift,
+                )
+            },
+        )
+        self._engine.start()
 
     @session_started
     def on_session_started(self) -> None:
@@ -146,10 +159,20 @@ class LingBotWorldV1(ReactorApp):
 
     @session_ended
     def on_session_ended(self) -> None:
-        """Release causal caches while retaining loaded weights."""
+        """Release causal caches while retaining loaded weights.
+
+        A worker that crashed, hung, or fell out of step with the others leaves
+        the runner refusing every call. The session that hit it has ended with
+        that error; the workers are replaced here, so the next session starts
+        on freshly loaded ones.
+        """
         try:
-            if self._engine is not None:
+            if self._engine is not None and self._engine.healthy:
                 self._engine.reset()
+            elif self._engine is not None:
+                logger.error("LingBot-World v1 workers failed; restarting them")
+                self._engine.shutdown()
+                self._start_engine(self._require_config())
         finally:
             self._clear_controls()
             self._selected_input = None
