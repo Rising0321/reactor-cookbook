@@ -169,9 +169,9 @@ audio.
   sampling inputs.
 - Stop `reactor run` to remove its container and release GPU memory.
 
-## Runtime 3.5
+## Runtime 3.6
 
-This recipe uses Reactor Runtime 3.5. `set_image`, `example_image`, and `reset`
+This recipe uses Reactor Runtime 3.6. `set_image`, `example_image`, and `reset`
 start a fresh world; `set_prompt` preserves an active world's history.
 `chunk_completed.generation_seconds` measures the complete model step, including
 initialization on the first chunk. Existing commands and messages retain their
