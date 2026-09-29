@@ -9,6 +9,12 @@ The adapter loads the distilled public
 [`stdstu123/Yume-5B-720P`](https://huggingface.co/stdstu123/Yume-5B-720P)
 checkpoint and calls the pinned upstream inference components directly.
 
+Runtime 3.5 drives one native chunk per step. `yume.py` owns commands and
+messages; `yume_model.py` owns inference and persistent rollout state. A world
+id carries a scene only until its first successful result acknowledges it.
+Public commands and messages, native generation settings, and adaptive video
+pacing are preserved. CPU tests exercise the hooks through ten continuous steps.
+
 ## Prerequisites
 
 - The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation),
@@ -122,6 +128,10 @@ Commands return typed, command-correlated messages for the client timeline:
   held keys, seed, reset and generation flags, and chunk progress. A joining
   client receives one immediately, and each successful mutation broadcasts
   another.
+
+Completed-step snapshots report `generating=false` and the completed chunk
+count. Use `chunk_completed` to track progress; no generation-start message is
+emitted after computation finishes.
 
 ## Public source and model assets
 

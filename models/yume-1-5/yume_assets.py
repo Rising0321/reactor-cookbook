@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from reactor_runtime import get_weights_path
 
 
 @dataclass(frozen=True)
@@ -33,21 +32,25 @@ class YumeConfig:
     warmup_chunks: int
 
 
-def read_config(path: Path | None) -> YumeConfig:
+def read_config(path: Path | None, weights_root: Path | None = None) -> YumeConfig:
     """Read and strictly validate the native YUME-5B rollout settings."""
     if path is None:
         raise ValueError("YUME requires yume.yaml")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def local(value: object) -> Path:
+        return _local_path(value, weights_root or path.parent)
+
     source, assets, inference = raw["source"], raw["assets"], raw["inference"]
     config = YumeConfig(
-        source_path=_local_path(source["path"]),
+        source_path=local(source["path"]),
         source_url=str(source["url"]),
         source_revision=str(source["revision"]),
-        checkpoint_path=_local_path(assets["checkpoint_path"]),
+        checkpoint_path=local(assets["checkpoint_path"]),
         checkpoint_repo=str(assets["checkpoint_repo"]),
         checkpoint_revision=str(assets["checkpoint_revision"]),
-        cache_dir=_local_path(assets["cache_dir"]),
-        runtime_dir=_local_path(assets["runtime_dir"]),
+        cache_dir=local(assets["cache_dir"]),
+        runtime_dir=local(assets["runtime_dir"]),
         width=int(inference["width"]),
         height=int(inference["height"]),
         frames_per_chunk=int(inference["frames_per_chunk"]),
@@ -128,7 +131,7 @@ def activate_source(config: YumeConfig) -> None:
     sys.path.insert(0, root)
 
 
-def _local_path(value: object) -> Path:
+def _local_path(value: object, root: Path) -> Path:
     """Resolve one configured path under Reactor's mounted weights root."""
     path = Path(str(value)).expanduser()
-    return (path if path.is_absolute() else get_weights_path() / path).resolve()
+    return (path if path.is_absolute() else root / path).resolve()

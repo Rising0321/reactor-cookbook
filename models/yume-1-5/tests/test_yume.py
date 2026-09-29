@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import io
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import numpy as np
+import pytest
 from PIL import Image
-from reactor_runtime import UploadedFile
+from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
-
 from yume import Yume15
 from yume_assets import read_config
 from yume_backend import conditioned_prompt
 from yume_images import validate_image
+from yume_model import NoAnchor, YumeInput
 from yume_types import YumeOutput, YumeState
 
 
@@ -69,7 +73,6 @@ def test_blank_image_prompt_uses_neutral_configured_prompt() -> None:
     model = Yume15()
     model.state = YumeState()
     model._config = read_config(Path(__file__).parents[1] / "yume.yaml")
-    model._backend = cast(Any, object())
     model.output = cast(Any, type("Output", (), {"flush": lambda self: None})())
 
     message = asyncio.run(model.set_image(uploaded_image(), "   ", 42))
@@ -102,18 +105,25 @@ def test_one_turn_is_one_chunk_and_prompt_can_change_without_reset(
     model = Yume15()
     model.state = YumeState()
     model._config = read_config(Path(__file__).parents[1] / "yume.yaml")
-    model._config.runtime_dir.mkdir(parents=True, exist_ok=True)
     backend = FakeBackend()
-    model._backend = backend
+    model._engine.backend = backend
+    model._engine.config = SimpleNamespace(runtime_dir=tmp_path)
     model._seed = 42
     asyncio.run(model.set_image(uploaded_image(), "A forest trail", 42))
 
     async def generate() -> tuple[np.ndarray, np.ndarray]:
-        iterator = model.inference()
-        first = await anext(iterator)
+        first = await model.process_output(
+            StepOutcome(
+                result=model.generate(await model.process_input()), elapsed=1.25
+            )
+        )
         assert isinstance(first, YumeOutput)
         await model.set_prompt("Rain begins")
-        second = await anext(iterator)
+        second = await model.process_output(
+            StepOutcome(
+                result=model.generate(await model.process_input()), elapsed=1.25
+            )
+        )
         assert isinstance(second, YumeOutput)
         return cast(np.ndarray, first.main_video), cast(np.ndarray, second.main_video)
 
@@ -136,7 +146,7 @@ def test_reset_flushes_media() -> None:
     model.output = cast(Any, output)
     model._request_reset()
     assert output.flushes == 1
-    assert model.state._reset_requested is True
+    assert model._world_id != model._applied_world_id
     assert model.state._pressed_keys == frozenset()
 
 
@@ -153,3 +163,70 @@ def test_held_keys_combine_and_release_independently() -> None:
     )
     asyncio.run(model.set_key_state("a", False))
     assert model._resolve_controls(model.state._pressed_keys) == ("forward", "tilt_up")
+
+
+def test_refusal_never_calls_model() -> None:
+    app = Yume15()
+    app.state = YumeState()
+    app._engine = Mock()
+    with pytest.raises(ApplicationError):
+        asyncio.run(app.process_input())
+    app._engine.generate.assert_not_called()
+
+
+def test_generate_forwards_frozen_input_without_reading_state() -> None:
+    app = Yume15()
+    value = YumeInput(1, None, "forest", "none", "none")
+    with pytest.raises(FrozenInstanceError):
+        value.prompt = "changed"
+    result = object()
+    app._engine = SimpleNamespace(
+        generate=lambda actual: result if actual is value else None
+    )
+    app.state = None
+    assert app.generate(value) is result
+
+
+def test_ten_continuous_hook_steps_send_anchor_once() -> None:
+    app = Yume15()
+    app.state = YumeState()
+    app.send = AsyncMock()
+    anchors = []
+
+    class Backend:
+        def reset(self, **kwargs):
+            anchors.append(kwargs)
+
+        def generate_chunk(self, **kwargs):
+            return np.zeros((29, 8, 8, 3), np.uint8), kwargs["prompt"]
+
+        def end_session(self):
+            pass
+
+    app._engine.backend = Backend()
+
+    async def drive():
+        await app.set_text_scene("forest", 42)
+        for index in range(1, 11):
+            value = await app.process_input()
+            assert (value.anchor is not None) == (index == 1)
+            result = app.generate(value)
+            assert result.chunk_index == index
+            await app.process_output(StepOutcome(result=result, elapsed=0.5))
+        assert len(anchors) == 1
+        states = [c.args[0] for c in app.send.call_args_list if type(c.args[0]).__name__ == "StateUpdate"]
+        assert all(not state.generating for state in states)
+        await app.reset(43)
+        assert (await app.process_input()).anchor is not None
+
+    asyncio.run(drive())
+
+
+def test_model_error_reaches_output_without_counting_step() -> None:
+    app = Yume15()
+    app.state = YumeState()
+    with pytest.raises(NoAnchor) as caught:
+        app.generate(YumeInput(1, None, "forest", "none", "none"))
+    with pytest.raises(NoAnchor):
+        asyncio.run(app.process_output(StepOutcome(error=caught.value)))
+    assert app._chunk_index == app._engine.chunk_index == 0

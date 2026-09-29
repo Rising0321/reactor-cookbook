@@ -2,38 +2,34 @@
 
 from __future__ import annotations
 
-import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
 
-import numpy as np
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
-
 from yume_assets import (
     YumeConfig,
-    activate_source,
     configure_environment,
-    prepare_assets,
     read_config,
 )
 from yume_images import (
-    materialized_image,
-    materialized_video,
     validate_image,
     validate_video,
 )
+from yume_model import YumeAnchor, YumeInput, YumeModel, YumeResult
 from yume_types import (
     ActionChanged,
     ChunkCompleted,
@@ -72,24 +68,7 @@ _VIEW_KEYS = {
 }
 
 
-class Backend(Protocol):
-    def reset(
-        self,
-        *,
-        image: Path | None,
-        video: Path | None = None,
-        prompt: str,
-        seed: int,
-        movement: Movement,
-        view: View,
-    ) -> None: ...
-    def generate_chunk(
-        self, *, prompt: str, movement: Movement, view: View
-    ) -> tuple[np.ndarray, str]: ...
-    def end_session(self) -> None: ...
-
-
-class Yume15(ReactorPipeline):
+class Yume15(ReactorApp):
     """Explore a continuous YUME-1.5 world from text or an uploaded first frame."""
 
     state: YumeState
@@ -98,7 +77,9 @@ class Yume15(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: YumeConfig | None = None
-        self._backend: Backend | None = None
+        self._engine = YumeModel()
+        self._world_id = 0
+        self._applied_world_id: int | None = None
         self._mode: (
             Literal["image_to_video", "video_to_video", "text_to_video"] | None
         ) = None
@@ -111,21 +92,18 @@ class Yume15(ReactorPipeline):
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned public assets and load the 5B model on one GPU."""
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         configure_environment(config)
-        prepare_assets(config)
-        activate_source(config)
-        from yume_backend import YumeBackend
-
         self._config = config
         self._seed = config.seed
-        self._backend = YumeBackend(config)
+        self._engine.load(config_path, get_weights_path())
 
     @session_started
     def on_session_started(self) -> None:
         self.state.prompt = ""
         self.state._pressed_keys = frozenset()
-        self.state._reset_requested = False
+        self._world_id += 1
+        self._applied_world_id = None
         self._mode = None
         self._image = None
         self._video = None
@@ -135,8 +113,8 @@ class Yume15(ReactorPipeline):
 
     @session_ended
     def on_session_ended(self) -> None:
-        if self._backend is not None:
-            self._backend.end_session()
+        self._engine.reset()
+        self._applied_world_id = None
         self._mode = None
         self._image = None
         self._video = None
@@ -176,7 +154,7 @@ class Yume15(ReactorPipeline):
         ),
     ) -> SceneQueued:
         validate_image(image)
-        config = self._require_loaded()[1]
+        config = self._require_config()
         normalized = prompt.strip() or config.default_upload_prompt
         if seed >= 0:
             self._seed = seed
@@ -374,100 +352,71 @@ class Yume15(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
+        self._engine.reset()
+        self._applied_world_id = None
         self._request_reset()
         await self.send(self._state_update())
         return RolloutResetQueued(seed=self._seed, replaced_chunks=replaced)
 
-    async def inference(self) -> AsyncGenerator[YumeOutput | None, None]:
-        """Generate exactly one native eight-latent continuation per turn."""
-        backend, config = self._require_loaded()
-        while True:
-            if self._mode is None:
-                yield None
-                continue
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                if self._mode == "image_to_video":
-                    assert self._image is not None
-                    with materialized_image(
-                        self._image, config.runtime_dir
-                    ) as image_path:
-                        backend.reset(
-                            image=image_path,
-                            video=None,
-                            prompt=self.state.prompt,
-                            seed=self._seed,
-                            movement="none",
-                            view="none",
-                        )
-                elif self._mode == "video_to_video":
-                    assert self._video is not None
-                    with materialized_video(
-                        self._video, config.runtime_dir
-                    ) as video_path:
-                        backend.reset(
-                            image=None,
-                            video=video_path,
-                            prompt=self.state.prompt,
-                            seed=self._seed,
-                            movement="none",
-                            view="none",
-                        )
-                else:
-                    backend.reset(
-                        image=None,
-                        video=None,
-                        prompt=self.state.prompt,
-                        seed=self._seed,
-                        movement="none",
-                        view="none",
-                    )
-                self._chunk_index = 0
-            movement, view = self._resolve_controls(self.state._pressed_keys)
-            prompt = self.state.prompt
-            self._generating = True
-            await self.send(self._state_update())
-            started = time.perf_counter()
-            try:
-                frames, exact_prompt = backend.generate_chunk(
-                    prompt=prompt, movement=movement, view=view
-                )
-            finally:
-                self._generating = False
-            self._chunk_index += 1
-            await self.send(
-                ChunkCompleted(
-                    chunk=self._chunk_index,
-                    frames=int(frames.shape[0]),
-                    generation_seconds=round(time.perf_counter() - started, 3),
-                    prompt=prompt,
-                    conditioned_prompt=exact_prompt,
-                    movement=movement,
-                    view=view,
-                )
+    async def process_input(self) -> YumeInput:
+        if self._mode is None:
+            raise ApplicationError("no scene selected")
+        movement, view = self._resolve_controls(self.state._pressed_keys)
+        anchor = None
+        if self._world_id != self._applied_world_id:
+            media = self._image or self._video
+            anchor = YumeAnchor(
+                self._mode,
+                media.data if media else None,
+                Path(media.name).suffix if media else "",
+                self._seed,
             )
-            await self.send(self._state_update())
-            yield YumeOutput(main_video=np.ascontiguousarray(frames))
+        return YumeInput(self._world_id, anchor, self.state.prompt, movement, view)
+
+    def generate(self, input: YumeInput) -> YumeResult:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> YumeOutput | None:
+        if outcome.error is not None:
+            # Invalid model state and GPU failures cannot be repaired by a silent reset.
+            raise outcome.error
+        result: YumeResult = outcome.result
+        self._applied_world_id = result.world_id
+        self._generating = False
+        self._chunk_index = result.chunk_index
+        await self.send(
+            ChunkCompleted(
+                chunk=result.chunk_index,
+                frames=int(result.frames.shape[0]),
+                generation_seconds=round(outcome.elapsed, 3),
+                prompt=result.prompt,
+                conditioned_prompt=result.conditioned_prompt,
+                movement=result.movement,
+                view=result.view,
+            )
+        )
+        await self.send(self._state_update())
+        return YumeOutput(main_video=result.frames)
 
     def _request_reset(self) -> None:
         self.output.flush()
         self._clear_controls()
-        self.state._reset_requested = True
+        self._world_id += 1
         self._chunk_index = 0
 
     def _require_scene(self) -> None:
         if self._mode is None:
             raise CommandError("scene_required", "Select an image or text scene first.")
 
-    def _require_loaded(self) -> tuple[Backend, YumeConfig]:
-        if self._backend is None or self._config is None:
+    def _require_config(self) -> YumeConfig:
+        if self._config is None:
             raise RuntimeError("YUME was not loaded")
-        return self._backend, self._config
+        return self._config
 
     def _next_chunk(self) -> int:
         return (
             1
-            if self.state._reset_requested
+            if self._world_id != self._applied_world_id
             else self._chunk_index + 1 + int(self._generating)
         )
 
@@ -494,7 +443,8 @@ class Yume15(ReactorPipeline):
             prompt=self.state.prompt,
             pressed_keys=self._ordered_keys(),
             seed=self._seed,
-            reset_queued=self.state._reset_requested,
+            reset_queued=self._mode is not None
+            and self._world_id != self._applied_world_id,
             generating=self._generating,
             completed_chunks=self._chunk_index,
             next_chunk=None if self._mode is None else self._next_chunk(),

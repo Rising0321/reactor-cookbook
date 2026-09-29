@@ -53,7 +53,6 @@ class YumeState(InputState):
         description="Scene and event description for forthcoming chunks. Scene commands initialize it, and the generated setter or `set_prompt` changes it at the next chunk boundary without restarting the world.",
     )
     _pressed_keys: frozenset[str] = frozenset()
-    _reset_requested: bool = False
 
 
 class StateUpdate(ModelMessage):

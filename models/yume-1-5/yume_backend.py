@@ -9,7 +9,7 @@ import torch
 from PIL import Image
 
 from yume_assets import YumeConfig
-from yume_types import Movement, View
+from yume_model import Movement, View
 
 MOVEMENT_TEXT: dict[Movement, str] = {
     "none": "The camera's movement direction remains stationary (·).",
