@@ -8,7 +8,7 @@ and streams generated video.
 The adapter loads an exact tested SolarWM revision and preserves the upstream
 autoregressive sampler, camera conditioning, and rolling cache boundary.
 
-Runtime 3.5 drives one native chunk per step. `solarwm.py` plans camera poses
+Runtime 3.6 drives one native chunk per step. `solarwm.py` plans camera poses
 and owns commands and messages; `solarwm_model.py` owns inference and persistent
 rollout state. The anchor crosses the CPU contract once per acknowledged world.
 Public commands, native generation settings, and adaptive video pacing are
