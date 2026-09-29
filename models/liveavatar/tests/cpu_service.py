@@ -32,7 +32,7 @@ class Surrogate:
 
 
 def load(self, config_path=None):
-    self._backend = Surrogate()
+    self._engine._backend = Surrogate()
 
 
 LiveAvatar.load = load

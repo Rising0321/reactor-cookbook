@@ -15,13 +15,14 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from liveavatar_assets import WORK, prepare_assets
+import liveavatar_assets as assets
 from liveavatar_audio import OUTPUT_SAMPLE_RATE, playback_audio
 
 
 class ParallelBackend:
-    def __init__(self):
-        self.base, self.lora = prepare_assets()
+    def __init__(self, weights_root: Path | None = None):
+        self.weights_root = weights_root
+        self.base, self.lora = assets.prepare_assets(weights_root)
         self.processes = []
         self.directory = None
         self.active = False
@@ -39,7 +40,7 @@ class ParallelBackend:
 
         world_size = turbo_plan()["world_size"]
         context = mp.get_context("spawn")
-        self.directory = tempfile.TemporaryDirectory(prefix="tpp-", dir=WORK)
+        self.directory = tempfile.TemporaryDirectory(prefix="tpp-", dir=assets.WORK)
         self.commands = [context.Queue(maxsize=1) for _ in range(world_size)]
         self.results = context.Queue(maxsize=2)
         self.ack = context.Queue(maxsize=1)
@@ -55,6 +56,7 @@ class ParallelBackend:
                     self.commands[rank],
                     self.results,
                     self.ack,
+                    self.weights_root,
                 ),
                 daemon=True,
             )

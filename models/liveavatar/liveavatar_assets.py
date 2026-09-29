@@ -16,20 +16,13 @@ SOURCE = Path(
 LOCAL_WEIGHTS_ONLY = os.environ.get("LIVEAVATAR_LOCAL_WEIGHTS_ONLY") == "1"
 
 
-def mounted_weights_path() -> Path:
-    from reactor_runtime import get_weights_path
-
-    return get_weights_path()
+WORK = ROOT / ".cache_hf/reactor_registry/liveavatar-stage1"
 
 
-WORK = (
-    mounted_weights_path() / ".runtime"
-    if LOCAL_WEIGHTS_ONLY
-    else ROOT / ".cache_hf/reactor_registry/liveavatar-stage1"
-)
-
-
-def configure_cache_environment() -> None:
+def configure_cache_environment(weights_root: Path | None = None) -> None:
+    global WORK
+    if weights_root is not None:
+        WORK = weights_root / ".runtime"
     cache_root = WORK / "cache" if LOCAL_WEIGHTS_ONLY else ROOT / ".cache_hf"
     for name, value in {
         "UV_CACHE_DIR": WORK / "uv" if LOCAL_WEIGHTS_ONLY else ROOT / ".cache_uv",
@@ -51,8 +44,8 @@ def configure_cache_environment() -> None:
     os.environ["ENABLE_COMPILE"] = "false"
 
 
-def prepare_assets() -> tuple[Path, Path]:
-    configure_cache_environment()
+def prepare_assets(weights_root: Path | None = None) -> tuple[Path, Path]:
+    configure_cache_environment(weights_root)
     if not SOURCE.exists():
         if LOCAL_WEIGHTS_ONLY:
             raise RuntimeError(
@@ -79,7 +72,9 @@ def prepare_assets() -> tuple[Path, Path]:
             f"Expected upstream {SOURCE_REVISION}, found {revision}; use a separate checkout"
         )
     if LOCAL_WEIGHTS_ONLY:
-        weights = mounted_weights_path()
+        if weights_root is None:
+            raise ValueError("Local model loading requires an explicit weights root")
+        weights = weights_root
         base, lora = weights / "wan2_2", weights / "liveavatar_lora"
         required = [
             base / "config.json",

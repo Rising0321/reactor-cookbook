@@ -13,7 +13,7 @@ def test_manifest_has_native_yaml_build_and_three_gpu_profile():
     assert manifest["model"]["resources"]["gpu"]["count"] == 3
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_TURBO"] == "1"
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_STEPS"] == "4"
-    assert manifest["build"]["runtime_version"] == "3.2.5"
+    assert manifest["build"]["runtime_version"] == "3.5.0"
     assert "--force-reinstall flash-attn-4==4.0.0b30" in manifest["build"]["run"][0]
     assert "from flash_attn.cute import" in manifest["build"]["run"][1]
     assert not (Path(__file__).parents[1] / "Dockerfile").exists()
@@ -24,8 +24,7 @@ def test_local_weights_are_resolved_without_hf_download(tmp_path, monkeypatch):
     source.mkdir()
     monkeypatch.setattr(assets, "SOURCE", source)
     monkeypatch.setattr(assets, "LOCAL_WEIGHTS_ONLY", True)
-    monkeypatch.setattr(assets, "mounted_weights_path", lambda: tmp_path)
-    monkeypatch.setattr(assets, "configure_cache_environment", lambda: None)
+    monkeypatch.setattr(assets, "configure_cache_environment", lambda *args: None)
     monkeypatch.setattr(
         subprocess,
         "check_output",
@@ -44,13 +43,13 @@ def test_local_weights_are_resolved_without_hf_download(tmp_path, monkeypatch):
         path = tmp_path / name
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(b"fixture")
-    assert assets.prepare_assets() == (
+    assert assets.prepare_assets(tmp_path) == (
         tmp_path / "wan2_2",
         tmp_path / "liveavatar_lora",
     )
     (tmp_path / "wan2_2/config.json").unlink()
     with pytest.raises(RuntimeError, match="Incomplete mounted weights"):
-        assets.prepare_assets()
+        assets.prepare_assets(tmp_path)
 
 
 def test_weight_materialization_dereferences_and_never_overwrites(tmp_path):

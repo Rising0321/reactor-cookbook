@@ -13,7 +13,9 @@ from pathlib import Path
 import numpy as np
 
 
-def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
+def run_worker(
+    rank, parent_pid, directory, base, lora, commands, results, ack, weights_root=None
+):
     # Linux parent-death signal also prevents GPU orphans after abrupt Runtime exit.
     ctypes.CDLL(None).prctl(1, signal.SIGTERM)
     if os.getppid() != parent_pid:
@@ -26,7 +28,7 @@ def run_worker(rank, parent_pid, directory, base, lora, commands, results, ack):
         from liveavatar_assets import SOURCE, configure_cache_environment
         from liveavatar_turbo import install_dit_compile, turbo_plan
 
-        configure_cache_environment()
+        configure_cache_environment(weights_root)
         plan = turbo_plan()
         output_rank = plan["output_rank"]
         torch.set_num_threads(4)

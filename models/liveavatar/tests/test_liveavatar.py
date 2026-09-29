@@ -4,10 +4,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 from PIL import Image
-from reactor_runtime import CommandError, UploadedFile
+from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
 from liveavatar_pipeline import LiveAvatar
+from liveavatar_model import TakeFailed
 from liveavatar_types import LiveAvatarOutput, LiveAvatarState, StateUpdate
 
 
@@ -61,19 +62,24 @@ def test_wire_stop_does_not_override_runtime_shutdown():
 @pytest.mark.asyncio
 async def test_empty_upstream_exception_has_visible_reason(model):
     class FailingBackend:
+        def start(self, **kwargs):
+            pass
+
         def next(self):
             raise AssertionError()
 
         def close(self):
             pass
 
-    model._backend = FailingBackend()
+    model._engine._backend = FailingBackend()
+    model._image = model._path("reference.png")
+    model._audio = model._path("audio.wav")
     model.state._running = True
-    generator = model.inference()
-    assert await anext(generator) is None
+    with pytest.raises(TakeFailed) as caught:
+        model.generate(await model.process_input())
+    assert await model.process_output(StepOutcome(error=caught.value)) is None
     assert model.state._error == "AssertionError"
     assert not model.state._running
-    await generator.aclose()
 
 
 @pytest.mark.asyncio
@@ -86,10 +92,9 @@ async def test_waits_for_uploads(model):
     await model.set_audio(audio_upload())
     assert StateUpdate.from_state(model.state).ready
     await model.set_generation_options(seed=42, max_chunks=2)
-    assert not model.state._running and not model._pending
-    idle = model.inference()
-    assert await anext(idle) is None
-    await idle.aclose()
+    assert not model.state._running
+    with pytest.raises(ApplicationError):
+        await model.process_input()
     await model.start()
     assert model.state._running
     with pytest.raises(CommandError):
@@ -138,17 +143,20 @@ async def test_inference_one_clip_per_turn(model):
         def close(self):
             pass
 
-    model._backend = Backend()
+    backend = Backend()
+    model._engine._backend = backend
     await model.set_avatar_image(image_upload())
     await model.set_audio(audio_upload())
     await model.set_generation_options(seed=9, max_chunks=3)
     await model.start()
-    gen = model.inference()
-    result = await anext(gen)
+    result = await model.process_output(
+        StepOutcome(result=model.generate(await model.process_input()))
+    )
     assert isinstance(result, LiveAvatarOutput)
-    assert model._backend.calls == 1
+    assert backend.calls == 1
     assert model.state._frames == 45 and model.state._chunks == 1
-    assert model._backend.kwargs["seed"] == 9
-    await anext(gen)
+    assert backend.kwargs["seed"] == 9
+    await model.process_output(
+        StepOutcome(result=model.generate(await model.process_input()))
+    )
     assert not model.state._running
-    await gen.aclose()

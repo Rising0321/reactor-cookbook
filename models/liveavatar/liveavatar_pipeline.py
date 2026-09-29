@@ -7,23 +7,16 @@ import asyncio
 import io
 import subprocess
 import tempfile
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from PIL import Image
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    event,
-    session_ended,
-    session_started,
+import liveavatar_assets as assets
+from liveavatar_model import (
+    LiveAvatarInput,
+    LiveAvatarModel,
+    LiveAvatarResult,
+    TakeConditions,
+    TakeFailed,
 )
-
-from liveavatar_assets import WORK, configure_cache_environment
 from liveavatar_types import (
     ChunkComplete,
     GenerationEnded,
@@ -33,44 +26,60 @@ from liveavatar_types import (
     StateUpdate,
     TakeChanged,
 )
+from PIL import Image
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    event,
+    session_ended,
+    session_started,
+)
 
 
-class LiveAvatar(ReactorPipeline):
+class LiveAvatar(ReactorApp):
     state: LiveAvatarState
     fps = 25
     buffer_size = 48
 
     def __init__(self):
         super().__init__()
-        self._backend = None
+        self._engine = LiveAvatarModel()
         self._directory = None
         self._image: Path | None = None
         self._audio: Path | None = None
         self._pose: Path | None = None
-        self._pending = False
+        self._take_id = 0
+        self._applied_take_id = None
 
     def load(self, config_path: Path | None = None):
-        configure_cache_environment()
-        from liveavatar_parallel import ParallelBackend
+        from reactor_runtime import get_weights_path
 
-        self._backend = ParallelBackend()
+        weights_root = get_weights_path()
+        assets.configure_cache_environment(weights_root)
+        self._engine.load(weights_root)
 
     @session_started
     async def on_session_started(self):
-        configure_cache_environment()
-        self._directory = tempfile.TemporaryDirectory(prefix="session-", dir=WORK)
+        self._directory = tempfile.TemporaryDirectory(
+            prefix="session-", dir=assets.WORK
+        )
         self._image = self._audio = self._pose = None
-        self._pending = False
+        self._applied_take_id = None
 
     @session_ended
     async def on_session_ended(self):
-        if self._backend is not None:
-            await asyncio.to_thread(self._backend.close)
+        await asyncio.to_thread(self._engine.reset)
         if self._directory is not None:
             self._directory.cleanup()
             self._directory = None
         self._image = self._audio = self._pose = None
-        self._pending = False
+        self._applied_take_id = None
 
     @connected
     async def on_connected(self, client: ClientInfo):
@@ -281,7 +290,7 @@ class LiveAvatar(ReactorPipeline):
         self.state._running = True
         self.state._chunks = self.state._frames = 0
         self.state._error = None
-        self._pending = True
+        self._take_id += 1
         await self._send_state_update()
         return TakeChanged(action="start")
 
@@ -290,9 +299,9 @@ class LiveAvatar(ReactorPipeline):
         description="End the take and clear queued playback while retaining selected inputs, options and progress for inspection or another `start`. Valid while idle or generating in an active session. Returns `take_changed` and broadcasts `state_update`. Handled between inference turns, so an in-flight clip can delay the reply. Explicit stopping is reported by this reply; `generation_ended` reports automatic completion or failure.",
     )
     async def stop_take(self) -> TakeChanged:
-        if self._backend is not None:
-            await asyncio.to_thread(self._backend.close)
-        self.state._running = self._pending = False
+        await asyncio.to_thread(self._engine.reset)
+        self.state._running = False
+        self._applied_take_id = None
         self.output.flush()
         await self._send_state_update()
         return TakeChanged(action="stop")
@@ -308,45 +317,47 @@ class LiveAvatar(ReactorPipeline):
         await self._send_state_update()
         return TakeChanged(action="reset")
 
-    async def inference(self) -> AsyncGenerator[LiveAvatarOutput | None, None]:
-        while True:
-            if not self.state._running:
-                yield None
-                continue
-            try:
-                if self._pending:
-                    self._pending = False
-                    await asyncio.to_thread(
-                        self._backend.start,
-                        image=self._image,
-                        audio=self._audio,
-                        pose=self._pose,
-                        prompt=self.state._prompt,
-                        negative_prompt=self.state._negative_prompt,
-                        seed=self.state._seed,
-                        max_chunks=self.state._max_chunks,
-                    )
-                # Runtime calls handlers between inference turns, not within GPU work.
-                result = await asyncio.to_thread(self._backend.next)
-                if result is None:
-                    await asyncio.to_thread(self._backend.close)
-                    self.state._running = False
-                    await self.send(GenerationEnded(reason="complete"))
-                    await self._send_state_update()
-                    yield None
-                    continue
-                video, audio = result
-                self.state._chunks += 1
-                self.state._frames += len(video)
-                await self.send(
-                    ChunkComplete(chunk=self.state._chunks, frames=len(video))
-                )
-                await self._send_state_update()
-                yield LiveAvatarOutput(main_video=video, main_audio=audio)
-            except Exception as exc:  # noqa: BLE001 - report upstream failure and release take state
-                await asyncio.to_thread(self._backend.close)
-                self.state._running = False
-                self.state._error = str(exc) or type(exc).__name__
-                await self.send(GenerationEnded(reason=self.state._error))
-                await self._send_state_update()
-                yield None
+    async def process_input(self) -> LiveAvatarInput:
+        if self.state is None or not self.state._running:
+            raise ApplicationError("Upload image and audio, then start a take")
+        conditions = None
+        if self._take_id != self._applied_take_id:
+            if self._image is None or self._audio is None:
+                raise ApplicationError("A take requires an uploaded image and audio")
+            conditions = TakeConditions(
+                self._image,
+                self._audio,
+                self._pose,
+                self.state._prompt,
+                self.state._negative_prompt,
+                self.state._seed,
+                self.state._max_chunks,
+            )
+        return LiveAvatarInput(self._take_id, conditions)
+
+    def generate(self, input: LiveAvatarInput) -> LiveAvatarResult:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> LiveAvatarOutput | None:
+        if isinstance(outcome.error, TakeFailed):
+            await asyncio.to_thread(self._engine.reset)
+            self.state._running = False
+            self.state._error = str(outcome.error)
+            await self.send(GenerationEnded(reason=self.state._error))
+            await self.send(StateUpdate.from_state(self.state))
+            return None
+        if outcome.error is not None:
+            # Contract or device failures outside the native take are not recoverable.
+            raise outcome.error
+        result: LiveAvatarResult = outcome.result
+        self._applied_take_id = result.take_id
+        self.state._chunks, self.state._frames = result.chunks, result.frames
+        if result.complete:
+            await asyncio.to_thread(self._engine.reset)
+            self.state._running = False
+            await self.send(GenerationEnded(reason="complete"))
+            await self.send(StateUpdate.from_state(self.state))
+            return None
+        await self.send(ChunkComplete(chunk=result.chunks, frames=len(result.video)))
+        await self.send(StateUpdate.from_state(self.state))
+        return LiveAvatarOutput(main_video=result.video, main_audio=result.audio)
