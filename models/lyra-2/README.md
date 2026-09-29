@@ -58,7 +58,7 @@ curl -s localhost:8080/schema
 
 ## Runtime boundary
 
-Runtime 3.5 drives `process_input()`, `generate()`, and `process_output()`.
+Runtime 3.6 drives `process_input()`, `generate()`, and `process_output()`.
 `lyra2_model.py` owns the weights, native caches, and completed chunk count;
 its frozen input and result dataclasses contain plain values and CPU arrays.
 The application plans camera poses and reads timing from `outcome.elapsed`.
