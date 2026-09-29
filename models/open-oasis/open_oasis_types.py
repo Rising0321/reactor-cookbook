@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from open_oasis_assets import OpenOasisConfig
 
 from reactor_runtime import InputState, MessageField, ModelMessage, Output, Video
 
@@ -29,20 +29,6 @@ KEYS = [
     "9",
 ]
 MOUSE_BUTTONS = ["left", "right", "middle"]
-
-
-@dataclass(frozen=True)
-class OpenOasisConfig:
-    source_path: str
-    source_revision: str
-    checkpoint_repo_id: str
-    checkpoint_revision: str
-    model_filename: str
-    vae_filename: str
-    seed: int
-    ddim_steps: int
-    context_frames: int
-    fps: float
 
 
 class OpenOasisOutput(Output):
@@ -172,4 +158,5 @@ class OpenOasisState(InputState):
     _camera_x: float = 0.0
     _camera_y: float = 0.0
     _seed: int = 0
-    _reset_requested: bool = True
+    _world_id: int = 0
+    _applied_world_id: int | None = None

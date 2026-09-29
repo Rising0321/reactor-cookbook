@@ -8,12 +8,24 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from dataclasses import dataclass
 
 import numpy as np
 import yaml
-from open_oasis_types import OpenOasisConfig
 from PIL import Image, ImageOps
-from reactor_runtime import UploadedFile, get_weights_path
+
+@dataclass(frozen=True)
+class OpenOasisConfig:
+    source_path: str
+    source_revision: str
+    checkpoint_repo_id: str
+    checkpoint_revision: str
+    model_filename: str
+    vae_filename: str
+    seed: int
+    ddim_steps: int
+    context_frames: int
+    fps: float
 
 
 def read_config(path: Path | None) -> OpenOasisConfig:
@@ -21,10 +33,10 @@ def read_config(path: Path | None) -> OpenOasisConfig:
         raise ValueError("Open-Oasis requires open_oasis.yaml")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     return OpenOasisConfig(
-        source_path=os.environ.get(
+        source_path=str((path.parent / Path(os.environ.get(
             "OPEN_OASIS_PATH",
             os.path.expandvars(str(raw["source"]["path"])),
-        ),
+        ))).resolve()),
         source_revision=str(raw["source"]["revision"]),
         checkpoint_repo_id=str(raw["checkpoint"]["repo_id"]),
         checkpoint_revision=str(raw["checkpoint"]["revision"]),
@@ -57,10 +69,10 @@ def prepare_source(config: OpenOasisConfig) -> Path:
     return root
 
 
-def download_checkpoints(config: OpenOasisConfig) -> tuple[Path, Path]:
+def download_checkpoints(config: OpenOasisConfig, weights_root: Path) -> tuple[Path, Path]:
     from huggingface_hub import hf_hub_download
 
-    cache = get_weights_path() / "huggingface"
+    cache = weights_root / "huggingface"
     cache.mkdir(parents=True, exist_ok=True)
     kwargs = {
         "repo_id": config.checkpoint_repo_id,
@@ -84,12 +96,12 @@ def decode_image(data: bytes) -> np.ndarray:
         return np.asarray(image, dtype=np.uint8)[None]
 
 
-def decode_video(upload: UploadedFile, offset: int, count: int) -> np.ndarray:
+def decode_video(data: bytes, name: str, offset: int, count: int) -> np.ndarray:
     from torchvision.io import read_video
 
-    suffix = Path(upload.name).suffix or ".mp4"
+    suffix = Path(name).suffix or ".mp4"
     with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
-        handle.write(upload.data)
+        handle.write(data)
         handle.flush()
         frames = read_video(handle.name, pts_unit="sec", output_format="TCHW")[0]
     frames = frames[offset : offset + count]

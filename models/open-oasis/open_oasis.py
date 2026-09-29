@@ -3,24 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 from open_oasis_assets import (
     decode_image,
     decode_video,
-    download_checkpoints,
-    prepare_source,
+    OpenOasisConfig,
     read_config,
 )
-from open_oasis_backend import OpenOasisBackend
+from open_oasis_model import OpenOasisModel, OpenOasisInput, OpenOasisResult
 from open_oasis_types import (
     KEYS,
     MOUSE_BUTTONS,
     ActionChanged,
     ConditioningChanged,
-    OpenOasisConfig,
     OpenOasisOutput,
     OpenOasisState,
     RolloutReset,
@@ -30,7 +27,10 @@ from reactor_runtime import (
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    ApplicationError,
+    StepOutcome,
+    get_weights_path,
     UploadedFile,
     connected,
     disconnected,
@@ -95,7 +95,7 @@ _VIDEO_FIELD = InputField(
 )
 
 
-class OpenOasis(ReactorPipeline):
+class OpenOasis(ReactorApp):
     """Generate one action-conditioned Minecraft frame per model step."""
 
     state: OpenOasisState
@@ -104,18 +104,16 @@ class OpenOasis(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: OpenOasisConfig | None = None
-        self._backend: OpenOasisBackend | None = None
+        self.engine = OpenOasisModel()
         self._source: Path | None = None
         self._conditioning: np.ndarray | None = None
         self._conditioning_name = "none"
 
     def load(self, config_path: Path | None) -> None:
         config = read_config(config_path)
-        source = prepare_source(config)
-        model_path, vae_path = download_checkpoints(config)
         self._config = config
-        self._source = source
-        self._backend = OpenOasisBackend(config, model_path, vae_path)
+        self._source = Path(config.source_path)
+        self.engine.load(config_path, get_weights_path())
         logger.info(
             "Open-Oasis ready",
             revision=config.source_revision,
@@ -128,7 +126,8 @@ class OpenOasis(ReactorPipeline):
         if self._config is None:
             raise RuntimeError("Open-Oasis was not loaded")
         self.state._seed = self._config.seed
-        self.state._reset_requested = True
+        self.state._world_id += 1
+        self.state._applied_world_id = None
         self._conditioning = None
         self._conditioning_name = "none"
         self._clear_controls()
@@ -143,7 +142,8 @@ class OpenOasis(ReactorPipeline):
         self.output.flush()
         self._conditioning = None
         self._conditioning_name = "none"
-        self.state._reset_requested = True
+        self.engine.reset()
+        self.state._applied_world_id = None
         self._clear_controls()
         await self.send(self._state_update())
 
@@ -151,7 +151,8 @@ class OpenOasis(ReactorPipeline):
     def on_session_ended(self) -> None:
         self._conditioning = None
         self._conditioning_name = "none"
-        self.state._reset_requested = True
+        self.engine.reset()
+        self.state._applied_world_id = None
         self._clear_controls()
 
     @event(
@@ -345,7 +346,7 @@ class OpenOasis(ReactorPipeline):
             raise CommandError("unsupported_media", "set_video requires a video upload")
         try:
             self._conditioning = await asyncio.to_thread(
-                decode_video, video, offset, prompt_frames
+                decode_video, video.data, video.name, offset, prompt_frames
             )
         except (OSError, RuntimeError, ValueError) as error:
             raise CommandError("invalid_video", str(error)) from error
@@ -396,27 +397,33 @@ class OpenOasis(ReactorPipeline):
         await self.send(self._state_update())
         return RolloutReset(seed=self.state._seed, conditioning=self._conditioning_name)
 
-    def inference(self) -> Iterator[OpenOasisOutput | None]:
-        if self._backend is None:
-            raise RuntimeError("Open-Oasis was not loaded")
-        while True:
-            if self._conditioning is None:
-                yield None
-                continue
-            if self.state._reset_requested:
-                self._backend.reset(self._conditioning, self.state._seed)
-                self.state._reset_requested = False
-                yield OpenOasisOutput(
-                    main_video=np.ascontiguousarray(self._conditioning[-1])
-                )
-                continue
-            action = self._build_action()
-            # Consume only pulses included in this inference snapshot.
+    async def process_input(self) -> OpenOasisInput:
+        if self._conditioning is None:
+            raise ApplicationError("no starting context selected")
+        fresh = self.state._world_id != self.state._applied_world_id
+        action = self._build_action()
+        if not fresh:
             self.state._pending_key_pulses = frozenset()
             self.state._pending_mouse_pulses = frozenset()
-            frame = self._backend.generate_one(action)
+        return OpenOasisInput(
+            self.state._world_id, self._conditioning if fresh else None,
+            self.state._seed, action,
+        )
+
+    def generate(self, input: OpenOasisInput) -> OpenOasisResult:
+        return self.engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> OpenOasisOutput | None:
+        if outcome.error is not None:
+            # Unexpected sampler failures cannot be repaired by restarting a world.
+            raise outcome.error
+        result: OpenOasisResult = outcome.result
+        self.state._applied_world_id = result.world_id
+        if result.index:
             self.state._camera_x = self.state._camera_y = 0.0
-            yield OpenOasisOutput(main_video=np.ascontiguousarray(frame))
+        logger.info("Open-Oasis step", world_id=result.world_id, index=result.index,
+                    generation_seconds=outcome.elapsed)
+        return OpenOasisOutput(main_video=result.frame)
 
     async def _select_conditioning(self, source: str, name: str) -> ConditioningChanged:
         self._conditioning_name = name
@@ -429,7 +436,7 @@ class OpenOasis(ReactorPipeline):
 
     def _queue_reset(self) -> None:
         self.output.flush()
-        self.state._reset_requested = True
+        self.state._world_id += 1
         self._clear_controls()
 
     def _clear_controls(self) -> None:

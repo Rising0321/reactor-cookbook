@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from open_oasis_types import OpenOasisConfig
+from open_oasis_assets import OpenOasisConfig
 
 SCALING_FACTOR = 0.07843137255
 

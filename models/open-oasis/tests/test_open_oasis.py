@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import FrozenInstanceError
+from unittest.mock import Mock
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+from reactor_runtime import ApplicationError
 from reactor_runtime.interface.model.contract import ModelContract
 
 MODEL_DIR = Path(__file__).parents[1]
@@ -111,7 +115,6 @@ def test_conditioning_upload_is_moderated() -> None:
 
 def test_new_connection_waits_and_disconnect_discards_upload() -> None:
     model = ready_model()
-    model._backend = object()  # type: ignore[assignment]
     model.on_session_started()
     assert model._conditioning is None
     assert model._conditioning_name == "none"
@@ -122,7 +125,48 @@ def test_new_connection_waits_and_disconnect_discards_upload() -> None:
 
     assert model._conditioning is None
     assert model._conditioning_name == "none"
-    assert next(model.inference()) is None
+    with pytest.raises(ApplicationError):
+        asyncio.run(model.process_input())
+
+
+def test_ten_continuous_steps_and_anchor_handshake() -> None:
+    class Backend:
+        resets = 0
+        calls = 0
+        def reset(self, frames, seed):
+            self.resets += 1
+        def generate_one(self, action):
+            self.calls += 1
+            return np.zeros((8, 8, 3), dtype=np.uint8)
+    model = ready_model()
+    backend = Backend()
+    model.engine.backend = backend
+    async def run():
+        for index in range(11):
+            input = await model.process_input()
+            assert (input.conditioning is not None) == (index == 0)
+            result = model.generate(input)
+            assert result.index == index
+            assert await model.process_output(SimpleNamespace(result=result, error=None, elapsed=.1)) is not None
+    asyncio.run(run())
+    assert (backend.resets, backend.calls) == (1, 10)
+
+
+def test_generate_forwards_only_input_and_error_does_not_complete() -> None:
+    model = ready_model()
+    input = asyncio.run(model.process_input())
+    model.engine = SimpleNamespace(generate=lambda value: value)
+    model.state = None
+    assert model.generate(input) is input
+    model.state = OpenOasisState()
+    def fail(value):
+        raise ValueError("sampler failed")
+    model.engine = SimpleNamespace(generate=fail)
+    with pytest.raises(ValueError) as failure:
+        model.generate(input)
+    with pytest.raises(ValueError, match="sampler failed"):
+        asyncio.run(model.process_output(SimpleNamespace(error=failure.value)))
+    assert model.state._applied_world_id is None
 
 
 def test_playback_contract_uses_one_frame_chunks_without_explicit_fps() -> None:
@@ -140,3 +184,36 @@ def test_press_and_release_before_sampling_still_produces_one_frame_pulse() -> N
 
     model.state._pending_key_pulses = frozenset()
     assert model._build_action()[11] == 0
+
+
+def test_refusal_never_invokes_model_and_input_is_frozen() -> None:
+    model = ready_model()
+    model._conditioning = None
+    model.engine = Mock()
+    with pytest.raises(ApplicationError):
+        asyncio.run(model.process_input())
+    model.engine.generate.assert_not_called()
+    model._conditioning = np.zeros((1, 8, 8, 3), dtype=np.uint8)
+    step = asyncio.run(model.process_input())
+    with pytest.raises(FrozenInstanceError):
+        step.world_id = 99
+    assert asyncio.run(model.process_input()).conditioning is step.conditioning
+
+
+def test_native_failure_preserves_completed_index() -> None:
+    model = ready_model()
+    backend = Mock()
+    backend.generate_one.return_value = np.zeros((8, 8, 3), np.uint8)
+    model.engine.backend = backend
+    for _ in range(2):
+        result = model.generate(asyncio.run(model.process_input()))
+        asyncio.run(model.process_output(SimpleNamespace(result=result, error=None, elapsed=.1)))
+    assert model.engine.index == 1
+    model.send = Mock()
+    backend.generate_one.side_effect = RuntimeError("sampler failure")
+    with pytest.raises(RuntimeError) as error:
+        model.generate(asyncio.run(model.process_input()))
+    with pytest.raises(RuntimeError, match="sampler failure"):
+        asyncio.run(model.process_output(SimpleNamespace(error=error.value)))
+    assert model.engine.index == 1
+    model.send.assert_not_called()
