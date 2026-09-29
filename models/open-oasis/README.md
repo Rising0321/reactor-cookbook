@@ -176,9 +176,9 @@ clips up to five minutes. The model emits video without generated audio.
   model weights for the next session.
 - Stop `reactor run` to remove the container and release its GPU memory.
 
-## Runtime 3.5
+## Runtime 3.6
 
-This recipe uses Reactor Runtime 3.5. `set_image`, `set_video`, and `random_scene`
+This recipe uses Reactor Runtime 3.6. `set_image`, `set_video`, and `random_scene`
 select a fresh world. Its first output is the selected starting frame, followed
 by one generated frame per step. Existing commands and messages retain their
 schema, and playback adapts to measured generation speed.
