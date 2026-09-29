@@ -6,10 +6,10 @@ import io
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 from PIL import Image, ImageOps
-from reactor_runtime import UploadedFile
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,8 @@ def _expose_upstream_package(source_path: Path) -> None:
         raise RuntimeError(f"SolarWM package is missing: {package_path}")
     entry_module = sys.modules.get("solarwm")
     if entry_module is None:
-        raise RuntimeError("SolarWM Reactor entry module is not loaded")
+        entry_module = ModuleType("solarwm")
+        sys.modules["solarwm"] = entry_module
     search_locations = [str(package_path)]
     entry_module.__path__ = search_locations
     if entry_module.__spec__ is not None:
@@ -68,7 +69,7 @@ class SolarWMBackend:
         self.crossattn_cache = None
         self.chunk_index = 0
 
-    def reset(self, seed: int, image: UploadedFile, prompt: str) -> None:
+    def reset(self, seed: int, image: bytes, prompt: str) -> None:
         """Encode a fresh uploaded anchor and allocate native rolling caches."""
         torch = self.torch
         self.end_session()
@@ -192,9 +193,9 @@ class SolarWMBackend:
         self.chunk_index = 0
 
 
-def _prepare_image(upload: UploadedFile, *, width: int, height: int) -> np.ndarray:
+def _prepare_image(upload: bytes, *, width: int, height: int) -> np.ndarray:
     """Apply SolarWM's bilinear resize and center-crop image path."""
-    with Image.open(io.BytesIO(upload.data)) as source:
+    with Image.open(io.BytesIO(upload)) as source:
         image = ImageOps.exif_transpose(source).convert("RGB")
         scale = max(height / image.height, width / image.width)
         size = (round(image.width * scale), round(image.height * scale))

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,9 +40,14 @@ def read_config(config_path: Path | None) -> SolarWMConfig:
         raise TypeError(f"{config_path}: expected a YAML mapping")
     source, assets = raw["source"], raw["assets"]
     stream, motion = raw["stream"], raw["motion"]
-    source_path = Path(os.environ.get("SOLARWM_SOURCE_PATH", source["path"])).resolve()
-    base_path = Path(assets["root"]).resolve() / "SolarWM-5B-base"
-    checkpoint_path = Path(assets["root"]).resolve() / "SolarWM-5B-sgf-stage2-81f"
+
+    def resolve(value: str) -> Path:
+        path = Path(value)
+        return (path if path.is_absolute() else config_path.parent / path).resolve()
+
+    source_path = resolve(source["path"])
+    base_path = resolve(assets["root"]) / "SolarWM-5B-base"
+    checkpoint_path = resolve(assets["root"]) / "SolarWM-5B-sgf-stage2-81f"
     context = int(stream["context_latents"])
     if context != 18:
         raise ValueError("SolarWM's native local_attn_size requires context_latents=18")
@@ -59,7 +63,7 @@ def read_config(config_path: Path | None) -> SolarWMConfig:
         checkpoint_revision=str(assets["revision"]),
         base_path=base_path,
         checkpoint_path=checkpoint_path,
-        runtime_root=Path(assets["root"]).resolve() / "runtime",
+        runtime_root=resolve(assets["root"]) / "runtime",
         seed=int(raw["inference"]["seed"]),
         default_prompt=str(raw["inference"]["default_prompt"]).strip(),
         context_latents=context,
@@ -123,7 +127,6 @@ def prepare_runtime(config: SolarWMConfig) -> None:
             revision=config.checkpoint_revision,
             local_dir=config.base_path.parent,
             allow_patterns=list(required),
-            token=os.environ.get("HF_KEY") or os.environ.get("HF_TOKEN"),
         )
     for path in (
         config.base_path / "text_encoder/models_t5_umt5-xxl-enc-bf16.pth",

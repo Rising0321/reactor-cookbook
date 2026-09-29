@@ -245,5 +245,4 @@ class SolarWMState(InputState):
             "until changed or released."
         ),
     )
-    _restart_requested: bool = True
     _limit_reached: bool = False

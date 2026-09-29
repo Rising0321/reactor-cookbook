@@ -1,16 +1,16 @@
-"""Serve SolarWM through Reactor's interactive pipeline API without shadowing upstream."""
+"""Serve SolarWM through Reactor's step API without shadowing upstream."""
 
 from __future__ import annotations
 
-import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
@@ -18,10 +18,10 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
-from solarwm_backend import BackendSettings, SolarWMBackend
 from solarwm_camera import CameraMotionPlanner, MotionConfig
-from solarwm_config import SolarWMConfig, prepare_runtime, read_config
+from solarwm_config import SolarWMConfig, read_config
 from solarwm_images import normalize_output_frames, validate_uploaded_image
+from solarwm_model import SolarWMAnchor, SolarWMInput, SolarWMModel, SolarWMResult
 from solarwm_types import (
     CameraMotionChanged,
     ImageSelected,
@@ -34,7 +34,7 @@ from solarwm_types import (
 )
 
 
-class SolarWM(ReactorPipeline):
+class SolarWM(ReactorApp):
     """Generate an image-, prompt-, and camera-controllable SolarWM world."""
 
     state: SolarWMState
@@ -43,18 +43,18 @@ class SolarWM(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: SolarWMConfig | None = None
-        self._backend: SolarWMBackend | None = None
+        self._engine = SolarWMModel()
+        self._world_id = 0
+        self._applied_world_id: int | None = None
         self._planner: CameraMotionPlanner | None = None
         self._selected_image: UploadedFile | None = None
         self._seed = 42
         self._chunk_index = 0
-        self._chunk_in_flight = False
         self._last_chunk_seconds: float | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned upstream assets and load SolarWM once."""
         config = read_config(config_path)
-        prepare_runtime(config)
         self._config = config
         self._seed = config.seed
         self._planner = CameraMotionPlanner(
@@ -62,15 +62,7 @@ class SolarWM(ReactorPipeline):
                 config.translation_units_per_latent, config.rotation_degrees_per_latent
             )
         )
-        self._backend = SolarWMBackend(
-            BackendSettings(
-                source_path=config.source_path,
-                upstream_config=config.upstream_config,
-                base_path=config.base_path,
-                checkpoint_path=config.checkpoint_path,
-                runtime_root=config.runtime_root,
-            )
-        )
+        self._engine.load(config_path)
 
     @session_started
     def on_session_started(self) -> None:
@@ -79,10 +71,10 @@ class SolarWM(ReactorPipeline):
         self._selected_image = None
         self._seed = self._require_config().seed
         self._clear_controls()
-        self.state._restart_requested = True
+        self._world_id += 1
+        self._applied_world_id = None
         self.state._limit_reached = False
         self._chunk_index = 0
-        self._chunk_in_flight = False
         self._last_chunk_seconds = None
 
     @connected
@@ -99,14 +91,12 @@ class SolarWM(ReactorPipeline):
     @session_ended
     def on_session_ended(self) -> None:
         """Release causal caches while retaining loaded model weights."""
-        if self._backend is not None:
-            self._backend.end_session()
+        self._engine.reset()
         self._selected_image = None
         self._clear_controls()
-        self.state._restart_requested = True
+        self._applied_world_id = None
         self.state._limit_reached = False
         self._chunk_index = 0
-        self._chunk_in_flight = False
         self._last_chunk_seconds = None
 
     @event(
@@ -378,55 +368,55 @@ class SolarWM(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
+        self._engine.reset()
+        self._applied_world_id = None
         self._request_restart()
         result = RolloutResetQueued(seed=self._seed, replaced_chunks=replaced)
         await self.send(self._state_update())
         return result
 
-    async def inference(self) -> AsyncGenerator[SolarWMOutput | None, None]:
-        """Generate synchronously and emit exactly one native causal chunk per iteration."""
-        backend, planner = self._backend, self._planner
-        if backend is None or planner is None:
-            raise RuntimeError("SolarWM was not loaded")
-        while True:
-            if self.state._restart_requested:
-                if self._selected_image is None:
-                    yield None
-                    continue
-                self.state._restart_requested = False
-                backend.reset(self._seed, self._selected_image, self.state.prompt)
-                planner.reset()
-                self._chunk_index = 0
-            if self.state._limit_reached:
-                yield None
-                continue
-            poses = planner.plan_chunk(
-                strafe=self.state.strafe,
-                vertical=self.state.vertical,
-                forward=self.state.forward,
-                pitch=self.state.pitch,
-                yaw=self.state.yaw,
-                roll=self.state.roll,
+    async def process_input(self) -> SolarWMInput:
+        if self._selected_image is None:
+            raise ApplicationError("no anchor image selected")
+        if self.state._limit_reached:
+            raise ApplicationError("rollout limit reached")
+        anchor = None
+        if self._world_id != self._applied_world_id:
+            anchor = SolarWMAnchor(
+                self._selected_image.data, self.state.prompt, self._seed
             )
-            self._chunk_in_flight = True
-            started = time.perf_counter()
-            try:
-                frames = backend.generate_chunk(poses)
-            finally:
-                self._chunk_in_flight = False
-            self._last_chunk_seconds = time.perf_counter() - started
-            self._chunk_index += 1
-            config = self._require_config()
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._clear_controls()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index, max_chunks=config.max_chunks
-                    )
+            self._planner.reset()
+        poses = self._planner.plan_chunk(
+            strafe=self.state.strafe,
+            vertical=self.state.vertical,
+            forward=self.state.forward,
+            pitch=self.state.pitch,
+            yaw=self.state.yaw,
+            roll=self.state.roll,
+        )
+        return SolarWMInput(self._world_id, anchor, poses)
+
+    def generate(self, input: SolarWMInput) -> SolarWMResult:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> SolarWMOutput | None:
+        if outcome.error is not None:
+            # Refusals prevent exhausted worlds; other failures require diagnosis.
+            raise outcome.error
+        result: SolarWMResult = outcome.result
+        self._applied_world_id = result.world_id
+        self._last_chunk_seconds = outcome.elapsed
+        self._chunk_index = result.chunk_index
+        if result.complete:
+            self.state._limit_reached = True
+            self._clear_controls()
+            await self.send(
+                RolloutLimitReached(
+                    completed_chunks=result.chunk_index, max_chunks=result.max_chunks
                 )
-            await self.send(self._state_update())
-            yield SolarWMOutput(main_video=normalize_output_frames(frames))
+            )
+        await self.send(self._state_update())
+        return SolarWMOutput(main_video=normalize_output_frames(result.frames))
 
     async def _set_axis(self, name: str, value: float) -> CameraMotionChanged:
         self._require_available_rollout()
@@ -437,7 +427,7 @@ class SolarWM(ReactorPipeline):
 
     def _request_restart(self) -> None:
         self._clear_controls()
-        self.state._restart_requested = True
+        self._world_id += 1
         self.state._limit_reached = False
         self._chunk_index = 0
         self._last_chunk_seconds = None
@@ -472,8 +462,8 @@ class SolarWM(ReactorPipeline):
     def _next_control_chunk(self) -> int:
         return (
             1
-            if self.state._restart_requested
-            else self._chunk_index + 1 + int(self._chunk_in_flight)
+            if self._world_id != self._applied_world_id
+            else self._chunk_index + 1
         )
 
     def _require_config(self) -> SolarWMConfig:
