@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import time
-from collections.abc import AsyncGenerator
+import io
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
+from PIL import Image, ImageOps
 
 import numpy as np
 from reactor_runtime import (
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    ApplicationError,
+    StepOutcome,
+    get_weights_path,
     UploadedFile,
     connected,
     disconnected,
@@ -24,12 +27,10 @@ from reactor_runtime.log import get_logger
 
 from zing_assets import (
     ZingAdapterConfig,
-    activate_source,
-    configure_environment,
-    prepare_assets,
     read_config,
 )
-from zing_images import materialized_image, validate_image
+from zing_images import validate_image
+from zing_model import ZingModel, ZingInput, ZingResult
 from zing_types import (
     ActionChanged,
     ChunkCompleted,
@@ -47,14 +48,7 @@ logger = get_logger(__name__)
 _KEYS = ("w", "a", "s", "d", "i", "j", "k", "l")
 
 
-class _Backend(Protocol):
-    def reset(self, *, image: Path | None, prompt: str, seed: int) -> None: ...
-    def generate_chunk(self, *, prompt: str, pressed_keys: set[str]) -> np.ndarray: ...
-    def cache_frames(self) -> int: ...
-    def end_session(self) -> None: ...
-
-
-class Zing(ReactorPipeline):
+class Zing(ReactorApp):
     """Generate a controllable Zing 0.5 world from text or one initial image."""
 
     state: ZingState
@@ -63,9 +57,9 @@ class Zing(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: ZingAdapterConfig | None = None
-        self._backend: _Backend | None = None
+        self.engine = ZingModel()
         self._conditioning: Literal["none", "text", "uploaded", "built_in"] = "none"
-        self._image: Path | UploadedFile | None = None
+        self._image: np.ndarray | None = None
         self._image_name: str | None = None
         self._seed = 42
         self._active_prompt: str | None = None
@@ -73,17 +67,13 @@ class Zing(ReactorPipeline):
         self._generating = False
         self._limit_reached = False
         self._world_epoch = 0
+        self._applied_world_id: int | None = None
 
     def load(self, config_path: Path | None) -> None:
-        config = read_config(config_path)
-        configure_environment(config)
-        prepare_assets(config)
-        activate_source(config)
-        from zing_backend import ZingBackend
-
+        config = read_config(config_path, get_weights_path())
         self._config = config
         self._seed = config.seed
-        self._backend = ZingBackend(config)
+        self.engine.load(config_path, get_weights_path())
         logger.info(
             "Zing 0.5 ready",
             source_revision=config.source_revision,
@@ -97,7 +87,7 @@ class Zing(ReactorPipeline):
         config = self._require_config()
         self.state.prompt = ""
         self.state._pressed_keys = frozenset()
-        self.state._reset_requested = False
+        self._applied_world_id = None
         self._conditioning = "none"
         self._image = None
         self._image_name = None
@@ -110,7 +100,7 @@ class Zing(ReactorPipeline):
 
     @session_ended
     def on_session_ended(self) -> None:
-        self.state._reset_requested = False
+        self._applied_world_id = None
         self.state._pressed_keys = frozenset()
         self._conditioning = "none"
         self._image = None
@@ -118,8 +108,7 @@ class Zing(ReactorPipeline):
         self._active_prompt = None
         self._completed_chunks = 0
         self._generating = False
-        if self._backend is not None:
-            self._backend.end_session()
+        self.engine.reset()
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
@@ -220,7 +209,8 @@ class Zing(ReactorPipeline):
             self._seed = seed
         self.state.prompt = prompt.strip() or config.default_prompt
         self._conditioning = "uploaded"
-        self._image = image
+        with Image.open(io.BytesIO(image.data)) as decoded:
+            self._image = np.asarray(ImageOps.exif_transpose(decoded).convert("RGB")).copy()
         self._image_name = image.name
         self._request_reset()
         message = ImageSelected(
@@ -247,7 +237,8 @@ class Zing(ReactorPipeline):
         image = config.source_path / "assets" / "case0.jpg"
         self.state.prompt = config.example_prompt
         self._conditioning = "built_in"
-        self._image = image
+        with Image.open(image) as decoded:
+            self._image = np.asarray(ImageOps.exif_transpose(decoded).convert("RGB")).copy()
         self._image_name = image.name
         self._request_reset()
         await self.send(self._state_update())
@@ -345,67 +336,45 @@ class Zing(ReactorPipeline):
         await self.send(self._state_update())
         return RolloutReset(seed=self._seed, replaced_chunks=replaced)
 
-    async def inference(self) -> AsyncGenerator[ZingOutput | None, None]:
-        backend = self._require_backend()
-        config = self._require_config()
-        while True:
-            if self._conditioning == "none" and not self.state._reset_requested:
-                yield None
-                continue
-            if self._limit_reached and not self.state._reset_requested:
-                yield None
-                continue
-            if self.state._reset_requested:
-                self._generating = True
-                await self.send(self._state_update())
-                temporary = config.asset_path / "uploads"
-                selected_image = (
-                    materialized_image(self._image, temporary)
-                    if self._image is not None
-                    else _null_image()
-                )
-                with selected_image as image:
-                    backend.reset(image=image, prompt=self.state.prompt, seed=self._seed)
-                self.state._reset_requested = False
-                self._completed_chunks = 0
-                self._active_prompt = self.state.prompt
-            self._generating = True
-            started = time.monotonic()
-            sampled_prompt = self.state.prompt
-            sampled_keys = set(self.state._pressed_keys)
-            frames = backend.generate_chunk(
-                prompt=sampled_prompt,
-                pressed_keys=sampled_keys,
-            )
-            elapsed = time.monotonic() - started
-            self._completed_chunks += 1
-            self._active_prompt = sampled_prompt
-            self._generating = False
-            if self._completed_chunks >= config.max_chunks:
-                self._limit_reached = True
-                self.state._pressed_keys = frozenset()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._completed_chunks,
-                        max_chunks=config.max_chunks,
-                        world_epoch=self._world_epoch,
-                    )
-                )
-            await self.send(
-                ChunkCompleted(
-                    chunk=self._completed_chunks,
-                    video_frames=int(frames.shape[0]),
-                    generation_seconds=elapsed,
-                    prompt=sampled_prompt,
-                    action_keys=sorted(sampled_keys),
-                    cache_frames=backend.cache_frames(),
-                )
-            )
-            await self.send(self._state_update())
-            yield ZingOutput(main_video=frames)
+    async def process_input(self) -> ZingInput:
+        if self._conditioning == "none":
+            raise ApplicationError("no prompt or image selected")
+        if self._limit_reached:
+            raise ApplicationError("rollout limit reached")
+        fresh = self._world_epoch != self._applied_world_id
+        return ZingInput(
+            self._world_epoch, self._image if fresh else None, self.state.prompt,
+            self._seed, self.state._pressed_keys, self._conditioning in {"uploaded", "built_in"},
+        )
+
+    def generate(self, input: ZingInput) -> ZingResult:
+        return self.engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> ZingOutput | None:
+        if outcome.error is not None:
+            # Native inference failures are fatal; a reset cannot repair them.
+            raise outcome.error
+        result: ZingResult = outcome.result
+        self._applied_world_id = result.world_id
+        self._completed_chunks = result.index
+        self._active_prompt = result.prompt
+        self._generating = False
+        if result.complete:
+            self._limit_reached = True
+            self.state._pressed_keys = frozenset()
+            await self.send(RolloutLimitReached(
+                completed_chunks=result.index, max_chunks=self._require_config().max_chunks,
+                world_epoch=result.world_id,
+            ))
+        await self.send(ChunkCompleted(
+            chunk=result.index, video_frames=int(result.frames.shape[0]),
+            generation_seconds=outcome.elapsed, prompt=result.prompt,
+            action_keys=sorted(result.pressed_keys), cache_frames=result.cache_frames,
+        ))
+        await self.send(self._state_update())
+        return ZingOutput(main_video=result.frames)
 
     def _request_reset(self) -> None:
-        self.state._reset_requested = True
         self.state._pressed_keys = frozenset()
         self._active_prompt = None
         self._completed_chunks = 0
@@ -422,7 +391,7 @@ class Zing(ReactorPipeline):
             image_name=self._image_name,
             seed=self._seed,
             completed_chunks=self._completed_chunks,
-            reset_queued=self.state._reset_requested,
+            reset_queued=self._world_epoch != self._applied_world_id and self._world_epoch > 0,
             generating=self._generating,
             max_chunks=self._config.max_chunks if self._config is not None else 0,
             limit_reached=self._limit_reached,
@@ -433,16 +402,3 @@ class Zing(ReactorPipeline):
         if self._config is None:
             raise RuntimeError("Zing is not loaded")
         return self._config
-
-    def _require_backend(self) -> _Backend:
-        if self._backend is None:
-            raise RuntimeError("Zing is not loaded")
-        return self._backend
-
-
-class _null_image:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *_: object) -> None:
-        return None

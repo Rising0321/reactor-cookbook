@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from reactor_runtime import get_weights_path
 
 
 @dataclass(frozen=True)
@@ -30,16 +29,16 @@ class ZingAdapterConfig:
     example_prompt: str
 
 
-def read_config(path: Path | None) -> ZingAdapterConfig:
+def read_config(path: Path | None, weights_root: Path) -> ZingAdapterConfig:
     if path is None:
         raise ValueError("Zing requires zing.yaml")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     source, assets, inference = raw["source"], raw["assets"], raw["inference"]
     result = ZingAdapterConfig(
-        source_path=Path(source["path"]), source_url=str(source["url"]),
+        source_path=(path.parent / Path(source["path"])).resolve(), source_url=str(source["url"]),
         source_revision=str(source["revision"]), repo_id=str(assets["repo_id"]),
         asset_revision=str(assets["revision"]),
-        asset_path=(get_weights_path() / Path(assets["path"])).resolve(),
+        asset_path=(weights_root / Path(assets["path"])).resolve(),
         width=int(inference["width"]), height=int(inference["height"]),
         seed=int(inference["seed"]), max_chunks=int(inference["max_chunks"]),
         local_attn_size=int(inference["local_attn_size"]), sink_size=int(inference["sink_size"]),

@@ -143,6 +143,9 @@ Commands return typed, command-correlated messages for the client timeline:
   immediately, and every successful state change broadcasts another.
 
 Message delivery stays outside the synchronous inference loop.
+Completed-step snapshots report `generating=false` and the completed chunk
+count. Use `chunk_completed` to track progress; no generation-start message is
+emitted after computation finishes.
 
 ## Rollout length and recording
 
@@ -165,3 +168,11 @@ audio.
 - Selecting the same condition, prompt, controls, and seed reproduces the same
   sampling inputs.
 - Stop `reactor run` to remove its container and release GPU memory.
+
+## Runtime 3.5
+
+This recipe uses Reactor Runtime 3.5. `set_image`, `example_image`, and `reset`
+start a fresh world; `set_prompt` preserves an active world's history.
+`chunk_completed.generation_seconds` measures the complete model step, including
+initialization on the first chunk. Existing commands and messages retain their
+schema, and playback adapts to measured generation speed.

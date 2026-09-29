@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import io
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Iterator
 
 from PIL import Image, UnidentifiedImageError
 from reactor_runtime import CommandError, UploadedFile
@@ -26,17 +23,3 @@ def validate_image(upload: UploadedFile) -> None:
             image.verify()
     except (UnidentifiedImageError, OSError) as exc:
         raise CommandError("invalid_image", "The uploaded bytes are not a readable image.") from exc
-
-
-@contextmanager
-def materialized_image(value: Path | UploadedFile, directory: Path) -> Iterator[Path]:
-    if isinstance(value, Path):
-        yield value
-        return
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "uploaded-first-frame"
-    target.write_bytes(value.data)
-    try:
-        yield target
-    finally:
-        target.unlink(missing_ok=True)

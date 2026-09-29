@@ -27,7 +27,6 @@ class ZingState(InputState):
         ),
     )
     _pressed_keys: frozenset[str] = frozenset()
-    _reset_requested: bool = True
 
 
 class StateUpdate(ModelMessage):
