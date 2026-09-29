@@ -20,7 +20,6 @@ class Lyra2State(InputState):
     _pitch: float = 0.0
     _yaw: float = 0.0
     _roll: float = 0.0
-    _reset_requested: bool = False
 
 
 class StateUpdate(ModelMessage):

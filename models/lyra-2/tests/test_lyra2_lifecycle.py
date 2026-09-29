@@ -14,14 +14,14 @@ from lyra2_schema import Lyra2State
 def test_session_end_clears_conditioning_and_progress():
     model = Lyra2()
     model.state = Lyra2State()
-    model.backend = Mock()
+    model.engine = Mock()
     model.image = Path("selected.jpg")
     model.image_name = "selected.jpg"
     model.active_prompt = "old scene"
     model.chunk = 5
     model.generating = True
     model.ended()
-    model.backend.clear.assert_called_once_with()
+    model.engine.reset.assert_called_once_with()
     assert model.image is None and model.image_name is None
     assert model.active_prompt is None and model.chunk == 0
     assert model.generating is False
@@ -50,7 +50,7 @@ def test_storage_paths_resolve_without_host_specific_directories(
     path.write_text(yaml.safe_dump(config))
     monkeypatch.setattr(lyra2, "get_weights_path", lambda: weights)
     backend = Mock()
-    monkeypatch.setattr(lyra2, "Lyra2Backend", backend)
+    monkeypatch.setattr(lyra2.Lyra2Model, "load", backend)
     for name in (
         "HF_HOME",
         "HUGGINGFACE_HUB_CACHE",
@@ -67,4 +67,4 @@ def test_storage_paths_resolve_without_host_specific_directories(
     )
     assert Path(model.config["cache_path"]).is_dir()
     assert Path(model.config["output_path"]).is_dir()
-    backend.assert_called_once_with(model.config)
+    backend.assert_called_once_with(path, weights)

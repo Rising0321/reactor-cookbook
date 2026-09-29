@@ -9,7 +9,6 @@ from pathlib import Path
 from types import MethodType
 
 import numpy as np
-from reactor_runtime import get_weights_path
 
 # Use Lyra's FlashAttention path to avoid mixed CUDA/cuDNN fused-attention
 # dependencies. Explicit environment settings take precedence.
@@ -20,10 +19,10 @@ os.environ.setdefault("NVTE_FLASH_ATTN", "1")
 class Lyra2Backend:
     """Retain upstream streaming VAE caches, latent history, DA3, and Sparse3DCache."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, weights_root: Path):
         self.config = config
         source = Path(config["source_path"]).resolve()
-        weights = get_weights_path().expanduser().resolve()
+        weights = weights_root.expanduser().resolve()
         mounted_checkpoints = weights / "source/Lyra-2/checkpoints"
         image_checkpoints = source / "checkpoints"
         if not image_checkpoints.exists():

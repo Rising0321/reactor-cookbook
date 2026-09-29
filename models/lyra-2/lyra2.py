@@ -4,24 +4,22 @@ from __future__ import annotations
 
 import io
 import secrets
-import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import numpy as np
 import yaml
 from PIL import Image, UnidentifiedImageError
-from reactor_runtime import (ClientInfo, CommandError, InputField, ReactorPipeline,
+from reactor_runtime import (ApplicationError, ClientInfo, CommandError, InputField, ReactorApp, StepOutcome,
                              UploadedFile, connected, disconnected, event,
                              get_weights_path, session_ended, session_started)
 
-from lyra2_backend import Lyra2Backend
+from lyra2_model import Lyra2Input, Lyra2Model, Lyra2Result
 from lyra2_camera import Lyra2CameraPlanner
 from lyra2_schema import (CameraChanged, ChunkCompleted, ImageSelected, Lyra2Output,
                           Lyra2State, PromptQueued, ResetQueued, StateUpdate)
 
 
-class Lyra2(ReactorPipeline):
+class Lyra2(ReactorApp):
     """Explore an image-conditioned world through native 80-frame AR updates."""
 
     state: Lyra2State
@@ -30,7 +28,11 @@ class Lyra2(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self.config: dict | None = None
-        self.backend: Lyra2Backend | None = None
+        self.engine = Lyra2Model()
+        self.world_id = 0
+        self.applied_world_id: int | None = None
+        self.anchor: np.ndarray | None = None
+        self.intrinsics: np.ndarray | None = None
         self.planner: Lyra2CameraPlanner | None = None
         self.image: UploadedFile | Path | None = None
         self.image_name: str | None = None
@@ -43,7 +45,8 @@ class Lyra2(ReactorPipeline):
         if config_path is None:
             raise ValueError("Lyra-2 requires lyra2.yaml")
         self.config = yaml.safe_load(config_path.read_text())
-        self.config["source_path"] = str(Path(self.config["source_path"]).expanduser().resolve())
+        source = Path(self.config["source_path"]).expanduser()
+        self.config["source_path"] = str((source if source.is_absolute() else config_path.parent / source).resolve())
         weights = get_weights_path()
         for key in ("output_path", "cache_path"):
             location = Path(self.config[key]).expanduser()
@@ -59,7 +62,7 @@ class Lyra2(ReactorPipeline):
             "TORCH_HOME": f"{cache}/torch", "XDG_CACHE_HOME": f"{cache}/xdg",
             "PYTORCH_ALLOC_CONF": "expandable_segments:True",
         }.items(): os.environ.setdefault(name, value)
-        self.backend = Lyra2Backend(self.config)
+        self.engine.load(config_path, weights)
         self.planner = Lyra2CameraPlanner(
             translation_per_frame=self.config["translation_per_frame"],
             rotation_degrees_per_frame=self.config["rotation_degrees_per_frame"],
@@ -68,12 +71,14 @@ class Lyra2(ReactorPipeline):
     @session_started
     def started(self) -> None:
         self.state.prompt = ""
-        self.state._reset_requested = False
         self._clear_motion()
 
     @session_ended
     def ended(self) -> None:
-        if self.backend: self.backend.clear()
+        self.engine.reset()
+        self.applied_world_id = None
+        self.anchor = None
+        self.intrinsics = None
         self.image = None
         self.image_name = None
         self.chunk = 0
@@ -104,7 +109,7 @@ class Lyra2(ReactorPipeline):
         "Seed from 0 to 2147483647 for the fresh rollout. Use -1 to retain the active seed; a "
         "non-negative value becomes active when the rollout begins."
     ))) -> ImageSelected:
-        self._decode(image)
+        self.anchor = self._decode(image)
         if seed >= 0: self.seed = seed
         self.image, self.image_name = image, image.name
         self.state.prompt = prompt.strip() or self._cfg()["default_prompt"]
@@ -124,6 +129,7 @@ class Lyra2(ReactorPipeline):
         choices = [p for p in images if p != self.image] or images
         self.image = secrets.choice(choices)
         self.image_name = self.image.name
+        self.anchor = self._image_array()
         caption = self.image.with_suffix(".txt")
         self.state.prompt = caption.read_text().strip() if caption.exists() else self._cfg()["default_prompt"]
         self._request_reset()
@@ -190,32 +196,43 @@ class Lyra2(ReactorPipeline):
         old = self.chunk; self._request_reset(); await self.send(self._state())
         return ResetQueued(seed=self.seed, replaced_chunks=old)
 
-    async def inference(self) -> AsyncGenerator[Lyra2Output | None, None]:
-        backend, planner = self.backend, self.planner
-        if backend is None or planner is None: raise RuntimeError("Lyra-2 not loaded")
-        while True:
-            if self.state._reset_requested:
-                self.generating = True; await self.send(self._state())
-                try:
-                    c2w, _ = backend.reset(self._image_array(), prompt=self.state.prompt, seed=self.seed)
-                    planner.reset(c2w)
-                    self.chunk = 0; self.active_prompt = None; self.state._reset_requested = False
-                finally: self.generating = False
-            if self.image is None:
-                yield None; continue
+    async def process_input(self) -> Lyra2Input:
+        if self.image is None:
+            raise ApplicationError("No image selected")
+        fresh = self.world_id != self.applied_world_id
+        camera = None
+        if not fresh:
             controls = {name: getattr(self.state, f"_{name}") for name in
                         ("forward", "strafe", "vertical", "pitch", "yaw", "roll")}
-            prompt = self.state.prompt
-            camera = planner.plan_chunk(**controls, frame_count=80, intrinsics=backend.intrinsics)
-            self.generating = True; await self.send(self._state()); started = time.perf_counter()
-            try: frames, corrected = backend.generate_chunk(camera.w2c, camera.intrinsics, prompt=prompt, chunk=self.chunk + 1)
-            finally: self.generating = False
-            if corrected is not None: planner.reset(corrected)
-            self.chunk += 1; self.active_prompt = prompt
-            await self.send(ChunkCompleted(chunk=self.chunk, video_frames=len(frames),
-                generation_seconds=round(time.perf_counter() - started, 3), prompt=prompt))
+            camera = self.planner.plan_chunk(**controls, frame_count=80, intrinsics=self.intrinsics)
+        return Lyra2Input(self.world_id, self.anchor if fresh else None,
+                          self.state.prompt, self.seed,
+                          None if camera is None else camera.w2c,
+                          None if camera is None else camera.intrinsics)
+
+    def generate(self, input: Lyra2Input) -> Lyra2Result:
+        return self.engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> Lyra2Output | None:
+        if outcome.error is not None:
+            # Unexpected model failures end the session; no success hides a discontinuity.
+            raise outcome.error
+        result: Lyra2Result = outcome.result
+        self.applied_world_id = result.world_id
+        if result.corrected_c2w is not None:
+            self.planner.reset(result.corrected_c2w)
+        if result.intrinsics is not None:
+            self.intrinsics = result.intrinsics
+        self.chunk = result.chunk
+        if result.frames is None:
+            self.active_prompt = None
             await self.send(self._state())
-            yield Lyra2Output(main_video=frames)
+            return None
+        self.active_prompt = result.prompt
+        await self.send(ChunkCompleted(chunk=result.chunk, video_frames=len(result.frames),
+            generation_seconds=round(outcome.elapsed, 3), prompt=result.prompt))
+        await self.send(self._state())
+        return Lyra2Output(main_video=result.frames)
 
     def _decode(self, upload: UploadedFile) -> np.ndarray:
         if not upload.mime_type.startswith("image/") or not upload.data or upload.size > 25 * 1024 * 1024:
@@ -234,7 +251,11 @@ class Lyra2(ReactorPipeline):
         raise RuntimeError("No image selected")
 
     def _request_reset(self) -> None:
-        self.output.flush(); self.state._reset_requested = True; self._clear_motion()
+        self.engine.reset()
+        self.output.flush()
+        self.world_id += 1
+        self.applied_world_id = None
+        self._clear_motion()
 
     def _clear_motion(self) -> None:
         for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll"): setattr(self.state, f"_{name}", 0.0)

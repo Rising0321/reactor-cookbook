@@ -58,8 +58,21 @@ curl -s localhost:8080/schema
 
 ## Runtime boundary
 
+Runtime 3.5 drives `process_input()`, `generate()`, and `process_output()`.
+`lyra2_model.py` owns the weights, native caches, and completed chunk count;
+its frozen input and result dataclasses contain plain values and CPU arrays.
+The application plans camera poses and reads timing from `outcome.elapsed`.
+Selecting an image or resetting assigns a new world ID. The first step seeds
+Lyra and returns its calibrated camera pose and intrinsics without media;
+later steps continue that world in native 80-frame chunks. The anchor travels
+only until that ID is acknowledged. No FPS override or rollout cap is added.
+
+Run the CPU boundary tests with `PYTHONPATH=. python -m pytest tests/ -q`.
+They cover refusal before model execution, frozen step inputs, anchor
+acknowledgment, ten continuous chunks, and failure without committing progress.
+
 Lyra 2.0 is an autoregressive video model. The adapter calls the released
-`autoregressive_step` once per Reactor inference turn and emits exactly one
+`autoregressive_step` once per media-producing Reactor step and emits exactly one
 native 80-frame RGB chunk. Model weights load once, while the full latent
 history, streaming VAE encoder and decoder caches, camera trajectory, DA3 depth
 state, and `Sparse3DCache` remain alive across chunks.
