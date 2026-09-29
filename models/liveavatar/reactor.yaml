@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: liveavatar
-  version: v0.3.8
+  version: v0.3.9
   description: Audio-driven avatar clips from an uploaded identity image and audio.
   resources:
     gpu:
@@ -11,7 +11,7 @@ runtime:
   import: liveavatar_pipeline:LiveAvatar
   weights_path: /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
 build:
-  runtime_version: "3.5.0"
+  runtime_version: "3.6.0"
   python_version: "3.12"
   cuda_version: "12.8.1"
   python_requirements: requirements.txt

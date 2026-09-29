@@ -8,7 +8,7 @@ and stream the resulting video with the uploaded speech.
 The recipe serves LiveAvatar's four-step Turbo profile on three NVIDIA B200
 GPUs. A session waits for your inputs and an explicit `start` command.
 
-Reactor Runtime 3.5 drives the application through `process_input()`,
+Reactor Runtime 3.6 drives the application through `process_input()`,
 `generate()` and `process_output()`. A separate `liveavatar_model.py` owns
 native take state and reports clip progress through typed results. Take IDs
 apply the selected conditions once while preserving the native TPP stream.

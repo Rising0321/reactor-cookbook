@@ -13,7 +13,7 @@ def test_manifest_has_native_yaml_build_and_three_gpu_profile():
     assert manifest["model"]["resources"]["gpu"]["count"] == 3
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_TURBO"] == "1"
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_STEPS"] == "4"
-    assert manifest["build"]["runtime_version"] == "3.5.0"
+    assert manifest["build"]["runtime_version"] == "3.6.0"
     assert "--force-reinstall flash-attn-4==4.0.0b30" in manifest["build"]["run"][0]
     assert "from flash_attn.cute import" in manifest["build"]["run"][1]
     assert not (Path(__file__).parents[1] / "Dockerfile").exists()
