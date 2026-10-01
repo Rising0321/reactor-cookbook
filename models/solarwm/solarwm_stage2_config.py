@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from huggingface_hub import snapshot_download
 
 
 @dataclass(frozen=True)
@@ -15,7 +14,6 @@ class SolarWMConfig:
     """Hold validated paths and inference settings for SolarWM Stage2."""
 
     source_path: Path
-    source_url: str
     source_revision: str
     upstream_config: Path
     repo_id: str
@@ -25,13 +23,12 @@ class SolarWMConfig:
     runtime_root: Path
     seed: int
     default_prompt: str
-    context_latents: int
     max_chunks: int
     translation_units_per_latent: float
     rotation_degrees_per_latent: float
 
 
-def read_config(config_path: Path | None) -> SolarWMConfig:
+def read_config(config_path: Path | None, weights_root: Path) -> SolarWMConfig:
     """Read the adapter YAML and reject settings that alter the native cache contract."""
     if config_path is None:
         raise ValueError("SolarWM requires runtime.config in reactor.yaml")
@@ -46,27 +43,23 @@ def read_config(config_path: Path | None) -> SolarWMConfig:
         return (path if path.is_absolute() else config_path.parent / path).resolve()
 
     source_path = resolve(source["path"])
-    base_path = resolve(assets["root"]) / "SolarWM-5B-base"
-    checkpoint_path = resolve(assets["root"]) / "SolarWM-5B-sgf-stage2-81f"
-    context = int(stream["context_latents"])
-    if context != 18:
-        raise ValueError("SolarWM's native local_attn_size requires context_latents=18")
+    asset_root = (weights_root / assets["root"]).resolve()
+    base_path = asset_root / "SolarWM-5B-base"
+    checkpoint_path = asset_root / "SolarWM-5B-sgf-stage2-81f"
     max_chunks = int(stream["max_chunks"])
     if not 1 <= max_chunks <= 320:
         raise ValueError("stream.max_chunks must be between 1 and 320")
     return SolarWMConfig(
         source_path=source_path,
-        source_url=str(source["url"]),
         source_revision=str(source["revision"]),
         upstream_config=source_path / str(source["config"]),
         repo_id=str(assets["repo_id"]),
         checkpoint_revision=str(assets["revision"]),
         base_path=base_path,
         checkpoint_path=checkpoint_path,
-        runtime_root=resolve(assets["root"]) / "runtime",
+        runtime_root=asset_root / "runtime",
         seed=int(raw["inference"]["seed"]),
         default_prompt=str(raw["inference"]["default_prompt"]).strip(),
-        context_latents=context,
         max_chunks=max_chunks,
         translation_units_per_latent=float(motion["translation_units_per_latent"]),
         rotation_degrees_per_latent=float(motion["rotation_degrees_per_latent"]),
@@ -76,29 +69,7 @@ def read_config(config_path: Path | None) -> SolarWMConfig:
 def prepare_runtime(config: SolarWMConfig) -> None:
     """Verify the pinned source and download only the Stage2 5B files in use."""
     if not (config.source_path / ".git").is_dir():
-        config.source_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [
-                "git",
-                "clone",
-                "--filter=blob:none",
-                "--no-checkout",
-                config.source_url,
-                str(config.source_path),
-            ],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(config.source_path),
-                "checkout",
-                "--detach",
-                config.source_revision,
-            ],
-            check=True,
-        )
+        raise RuntimeError("The image must include the pinned SolarWM checkout")
     revision = subprocess.run(
         [
             "git",
@@ -122,6 +93,8 @@ def prepare_runtime(config: SolarWMConfig) -> None:
         "SolarWM-5B-sgf-stage2-81f/**",
     )
     if not (config.checkpoint_path / "model.pt").is_file():
+        from huggingface_hub import snapshot_download
+
         snapshot_download(
             repo_id=config.repo_id,
             revision=config.checkpoint_revision,

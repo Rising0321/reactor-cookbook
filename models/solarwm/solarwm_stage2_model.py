@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
 
 @dataclass(frozen=True)
 class SolarWMAnchor:
-    image: bytes
+    """Prepared uint8 RGB (480,864,3) image and new-world conditions."""
+
+    image: np.ndarray
     prompt: str
     seed: int
 
@@ -43,19 +44,15 @@ class SolarWMModel:
     def __init__(self) -> None:
         self.backend = None
         self.world_id: int | None = None
-        self.chunk_index = 0
+        self._complete = False
         self.max_chunks = 320
 
-    def load(self, config_path: Path | None) -> None:
-        from solarwm_backend import BackendSettings, SolarWMBackend
-        from solarwm_config import prepare_runtime, read_config
+    def load(self, config) -> None:
+        from solarwm_stage2_backend import BackendSettings, SolarWMBackend
 
-        config = read_config(config_path)
-        prepare_runtime(config)
         self.max_chunks = config.max_chunks
         self.backend = SolarWMBackend(
             BackendSettings(
-                config.source_path,
                 config.upstream_config,
                 config.base_path,
                 config.checkpoint_path,
@@ -71,21 +68,21 @@ class SolarWMModel:
                 input.anchor.seed, input.anchor.image, input.anchor.prompt
             )
             self.world_id = input.world_id
-            self.chunk_index = 0
-        if self.chunk_index >= self.max_chunks:
+            self._complete = False
+        if self._complete:
             raise RolloutExhausted("reset the world before continuing")
-        frames = self.backend.generate_chunk(input.poses)
-        self.chunk_index += 1
+        frames, chunk_index = self.backend.generate_chunk(input.poses)
+        self._complete = chunk_index >= self.max_chunks
         return SolarWMResult(
-            self.world_id,
-            self.chunk_index,
-            frames,
-            self.chunk_index >= self.max_chunks,
-            self.max_chunks,
+            world_id=self.world_id,
+            chunk_index=chunk_index,
+            frames=frames,
+            complete=self._complete,
+            max_chunks=self.max_chunks,
         )
 
     def reset(self) -> None:
         if self.backend is not None:
             self.backend.end_session()
         self.world_id = None
-        self.chunk_index = 0
+        self._complete = False

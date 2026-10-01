@@ -15,11 +15,11 @@ import numpy as np
 import pytest
 from PIL import Image
 from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
-from solarwm import SolarWM
-from solarwm_camera import CameraMotionPlanner, MotionConfig
-from solarwm_images import normalize_output_frames, validate_uploaded_image
-from solarwm_model import NoAnchor, SolarWMInput
-from solarwm_types import SolarWMState
+from solarwm_stage2 import SolarWM
+from solarwm_stage2_camera import CameraMotionPlanner, MotionConfig
+from solarwm_stage2_images import normalize_output_frames, prepare_uploaded_image
+from solarwm_stage2_model import NoAnchor, SolarWMInput, SolarWMModel
+from solarwm_stage2_types import SolarWMState
 
 
 def _upload() -> UploadedFile:
@@ -76,26 +76,27 @@ def test_pitch_direction_matches_opencv_camera_axes(pitch: float) -> None:
 
 
 def test_upload_validation_and_output_normalization() -> None:
-    validate_uploaded_image(_upload())
+    prepare_uploaded_image(_upload())
     frames = normalize_output_frames(np.zeros((12, 480, 864, 3), dtype=np.float32))
     assert frames.dtype == np.uint8
     assert frames.flags.c_contiguous
 
 
 def test_set_image_accepts_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Allow uploaded-image inference with SolarWM's empty text conditioning."""
+    """Use the configured default when the first image has no prompt."""
     import asyncio
 
     model = SolarWM()
+    model._engine = SolarWMModel()
     model.state = SolarWMState()
     model._config = SimpleNamespace(
         max_chunks=320,
         default_prompt="A realistic cinematic scene with smooth camera motion.",
     )
-    model._selected_image = None
-    model._seed = 42
-    model._chunk_index = 0
-    model._last_chunk_seconds = None
+    model.state._selected_image = None
+    model.state._seed = 42
+    model.state._chunk_index = 0
+    model.state._last_chunk_seconds = None
     model.state.prompt = ""
     model.state._limit_reached = False
     for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll"):
@@ -105,7 +106,6 @@ def test_set_image_accepts_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None
     async def record(message: object) -> None:
         sent.append(message)
 
-    monkeypatch.setattr("solarwm.validate_uploaded_image", lambda _image: None)
     monkeypatch.setattr(model, "send", record)
 
     reply = asyncio.run(model.set_image(_upload(), ""))
@@ -114,11 +114,12 @@ def test_set_image_accepts_empty_prompt(monkeypatch: pytest.MonkeyPatch) -> None
     assert (
         model.state.prompt == "A realistic cinematic scene with smooth camera motion."
     )
-    assert model._world_id != model._applied_world_id
+    assert model.state._world_id != model.state._applied_world_id
 
 
 def test_refused_step_never_reaches_model() -> None:
     app = SolarWM()
+    app._engine = SolarWMModel()
     app.state = SolarWMState()
     app._engine.generate = Mock(side_effect=AssertionError("must not run"))
     with pytest.raises(ApplicationError):
@@ -128,6 +129,7 @@ def test_refused_step_never_reaches_model() -> None:
 
 def test_generate_reads_only_frozen_input() -> None:
     app = SolarWM()
+    app._engine = SolarWMModel()
     value = SolarWMInput(1, None, np.eye(4)[None])
     with pytest.raises(FrozenInstanceError):
         value.world_id = 2
@@ -141,19 +143,24 @@ def test_generate_reads_only_frozen_input() -> None:
 
 def test_ten_continuous_hook_steps_anchor_once_and_native_limit() -> None:
     app = SolarWM()
+    app._engine = SolarWMModel()
     app.state = SolarWMState()
     app._config = SimpleNamespace(max_chunks=10, default_prompt="forest")
-    app._planner = CameraMotionPlanner(MotionConfig(1, 8))
+    app.state._planner = CameraMotionPlanner(MotionConfig(1, 8))
     app._engine.max_chunks = 10
     resets = []
 
     class Backend:
+        index = 0
+
         def reset(self, *args):
             resets.append(args)
+            self.index = 0
 
         def generate_chunk(self, poses):
             assert poses.shape == (3, 4, 4)
-            return np.zeros((12, 8, 8, 3), np.uint8)
+            self.index += 1
+            return np.zeros((12, 8, 8, 3), np.uint8), self.index
 
         def end_session(self):
             pass
@@ -169,7 +176,7 @@ def test_ten_continuous_hook_steps_anchor_once_and_native_limit() -> None:
             assert result.chunk_index == index
             await app.process_output(StepOutcome(result=result, elapsed=1.25))
         assert len(resets) == 1
-        assert app._last_chunk_seconds == 1.25
+        assert app.state._last_chunk_seconds == 1.25
         with pytest.raises(ApplicationError):
             await app.process_input()
         await app.reset(43)
@@ -180,29 +187,31 @@ def test_ten_continuous_hook_steps_anchor_once_and_native_limit() -> None:
 
 def test_model_error_reaches_output_without_counting_step() -> None:
     app = SolarWM()
+    app._engine = SolarWMModel()
     app.state = SolarWMState()
     with pytest.raises(NoAnchor) as caught:
         app.generate(SolarWMInput(1, None, np.eye(4)[None]))
     with pytest.raises(NoAnchor):
         asyncio.run(app.process_output(StepOutcome(error=caught.value)))
-    assert app._chunk_index == app._engine.chunk_index == 0
+    assert app.state._chunk_index == 0
 
 
 def test_upload_rejects_declared_type_mismatch() -> None:
     upload = _upload()
     wrong = UploadedFile(name="anchor.jpg", mime_type="image/jpeg", data=upload.data)
     with pytest.raises(CommandError):
-        validate_uploaded_image(wrong)
+        prepare_uploaded_image(wrong)
 
 
 def test_backend_failure_after_success_does_not_count_or_acknowledge() -> None:
     app = SolarWM()
+    app._engine = SolarWMModel()
     app.state = SolarWMState()
     app._config = SimpleNamespace(max_chunks=320, default_prompt="forest")
-    app._planner = CameraMotionPlanner(MotionConfig(1, 8))
+    app.state._planner = CameraMotionPlanner(MotionConfig(1, 8))
     app._engine.backend = SimpleNamespace(
         reset=Mock(),
-        generate_chunk=Mock(return_value=np.zeros((9, 8, 8, 3), np.uint8)),
+        generate_chunk=Mock(return_value=(np.zeros((9, 8, 8, 3), np.uint8), 1)),
     )
 
     async def drive():
@@ -214,15 +223,15 @@ def test_backend_failure_after_success_does_not_count_or_acknowledge() -> None:
         await app.process_output(StepOutcome(result=result, elapsed=0.5))
         value = await app.process_input()
         assert value.anchor is None
-        acknowledged = app._applied_world_id
+        acknowledged = app.state._applied_world_id
         app._engine.backend.generate_chunk.side_effect = RuntimeError("backend failed")
         with pytest.raises(RuntimeError, match="backend failed") as caught:
             app.generate(value)
         with pytest.raises(RuntimeError, match="backend failed"):
             await app.process_output(StepOutcome(error=caught.value))
-        assert app._chunk_index == app._engine.chunk_index == 1
-        assert app._applied_world_id == acknowledged
-        assert app._last_chunk_seconds == 0.5
+        assert app.state._chunk_index == 1
+        assert app.state._applied_world_id == acknowledged
+        assert app.state._last_chunk_seconds == 0.5
 
     asyncio.run(drive())
 
@@ -236,9 +245,61 @@ def guarded(name, *args, **kwargs):
         raise AssertionError(name)
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
-import solarwm_model, solarwm_backend, solarwm_config
-solarwm_model.SolarWMModel()
+import solarwm_stage2_model, solarwm_stage2_backend, solarwm_stage2_config
+solarwm_stage2_model.SolarWMModel()
 """
     subprocess.run(
         [sys.executable, "-c", code], cwd=Path(__file__).parents[1], check=True
     )
+
+
+def test_image_prepared_once_at_native_shape():
+    value = prepare_uploaded_image(_upload())
+    assert value.shape == (480, 864, 3)
+    assert value.dtype == np.uint8
+    app = SolarWM()
+    app.state = SolarWMState()
+    app._config = SimpleNamespace(max_chunks=320, default_prompt="forest")
+    app.state._planner = CameraMotionPlanner(MotionConfig(1, 8))
+    asyncio.run(app.set_image(_upload(), "forest"))
+    assert asyncio.run(app.process_input()).anchor.image is app.state._selected_image
+
+
+def test_reset_only_queues_new_world():
+    app = SolarWM()
+    app.state = SolarWMState()
+    app._engine = Mock()
+    app._config = SimpleNamespace(max_chunks=320, default_prompt="forest")
+    asyncio.run(app.set_image(_upload(), "forest"))
+    previous = app.state._world_id
+    asyncio.run(app.reset(42))
+    app._engine.reset.assert_not_called()
+    assert app.state._world_id == previous + 1
+
+
+def test_config_paths_use_explicit_weights_root(tmp_path):
+    from solarwm_stage2_config import read_config
+
+    config = read_config(Path(__file__).parents[1] / "solarwm.yaml", tmp_path)
+    assert config.base_path.is_relative_to(tmp_path)
+    assert config.checkpoint_path.is_relative_to(tmp_path)
+    assert config.runtime_root.is_relative_to(tmp_path)
+
+
+def test_application_with_fake_model():
+    from solarwm_stage2_model import SolarWMResult
+
+    app = SolarWM()
+    app.state = SolarWMState()
+    app._config = SimpleNamespace(max_chunks=320, default_prompt="forest")
+    app.state._planner = CameraMotionPlanner(MotionConfig(1, 8))
+    app._engine = Mock()
+    asyncio.run(app.set_image(_upload(), "forest"))
+    value = asyncio.run(app.process_input())
+    result = SolarWMResult(
+        value.world_id, 1, np.zeros((9, 2, 2, 3), np.uint8), False, 320
+    )
+    app._engine.generate.return_value = result
+    assert app.generate(value) is result
+    asyncio.run(app.process_output(StepOutcome(result=result)))
+    assert asyncio.run(app.process_input()).anchor is None

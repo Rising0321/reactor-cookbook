@@ -1,13 +1,12 @@
 source:
-  path: /opt/dlami/nvme/.cache_hf/sources/SolarWM
-  url: https://github.com/Junchao-cs/SolarWM.git
+  path: /opt/solarwm-source
   revision: 7c52987bd9c7c387884c4d963338b3ab6069c394
   config: configs/examples/wan22_ti2v_5b/infer_stage2_sgf_camera_length.yaml
 
 assets:
   repo_id: junchaoh-cs/SolarWM
   revision: 0fc64396fb5b7480f2c0792a23db552008efe722
-  root: /opt/dlami/nvme/.cache_hf/SolarWM
+  root: weights
 
 inference:
   seed: 42
@@ -16,8 +15,6 @@ inference:
     detailed textures, and smooth camera motion.
 
 stream:
-  # Preserve SolarWM's native 18-latent, six-chunk rolling KV-cache window.
-  context_latents: 18
   max_chunks: 320
 
 motion:

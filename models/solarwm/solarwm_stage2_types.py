@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import numpy as np
+from solarwm_stage2_camera import CameraMotionPlanner
 
 from reactor_runtime import (
     InputField,
@@ -52,7 +53,7 @@ class StateUpdate(ModelMessage):
     )
     completed_chunks: int = MessageField(
         description=(
-            "Number of completed native three-latent chunks in the active world. Chunk 1 emits "
+            "Number of completed generated video chunks in the active world. Chunk 1 emits "
             "9 frames and each later chunk emits 12 frames."
         )
     )
@@ -70,7 +71,7 @@ class StateUpdate(ModelMessage):
     )
     next_chunk_frames: int | None = MessageField(
         description=(
-            "Frames emitted by `next_chunk`: 9 for the first causal chunk, 12 thereafter, and "
+            "Frames emitted by `next_chunk`: 9 for the first chunk, 12 thereafter, and "
             "null before image selection or after the rollout limit is reached."
         )
     )
@@ -118,9 +119,6 @@ class StateUpdate(ModelMessage):
 class ImageSelected(ModelMessage):
     """Emitted when an uploaded image starts a fresh SolarWM world."""
 
-    source: Literal["uploaded"] = MessageField(
-        description="Image source accepted by `set_image`; always `uploaded`."
-    )
     filename: str = MessageField(description="Selected anchor-image filename.")
     prompt: str = MessageField(
         description=(
@@ -135,9 +133,6 @@ class PromptQueued(ModelMessage):
     """Emitted when `set_prompt` queues a fresh text-conditioned rollout."""
 
     prompt: str = MessageField(description="Trimmed prompt accepted by `set_prompt`.")
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that first encodes the new prompt."
-    )
 
 
 class CameraMotionChanged(ModelMessage):
@@ -246,3 +241,11 @@ class SolarWMState(InputState):
         ),
     )
     _limit_reached: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None
+    _planner: CameraMotionPlanner | None = None
+    _selected_image: np.ndarray | None = None
+    _image_name: str = ""
+    _seed: int = 42
+    _chunk_index: int = 0
+    _last_chunk_seconds: float | None = None

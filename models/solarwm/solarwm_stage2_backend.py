@@ -2,47 +2,39 @@
 
 from __future__ import annotations
 
-import io
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
+from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps
 
 
 @dataclass(frozen=True)
 class BackendSettings:
     """Locate pinned SolarWM source, weights, and runtime scratch space."""
 
-    source_path: Path
     upstream_config: Path
     base_path: Path
     checkpoint_path: Path
     runtime_root: Path
 
 
-def _expose_upstream_package(source_path: Path) -> None:
-    """Let the ``solarwm.py`` entry module resolve upstream SolarWM subpackages."""
-    package_path = source_path / "src" / "solarwm"
-    if not package_path.is_dir():
-        raise RuntimeError(f"SolarWM package is missing: {package_path}")
-    entry_module = sys.modules.get("solarwm")
-    if entry_module is None:
-        entry_module = ModuleType("solarwm")
-        sys.modules["solarwm"] = entry_module
-    search_locations = [str(package_path)]
-    entry_module.__path__ = search_locations
-    if entry_module.__spec__ is not None:
-        entry_module.__spec__.submodule_search_locations = search_locations
+@dataclass
+class _Run:
+    """One world's encoded conditions, native caches and completed chunk count."""
+
+    first_latent: Any
+    condition: Any
+    generator: Any
+    kv_cache: Any
+    crossattn_cache: Any
+    chunk_index: int = 0
 
 
 class SolarWMBackend:
     """Preserve SolarWM self-KV, cross-attention, and VAE caches across chunks."""
 
     def __init__(self, settings: BackendSettings) -> None:
-        _expose_upstream_package(settings.source_path)
         import torch
         from solarwm.backends.wan22.runtime.stage2 import (
             build_stage2_generation_provider,
@@ -62,60 +54,48 @@ class SolarWMBackend:
         self.torch = torch
         self.config = config
         self.device = self.provider.device
-        self.first_latent = None
-        self.condition = None
-        self.generator = None
-        self.kv_cache = None
-        self.crossattn_cache = None
-        self.chunk_index = 0
+        self._run: _Run | None = None
 
-    def reset(self, seed: int, image: bytes, prompt: str) -> None:
+    def reset(self, seed: int, image: np.ndarray, prompt: str) -> None:
         """Encode a fresh uploaded anchor and allocate native rolling caches."""
         torch = self.torch
         self.end_session()
-        pixels = _prepare_image(image, width=864, height=480)
-        pixel_tensor = torch.from_numpy(pixels).to(self.device, dtype=torch.float32)
+        pixel_tensor = torch.from_numpy(image).to(self.device, dtype=torch.float32)
         pixel_tensor = (pixel_tensor.permute(2, 0, 1)[None, :, None] / 127.5) - 1.0
         with torch.no_grad():
-            self.first_latent = self.provider.vae.encode(pixel_tensor).to(
-                torch.bfloat16
-            )
-            self.condition = self.provider.text_encoder([prompt])
-        self.generator = torch.Generator(device=self.device).manual_seed(int(seed))
-        self.kv_cache = self.provider.allocate_kv_cache(
+            first_latent = self.provider.vae.encode(pixel_tensor).to(torch.bfloat16)
+            condition = self.provider.text_encoder([prompt])
+        generator = torch.Generator(device=self.device).manual_seed(int(seed))
+        kv_cache = self.provider.allocate_kv_cache(
             1, dtype=torch.bfloat16, device=self.device
         )
-        self.crossattn_cache = self.provider.allocate_crossattn_cache(
+        crossattn_cache = self.provider.allocate_crossattn_cache(
             1, dtype=torch.bfloat16, device=self.device
         )
-        clear = getattr(self.provider.vae.module, "clear_cache", None)
-        if callable(clear):
-            clear()
-        self.chunk_index = 0
+        self.provider.vae.module.clear_cache()
+        self._run = _Run(
+            first_latent=first_latent,
+            condition=condition,
+            generator=generator,
+            kv_cache=kv_cache,
+            crossattn_cache=crossattn_cache,
+        )
 
-    def generate_chunk(self, relative_c2ws: np.ndarray) -> np.ndarray:
+    def generate_chunk(self, relative_c2ws: np.ndarray) -> tuple[np.ndarray, int]:
         """Generate and causally decode one native three-latent SolarWM chunk."""
         torch = self.torch
-        if any(
-            value is None
-            for value in (
-                self.first_latent,
-                self.condition,
-                self.generator,
-                self.kv_cache,
-                self.crossattn_cache,
-            )
-        ):
+        run = self._run
+        if run is None:
             raise RuntimeError("SolarWM rollout has not been reset")
         from solarwm.backends.wan22.runtime.stage0p5 import expand_timesteps_to_tokens
         from solarwm.backends.wan22.runtime.stage2 import _generation_steps
 
         chunk, frame_tokens = 3, int(self.config["model"]["frame_sequence_length"])
-        start = self.chunk_index * chunk
+        start = run.chunk_index * chunk
         shape = (1, chunk, 48, 30, 54)
-        latents = self.provider._noise(shape, self.generator)
+        latents = self.provider._noise(shape, run.generator)
         if start == 0:
-            latents[:, :1] = self.first_latent
+            latents[:, :1] = run.first_latent
         camera = _camera_tokens(relative_c2ws, frame_tokens, self.device)
         steps = _generation_steps(self.provider)
         if len(steps) != 4:
@@ -127,26 +107,26 @@ class SolarWMBackend:
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 flow = self.provider.diffusion(
                     latents,
-                    self.condition,
+                    run.condition,
                     camera,
                     expand_timesteps_to_tokens(timestep, frame_tokens),
                     sequence_length=chunk * frame_tokens,
-                    kv_cache=self.kv_cache,
-                    crossattn_cache=self.crossattn_cache,
+                    kv_cache=run.kv_cache,
+                    crossattn_cache=run.crossattn_cache,
                     current_start=start * frame_tokens,
                     cache_start=0,
                     cache_update_policy="none",
                 )
                 x0 = self.provider.diffusion.flow_to_x0(latents, flow, timestep)
             if start == 0:
-                x0[:, :1] = self.first_latent
+                x0[:, :1] = run.first_latent
             if index + 1 < len(steps):
                 next_t = torch.full(
                     (1, chunk), float(steps[index + 1].item()), device=self.device
                 )
                 if start == 0:
                     next_t[:, 0] = 0.0
-                noise = self.provider._noise(tuple(x0.shape), self.generator)
+                noise = self.provider._noise(tuple(x0.shape), run.generator)
                 latents = (
                     self.provider.diffusion.scheduler.add_noise(
                         x0.flatten(0, 1).float(),
@@ -157,55 +137,37 @@ class SolarWMBackend:
                     .to(torch.bfloat16)
                 )
                 if start == 0:
-                    latents[:, :1] = self.first_latent
+                    latents[:, :1] = run.first_latent
             else:
                 latents = x0
         if not bool(torch.isfinite(latents).all().item()):
             raise RuntimeError(
-                f"SolarWM chunk {self.chunk_index + 1} contains non-finite latents"
+                f"SolarWM chunk {run.chunk_index + 1} contains non-finite latents"
             )
         zeros = torch.zeros((1, chunk), device=self.device)
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
             self.provider.diffusion(
                 latents,
-                self.condition,
+                run.condition,
                 camera,
                 expand_timesteps_to_tokens(zeros, frame_tokens),
                 sequence_length=chunk * frame_tokens,
-                kv_cache=self.kv_cache,
-                crossattn_cache=self.crossattn_cache,
+                kv_cache=run.kv_cache,
+                crossattn_cache=run.crossattn_cache,
                 current_start=start * frame_tokens,
                 cache_start=0,
                 cache_update_policy="commit_detached",
             )
             decoded = self.provider.vae.decode(latents, use_cache=True)
-        self.chunk_index += 1
         frames = ((decoded[0].float().clamp(-1, 1) + 1) * 127.5).permute(0, 2, 3, 1)
-        return frames.byte().cpu().numpy()
+        output = frames.byte().cpu().numpy()
+        run.chunk_index += 1
+        return output, run.chunk_index
 
     def end_session(self) -> None:
-        """Drop rollout caches without unloading shared model weights."""
-        clear = getattr(self.provider.vae.module, "clear_cache", None)
-        if callable(clear):
-            clear()
-        self.first_latent = self.condition = self.generator = None
-        self.kv_cache = self.crossattn_cache = None
-        self.chunk_index = 0
-
-
-def _prepare_image(upload: bytes, *, width: int, height: int) -> np.ndarray:
-    """Apply SolarWM's bilinear resize and center-crop image path."""
-    with Image.open(io.BytesIO(upload)) as source:
-        image = ImageOps.exif_transpose(source).convert("RGB")
-        scale = max(height / image.height, width / image.width)
-        size = (round(image.width * scale), round(image.height * scale))
-        image = image.resize(size, Image.Resampling.BILINEAR)
-        left, top = (image.width - width) // 2, (image.height - height) // 2
-        return np.array(
-            image.crop((left, top, left + width, top + height)),
-            dtype=np.uint8,
-            copy=True,
-        )
+        """Drop one world's caches without unloading shared weights."""
+        self.provider.vae.module.clear_cache()
+        self._run = None
 
 
 def _camera_tokens(

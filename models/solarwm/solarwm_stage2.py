@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from reactor_runtime import (
@@ -15,14 +16,20 @@ from reactor_runtime import (
     connected,
     disconnected,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
-from solarwm_camera import CameraMotionPlanner, MotionConfig
-from solarwm_config import SolarWMConfig, read_config
-from solarwm_images import normalize_output_frames, validate_uploaded_image
-from solarwm_model import SolarWMAnchor, SolarWMInput, SolarWMModel, SolarWMResult
-from solarwm_types import (
+from solarwm_stage2_camera import CameraMotionPlanner, MotionConfig
+from solarwm_stage2_config import SolarWMConfig, read_config, prepare_runtime
+from solarwm_stage2_images import normalize_output_frames, prepare_uploaded_image
+from solarwm_stage2_model import (
+    SolarWMAnchor,
+    SolarWMInput,
+    SolarWMModel,
+    SolarWMResult,
+)
+from solarwm_stage2_types import (
     CameraMotionChanged,
     ImageSelected,
     PromptQueued,
@@ -43,39 +50,34 @@ class SolarWM(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: SolarWMConfig | None = None
-        self._engine = SolarWMModel()
-        self._world_id = 0
-        self._applied_world_id: int | None = None
-        self._planner: CameraMotionPlanner | None = None
-        self._selected_image: UploadedFile | None = None
-        self._seed = 42
-        self._chunk_index = 0
-        self._last_chunk_seconds: float | None = None
+        self._engine: SolarWMModel
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned upstream assets and load SolarWM once."""
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         self._config = config
-        self._seed = config.seed
-        self._planner = CameraMotionPlanner(
-            MotionConfig(
-                config.translation_units_per_latent, config.rotation_degrees_per_latent
-            )
-        )
-        self._engine.load(config_path)
+        prepare_runtime(config)
+        self._engine = SolarWMModel()
+        self._engine.load(config)
 
     @session_started
     def on_session_started(self) -> None:
         """Initialize an empty world that waits for an uploaded anchor image."""
+        config = self._require_config()
+        self.state._planner = CameraMotionPlanner(
+            MotionConfig(
+                config.translation_units_per_latent, config.rotation_degrees_per_latent
+            )
+        )
         self.state.prompt = ""
-        self._selected_image = None
-        self._seed = self._require_config().seed
+        self.state._selected_image = None
+        self.state._seed = self._require_config().seed
         self._clear_controls()
-        self._world_id += 1
-        self._applied_world_id = None
+        self.state._world_id += 1
+        self.state._applied_world_id = None
         self.state._limit_reached = False
-        self._chunk_index = 0
-        self._last_chunk_seconds = None
+        self.state._chunk_index = 0
+        self.state._last_chunk_seconds = None
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
@@ -92,12 +94,7 @@ class SolarWM(ReactorApp):
     def on_session_ended(self) -> None:
         """Release causal caches while retaining loaded model weights."""
         self._engine.reset()
-        self._selected_image = None
-        self._clear_controls()
-        self._applied_world_id = None
-        self.state._limit_reached = False
-        self._chunk_index = 0
-        self._last_chunk_seconds = None
+        self.output.flush()
 
     @event(
         name="set_image",
@@ -130,17 +127,18 @@ class SolarWM(ReactorApp):
         ),
     ) -> ImageSelected:
         """Select an uploaded anchor and queue a fresh continuous rollout."""
-        validate_uploaded_image(image)
+        pixels = await asyncio.to_thread(prepare_uploaded_image, image)
         normalized = (
             prompt.strip()
             or self.state.prompt.strip()
             or self._require_config().default_prompt
         )
-        self._selected_image = image
+        self.state._selected_image = pixels
+        self.state._image_name = image.name
         self.state.prompt = normalized
         self._request_restart()
         result = ImageSelected(
-            source="uploaded", filename=image.name, prompt=normalized, seed=self._seed
+            filename=image.name, prompt=normalized, seed=self.state._seed
         )
         await self.send(self._state_update())
         return result
@@ -169,13 +167,13 @@ class SolarWM(ReactorApp):
         normalized = prompt.strip()
         if not normalized:
             raise CommandError("prompt_required", "SolarWM requires a prompt.")
-        if self._selected_image is None:
+        if self.state._selected_image is None:
             raise CommandError(
                 "image_required", "Upload an anchor image before setting a prompt."
             )
         self.state.prompt = normalized
         self._request_restart()
-        result = PromptQueued(prompt=normalized, applies_to_chunk=1)
+        result = PromptQueued(prompt=normalized)
         await self.send(self._state_update())
         return result
 
@@ -361,32 +359,32 @@ class SolarWM(ReactorApp):
         ),
     ) -> RolloutResetQueued:
         """Queue a reproducible fresh rollout from the selected anchor."""
-        if self._selected_image is None:
+        if self.state._selected_image is None:
             raise CommandError(
                 "image_required", "Upload an anchor image before resetting."
             )
         if seed >= 0:
-            self._seed = seed
-        replaced = self._chunk_index
-        self._engine.reset()
-        self._applied_world_id = None
+            self.state._seed = seed
+        replaced = self.state._chunk_index
         self._request_restart()
-        result = RolloutResetQueued(seed=self._seed, replaced_chunks=replaced)
+        result = RolloutResetQueued(seed=self.state._seed, replaced_chunks=replaced)
         await self.send(self._state_update())
         return result
 
     async def process_input(self) -> SolarWMInput:
-        if self._selected_image is None:
+        if self.state._selected_image is None:
             raise ApplicationError("no anchor image selected")
         if self.state._limit_reached:
             raise ApplicationError("rollout limit reached")
         anchor = None
-        if self._world_id != self._applied_world_id:
+        if self.state._world_id != self.state._applied_world_id:
             anchor = SolarWMAnchor(
-                self._selected_image.data, self.state.prompt, self._seed
+                image=self.state._selected_image,
+                prompt=self.state.prompt,
+                seed=self.state._seed,
             )
-            self._planner.reset()
-        poses = self._planner.plan_chunk(
+            self.state._planner.reset()
+        poses = self.state._planner.plan_chunk(
             strafe=self.state.strafe,
             vertical=self.state.vertical,
             forward=self.state.forward,
@@ -394,7 +392,7 @@ class SolarWM(ReactorApp):
             yaw=self.state.yaw,
             roll=self.state.roll,
         )
-        return SolarWMInput(self._world_id, anchor, poses)
+        return SolarWMInput(world_id=self.state._world_id, anchor=anchor, poses=poses)
 
     def generate(self, input: SolarWMInput) -> SolarWMResult:
         return self._engine.generate(input)
@@ -404,9 +402,9 @@ class SolarWM(ReactorApp):
             # Refusals prevent exhausted worlds; other failures require diagnosis.
             raise outcome.error
         result: SolarWMResult = outcome.result
-        self._applied_world_id = result.world_id
-        self._last_chunk_seconds = outcome.elapsed
-        self._chunk_index = result.chunk_index
+        self.state._applied_world_id = result.world_id
+        self.state._last_chunk_seconds = outcome.elapsed
+        self.state._chunk_index = result.chunk_index
         if result.complete:
             self.state._limit_reached = True
             self._clear_controls()
@@ -427,14 +425,14 @@ class SolarWM(ReactorApp):
 
     def _request_restart(self) -> None:
         self._clear_controls()
-        self._world_id += 1
+        self.state._world_id += 1
         self.state._limit_reached = False
-        self._chunk_index = 0
-        self._last_chunk_seconds = None
+        self.state._chunk_index = 0
+        self.state._last_chunk_seconds = None
         self.output.flush()
 
     def _require_available_rollout(self) -> None:
-        if self._selected_image is None:
+        if self.state._selected_image is None:
             raise CommandError(
                 "image_required", "Upload an anchor image before this command."
             )
@@ -462,8 +460,8 @@ class SolarWM(ReactorApp):
     def _next_control_chunk(self) -> int:
         return (
             1
-            if self._world_id != self._applied_world_id
-            else self._chunk_index + 1
+            if self.state._world_id != self.state._applied_world_id
+            else self.state._chunk_index + 1
         )
 
     def _require_config(self) -> SolarWMConfig:
@@ -472,18 +470,22 @@ class SolarWM(ReactorApp):
         return self._config
 
     def _state_update(self) -> StateUpdate:
-        available = self._selected_image is not None and not self.state._limit_reached
+        available = (
+            self.state._selected_image is not None and not self.state._limit_reached
+        )
         next_chunk = self._next_control_chunk() if available else None
         return StateUpdate(
             prompt=self.state.prompt,
-            image_source="uploaded" if self._selected_image is not None else "none",
-            image_name=self._selected_image.name
-            if self._selected_image is not None
+            image_source="uploaded"
+            if self.state._selected_image is not None
+            else "none",
+            image_name=self.state._image_name
+            if self.state._selected_image is not None
             else "",
-            seed=self._seed,
+            seed=self.state._seed,
             limit_reached=self.state._limit_reached,
-            completed_chunks=self._chunk_index,
-            last_chunk_seconds=self._last_chunk_seconds,
+            completed_chunks=self.state._chunk_index,
+            last_chunk_seconds=self.state._last_chunk_seconds,
             next_chunk=next_chunk,
             next_chunk_frames=(9 if next_chunk == 1 else 12) if next_chunk else None,
             max_chunks=self._config.max_chunks if self._config else 0,
