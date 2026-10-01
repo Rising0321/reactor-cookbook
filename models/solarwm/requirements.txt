@@ -1,7 +1,7 @@
 # Model dependencies resolved with Reactor Runtime during `reactor build`.
 # `build.runtime_version` in reactor.yaml selects the Runtime release.
 # Pinned upstream inference dependencies.
-torch==2.7.1
+torch==2.7.1+cu128
 # Build tools required by SolarWM and Flash Attention.
 packaging>=24.2
 setuptools>=77

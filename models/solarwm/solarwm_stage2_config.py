@@ -39,11 +39,11 @@ def read_config(config_path: Path | None, weights_root: Path) -> SolarWMConfig:
     stream, motion = raw["stream"], raw["motion"]
 
     def resolve(value: str) -> Path:
-        path = Path(value)
+        path = Path(value).expanduser()
         return (path if path.is_absolute() else config_path.parent / path).resolve()
 
     source_path = resolve(source["path"])
-    asset_root = (weights_root / assets["root"]).resolve()
+    asset_root = (weights_root / Path(assets["root"]).expanduser()).resolve()
     base_path = asset_root / "SolarWM-5B-base"
     checkpoint_path = asset_root / "SolarWM-5B-sgf-stage2-81f"
     max_chunks = int(stream["max_chunks"])
@@ -52,7 +52,7 @@ def read_config(config_path: Path | None, weights_root: Path) -> SolarWMConfig:
     return SolarWMConfig(
         source_path=source_path,
         source_revision=str(source["revision"]),
-        upstream_config=source_path / str(source["config"]),
+        upstream_config=(source_path / Path(source["config"]).expanduser()).resolve(),
         repo_id=str(assets["repo_id"]),
         checkpoint_revision=str(assets["revision"]),
         base_path=base_path,
@@ -92,7 +92,17 @@ def prepare_runtime(config: SolarWMConfig) -> None:
         "SolarWM-5B-base/**",
         "SolarWM-5B-sgf-stage2-81f/**",
     )
-    if not (config.checkpoint_path / "model.pt").is_file():
+    required_files = (
+        config.base_path / "text_encoder/models_t5_umt5-xxl-enc-bf16.pth",
+        config.base_path / "vae/Wan2.2_VAE.pth",
+        config.base_path / "tokenizer/tokenizer.json",
+        config.base_path / "tokenizer/tokenizer_config.json",
+        config.base_path / "tokenizer/spiece.model",
+        config.base_path / "tokenizer/special_tokens_map.json",
+        config.checkpoint_path / "model.pt",
+        config.checkpoint_path / "release-manifest.json",
+    )
+    if any(not path.is_file() or path.stat().st_size == 0 for path in required_files):
         from huggingface_hub import snapshot_download
 
         snapshot_download(
@@ -101,12 +111,23 @@ def prepare_runtime(config: SolarWMConfig) -> None:
             local_dir=config.base_path.parent,
             allow_patterns=list(required),
         )
-    for path in (
-        config.base_path / "text_encoder/models_t5_umt5-xxl-enc-bf16.pth",
-        config.base_path / "vae/Wan2.2_VAE.pth",
-        config.checkpoint_path / "model.pt",
-        config.checkpoint_path / "release-manifest.json",
-    ):
-        if not path.is_file():
-            raise RuntimeError(f"SolarWM asset is missing: {path}")
+    # Hub metadata can consider an existing empty file current; force only those files.
+    empty = [
+        path.relative_to(config.base_path.parent).as_posix()
+        for path in required_files
+        if path.is_file() and path.stat().st_size == 0
+    ]
+    if empty:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=config.repo_id,
+            revision=config.checkpoint_revision,
+            local_dir=config.base_path.parent,
+            allow_patterns=empty,
+            force_download=True,
+        )
+    for path in required_files:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f"SolarWM asset is missing or empty: {path}")
     config.runtime_root.mkdir(parents=True, exist_ok=True)

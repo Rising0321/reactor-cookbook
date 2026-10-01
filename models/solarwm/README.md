@@ -67,3 +67,13 @@ signalling. An SSH HTTP-port forward alone does not carry UDP media.
 
 Source and checkpoint revisions are pinned in `solarwm.yaml`. Consult
 the upstream repository and model card for their usage terms.
+
+
+## Tests
+
+From the repository root, run the CPU contract tests without model weights:
+
+```sh
+cd models/solarwm
+PYTHONPATH=. python -m pytest tests/ -q
+```
