@@ -11,14 +11,15 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from reactor_runtime import ApplicationError
+from reactor_runtime import ApplicationError, StepOutcome
 from reactor_runtime.interface.model.contract import ModelContract
 
 MODEL_DIR = Path(__file__).parents[1]
 sys.path.insert(0, str(MODEL_DIR))
 
 from open_oasis import OpenOasis
-from open_oasis_assets import decode_image
+from open_oasis_model import OpenOasisModel
+from open_oasis_images import decode_image
 from open_oasis_types import OpenOasisState
 
 
@@ -26,8 +27,8 @@ def ready_model() -> OpenOasis:
     model = OpenOasis()
     model.state = OpenOasisState()
     model._config = SimpleNamespace(seed=0)
-    model._source = Path("/unused")
-    model._conditioning = np.zeros((1, 360, 640, 3), dtype=np.uint8)
+    model.engine = OpenOasisModel()
+    model.state._conditioning = np.zeros((1, 360, 640, 3), dtype=np.uint8)
     model.send = lambda _message: _awaitable()  # type: ignore[method-assign]
     model.output = SimpleNamespace(flush=lambda: None)
     return model
@@ -113,41 +114,50 @@ def test_conditioning_upload_is_moderated() -> None:
     assert fields["set_video"].command.__command_fields__["video"].info.moderate
 
 
-def test_new_connection_waits_and_disconnect_discards_upload() -> None:
+def test_viewer_disconnect_preserves_shared_world() -> None:
     model = ready_model()
     model.on_session_started()
-    assert model._conditioning is None
-    assert model._conditioning_name == "none"
+    assert model.state._conditioning is None
+    assert model.state._conditioning_name == "none"
 
-    model._conditioning = np.zeros((1, 360, 640, 3), dtype=np.uint8)
-    model._conditioning_name = "uploaded.png"
+    model.state._conditioning = np.zeros((1, 360, 640, 3), dtype=np.uint8)
+    model.state._conditioning_name = "uploaded.png"
+    model.engine = Mock()
     asyncio.run(model.on_disconnected())
 
-    assert model._conditioning is None
-    assert model._conditioning_name == "none"
-    with pytest.raises(ApplicationError):
-        asyncio.run(model.process_input())
+    assert model.state._conditioning is not None
+    assert model.state._conditioning_name == "uploaded.png"
+    model.engine.reset.assert_not_called()
+    assert asyncio.run(model.process_input()).conditioning is model.state._conditioning
 
 
 def test_ten_continuous_steps_and_anchor_handshake() -> None:
     class Backend:
         resets = 0
         calls = 0
+
         def reset(self, frames, seed):
             self.resets += 1
+
         def generate_one(self, action):
             self.calls += 1
             return np.zeros((8, 8, 3), dtype=np.uint8)
+
     model = ready_model()
     backend = Backend()
-    model.engine.backend = backend
+    model.engine._backend = backend
+
     async def run():
         for index in range(11):
             input = await model.process_input()
             assert (input.conditioning is not None) == (index == 0)
             result = model.generate(input)
             assert result.index == index
-            assert await model.process_output(SimpleNamespace(result=result, error=None, elapsed=.1)) is not None
+            assert (
+                await model.process_output(StepOutcome(result=result, elapsed=0.1))
+                is not None
+            )
+
     asyncio.run(run())
     assert (backend.resets, backend.calls) == (1, 10)
 
@@ -159,13 +169,15 @@ def test_generate_forwards_only_input_and_error_does_not_complete() -> None:
     model.state = None
     assert model.generate(input) is input
     model.state = OpenOasisState()
+
     def fail(value):
         raise ValueError("sampler failed")
+
     model.engine = SimpleNamespace(generate=fail)
     with pytest.raises(ValueError) as failure:
         model.generate(input)
     with pytest.raises(ValueError, match="sampler failed"):
-        asyncio.run(model.process_output(SimpleNamespace(error=failure.value)))
+        asyncio.run(model.process_output(StepOutcome(error=failure.value)))
     assert model.state._applied_world_id is None
 
 
@@ -188,12 +200,12 @@ def test_press_and_release_before_sampling_still_produces_one_frame_pulse() -> N
 
 def test_refusal_never_invokes_model_and_input_is_frozen() -> None:
     model = ready_model()
-    model._conditioning = None
+    model.state._conditioning = None
     model.engine = Mock()
     with pytest.raises(ApplicationError):
         asyncio.run(model.process_input())
     model.engine.generate.assert_not_called()
-    model._conditioning = np.zeros((1, 8, 8, 3), dtype=np.uint8)
+    model.state._conditioning = np.zeros((1, 8, 8, 3), dtype=np.uint8)
     step = asyncio.run(model.process_input())
     with pytest.raises(FrozenInstanceError):
         step.world_id = 99
@@ -204,16 +216,98 @@ def test_native_failure_preserves_completed_index() -> None:
     model = ready_model()
     backend = Mock()
     backend.generate_one.return_value = np.zeros((8, 8, 3), np.uint8)
-    model.engine.backend = backend
+    model.engine._backend = backend
     for _ in range(2):
         result = model.generate(asyncio.run(model.process_input()))
-        asyncio.run(model.process_output(SimpleNamespace(result=result, error=None, elapsed=.1)))
-    assert model.engine.index == 1
+        asyncio.run(model.process_output(StepOutcome(result=result, elapsed=0.1)))
+    assert result.index == 1
     model.send = Mock()
     backend.generate_one.side_effect = RuntimeError("sampler failure")
     with pytest.raises(RuntimeError) as error:
         model.generate(asyncio.run(model.process_input()))
     with pytest.raises(RuntimeError, match="sampler failure"):
-        asyncio.run(model.process_output(SimpleNamespace(error=error.value)))
-    assert model.engine.index == 1
+        asyncio.run(model.process_output(StepOutcome(error=error.value)))
     model.send.assert_not_called()
+    backend.generate_one.side_effect = None
+    result = model.generate(asyncio.run(model.process_input()))
+    assert result.index == 2
+
+
+def test_failed_step_retains_pulses_and_camera_until_success():
+    from unittest.mock import AsyncMock
+    from open_oasis_model import OpenOasisResult
+
+    model = ready_model()
+    model.state._applied_world_id = model.state._world_id
+    model.send = AsyncMock()
+    asyncio.run(model.set_key_state("w", True))
+    asyncio.run(model.set_key_state("w", False))
+    asyncio.run(model.mouse_move(0.5, -0.5))
+    first = asyncio.run(model.process_input())
+    assert first.action[11] == 1
+    with pytest.raises(RuntimeError):
+        asyncio.run(model.process_output(StepOutcome(error=RuntimeError("failed"))))
+    repeated = asyncio.run(model.process_input())
+    np.testing.assert_array_equal(first.action, repeated.action)
+    result = OpenOasisResult(first.world_id, np.zeros((360, 640, 3), np.uint8), 1)
+    asyncio.run(model.process_output(StepOutcome(result=result)))
+    assert not model.state._pending_key_pulses
+    assert not model.state._camera_x and not model.state._camera_y
+    assert model.send.call_args.args[0].camera_x == 0
+
+
+def test_video_decode_stops_at_last_requested_frame(monkeypatch):
+    from open_oasis_images import decode_video
+    import open_oasis_images
+
+    class Container:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def decode(self, video):
+            for index in range(5):
+                yield SimpleNamespace(
+                    to_ndarray=lambda format, i=index: np.full(
+                        (360, 640, 3), i, np.uint8
+                    )
+                )
+            raise AssertionError("Decoder read beyond offset + count")
+
+    monkeypatch.setattr(open_oasis_images.av, "open", lambda _: Container())
+    frames = decode_video(b"fixture", 2, 3)
+    assert frames.shape == (3, 360, 640, 3)
+    assert frames[:, 0, 0, 0].tolist() == [2, 3, 4]
+
+
+def test_invalid_video_reports_value_error():
+    from open_oasis_images import decode_video
+
+    with pytest.raises(ValueError, match="decoded"):
+        decode_video(b"not a video", 0, 1)
+
+
+def test_model_dependency_graph_does_not_import_runtime():
+    import subprocess
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import builtins
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name == 'reactor_runtime' or name.startswith('reactor_runtime.'):
+        raise AssertionError(name)
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+import open_oasis_model, open_oasis_backend
+open_oasis_model.OpenOasisModel()
+""",
+        ],
+        cwd=MODEL_DIR,
+        check=True,
+    )

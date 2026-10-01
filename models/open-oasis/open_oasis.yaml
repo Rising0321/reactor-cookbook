@@ -10,4 +10,3 @@ inference:
   seed: 0
   ddim_steps: 10
   context_frames: 32
-  fps: 20

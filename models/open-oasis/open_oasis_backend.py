@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,8 @@ class OpenOasisBackend:
     def __init__(
         self, config: OpenOasisConfig, model_path: Path, vae_path: Path
     ) -> None:
+        if config.source_path not in sys.path:
+            sys.path.insert(0, config.source_path)
         import torch
         from dit import DiT_models
         from safetensors.torch import load_model
@@ -40,6 +43,10 @@ class OpenOasisBackend:
         self.latents: Any = None
         self.actions: Any = None
         self.generator: Any = None
+
+    def clear(self) -> None:
+        """Release the current world's latent history and random generator."""
+        self.latents = self.actions = self.generator = None
 
     def reset(self, frames: np.ndarray, seed: int) -> None:
         torch = self.torch

@@ -1,8 +1,8 @@
-"""Public Reactor schema and adapter configuration for Open-Oasis."""
+"""Client contracts and session state for Open-Oasis."""
 
 from __future__ import annotations
 
-from open_oasis_assets import OpenOasisConfig
+import numpy as np
 
 from reactor_runtime import InputState, MessageField, ModelMessage, Output, Video
 
@@ -79,7 +79,7 @@ class ConditioningChanged(ModelMessage):
     selection: str = MessageField(
         description=(
             "Built-in sample identifier or uploaded filename selected for the fresh rollout. "
-            "The selection takes effect at the next inference boundary."
+            "The selection takes effect at the next generated frame."
         )
     )
     prompt_frames: int = MessageField(
@@ -160,3 +160,5 @@ class OpenOasisState(InputState):
     _seed: int = 0
     _world_id: int = 0
     _applied_world_id: int | None = None
+    _conditioning: np.ndarray | None = None
+    _conditioning_name: str = "none"

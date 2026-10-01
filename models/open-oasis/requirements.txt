@@ -1,6 +1,8 @@
-# The Runtime release is pinned by build.runtime_version in reactor.yaml.
-# Keep only model dependencies here; do not install reactor-runtime directly.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+# Uploaded media decoding and app-owned asset preparation.
 av==18.0.0
+# Sampler/VAE dependencies imported by the pinned upstream source.
 diffusers==0.35.1
 einops==0.8.1
 huggingface-hub==0.34.4

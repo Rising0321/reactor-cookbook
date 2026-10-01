@@ -7,11 +7,12 @@ from pathlib import Path
 
 import numpy as np
 from open_oasis_assets import (
-    decode_image,
-    decode_video,
+    download_checkpoints,
+    prepare_source,
     OpenOasisConfig,
     read_config,
 )
+from open_oasis_images import decode_image, decode_video
 from open_oasis_model import OpenOasisModel, OpenOasisInput, OpenOasisResult
 from open_oasis_types import (
     KEYS,
@@ -81,7 +82,7 @@ _IMAGE_FIELD = InputField(
         "Minecraft starting frame uploaded through Reactor's file-upload flow. The file "
         "must have an `image/*` media type and decode successfully; EXIF orientation is "
         "applied before it is resized to 640x360. It replaces the previous image or video "
-        "context at the next inference boundary."
+        "context at the next generated frame."
     ),
 )
 _VIDEO_FIELD = InputField(
@@ -89,8 +90,8 @@ _VIDEO_FIELD = InputField(
     description=(
         "Minecraft visual context uploaded through Reactor's file-upload flow. The file "
         "must have a `video/*` media type and contain every frame requested by `offset` and "
-        "`prompt_frames`; accepted frames replace the previous context at the next inference "
-        "boundary."
+        "`prompt_frames`; accepted frames replace the previous context at the next generated "
+        "frame."
     ),
 )
 
@@ -104,16 +105,20 @@ class OpenOasis(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: OpenOasisConfig | None = None
-        self.engine = OpenOasisModel()
-        self._source: Path | None = None
-        self._conditioning: np.ndarray | None = None
-        self._conditioning_name = "none"
+        self.engine: OpenOasisModel
+        self._sample: np.ndarray | None = None
 
     def load(self, config_path: Path | None) -> None:
         config = read_config(config_path)
         self._config = config
-        self._source = Path(config.source_path)
-        self.engine.load(config_path, get_weights_path())
+        prepare_source(config)
+        model_path, vae_path = download_checkpoints(config, get_weights_path())
+        # Decode the explicitly selected, attributed application sample once.
+        self._sample = decode_image(
+            (Path(__file__).parent / "example_images/sample_image_0.png").read_bytes()
+        )
+        self.engine = OpenOasisModel()
+        self.engine.load(config, model_path, vae_path)
         logger.info(
             "Open-Oasis ready",
             revision=config.source_revision,
@@ -128,8 +133,8 @@ class OpenOasis(ReactorApp):
         self.state._seed = self._config.seed
         self.state._world_id += 1
         self.state._applied_world_id = None
-        self._conditioning = None
-        self._conditioning_name = "none"
+        self.state._conditioning = None
+        self.state._conditioning_name = "none"
         self._clear_controls()
 
     @connected
@@ -138,22 +143,14 @@ class OpenOasis(ReactorApp):
 
     @disconnected
     async def on_disconnected(self) -> None:
-        """Discard viewer-owned visual context and controls after disconnect."""
-        self.output.flush()
-        self._conditioning = None
-        self._conditioning_name = "none"
-        self.engine.reset()
-        self.state._applied_world_id = None
+        """Release controls without destroying the shared session's world."""
         self._clear_controls()
         await self.send(self._state_update())
 
     @session_ended
     def on_session_ended(self) -> None:
-        self._conditioning = None
-        self._conditioning_name = "none"
+        self.output.flush()
         self.engine.reset()
-        self.state._applied_world_id = None
-        self._clear_controls()
 
     @event(
         name="set_key_state",
@@ -291,8 +288,8 @@ class OpenOasis(ReactorApp):
         name="set_image",
         description=(
             "Select an uploaded Minecraft image as the starting frame for a fresh rollout. "
-            "Valid any time during a session; the image replaces prior causal context at the "
-            "next inference boundary and clears all controls. Emits `conditioning_changed` and "
+            "Valid any time during a session; the image replaces previous starting context at the "
+            "next generated frame and clears all controls. Emits `conditioning_changed` and "
             "broadcasts `state_update` on success, or `command_error` when the upload is "
             "mislabeled or undecodable."
         ),
@@ -306,7 +303,7 @@ class OpenOasis(ReactorApp):
                 "unsupported_media", "set_image requires an image upload"
             )
         try:
-            self._conditioning = await asyncio.to_thread(decode_image, image.data)
+            self.state._conditioning = await asyncio.to_thread(decode_image, image.data)
         except (OSError, ValueError) as error:
             raise CommandError("invalid_image", str(error)) from error
         return await self._select_conditioning("image", image.name)
@@ -315,8 +312,8 @@ class OpenOasis(ReactorApp):
         name="set_video",
         description=(
             "Select consecutive frames from an uploaded video as the starting context for a "
-            "fresh rollout. Valid any time during a session; the frames replace prior causal "
-            "context at the next inference boundary and clear all controls. Emits "
+            "fresh rollout. Valid any time during a session; the frames replace prior "
+            "context at the next generated frame and clear all controls. Emits "
             "`conditioning_changed` and broadcasts `state_update` on success, or "
             "`command_error` when the upload is mislabeled, undecodable, or too short."
         ),
@@ -345,8 +342,8 @@ class OpenOasis(ReactorApp):
         if not video.mime_type.startswith("video/"):
             raise CommandError("unsupported_media", "set_video requires a video upload")
         try:
-            self._conditioning = await asyncio.to_thread(
-                decode_video, video.data, video.name, offset, prompt_frames
+            self.state._conditioning = await asyncio.to_thread(
+                decode_video, video.data, offset, prompt_frames
             )
         except (OSError, RuntimeError, ValueError) as error:
             raise CommandError("invalid_video", str(error)) from error
@@ -357,23 +354,23 @@ class OpenOasis(ReactorApp):
         description=(
             "Select the built-in Open-Oasis Minecraft sample as the starting frame for a fresh "
             "rollout. Valid any time during a session; it replaces uploaded context at the next "
-            "inference boundary and clears all controls. Emits `conditioning_changed` and "
+            "generated frame and clears all controls. Emits `conditioning_changed` and "
             "broadcasts `state_update` on success."
         ),
     )
     async def random_scene(self) -> ConditioningChanged:
-        assert self._source is not None
-        self._conditioning = await asyncio.to_thread(
-            decode_image,
-            (self._source / "sample_data/sample_image_0.png").read_bytes(),
-        )
+        if self._sample is None:
+            raise CommandError(
+                "sample_unavailable", "The built-in sample is unavailable"
+            )
+        self.state._conditioning = self._sample
         return await self._select_conditioning("built_in", "official_sample")
 
     @event(
         name="reset",
         description=(
             "Restart the selected starting context. Valid any time during a session; the reset "
-            "takes effect at the next inference boundary and clears all controls. Emits "
+            "takes effect at the next generated frame and clears all controls. Emits "
             "`rollout_reset` and broadcasts `state_update` on success; out-of-range seeds are "
             "rejected before state changes. If no context is selected, the model remains idle "
             "until `set_image`, `set_video`, or `random_scene` supplies one."
@@ -395,19 +392,20 @@ class OpenOasis(ReactorApp):
             self.state._seed = seed
         self._queue_reset()
         await self.send(self._state_update())
-        return RolloutReset(seed=self.state._seed, conditioning=self._conditioning_name)
+        return RolloutReset(
+            seed=self.state._seed, conditioning=self.state._conditioning_name
+        )
 
     async def process_input(self) -> OpenOasisInput:
-        if self._conditioning is None:
+        if self.state._conditioning is None:
             raise ApplicationError("no starting context selected")
         fresh = self.state._world_id != self.state._applied_world_id
         action = self._build_action()
-        if not fresh:
-            self.state._pending_key_pulses = frozenset()
-            self.state._pending_mouse_pulses = frozenset()
         return OpenOasisInput(
-            self.state._world_id, self._conditioning if fresh else None,
-            self.state._seed, action,
+            world_id=self.state._world_id,
+            conditioning=self.state._conditioning if fresh else None,
+            seed=self.state._seed,
+            action=action,
         )
 
     def generate(self, input: OpenOasisInput) -> OpenOasisResult:
@@ -420,18 +418,21 @@ class OpenOasis(ReactorApp):
         result: OpenOasisResult = outcome.result
         self.state._applied_world_id = result.world_id
         if result.index:
+            changed = bool(self.state._camera_x or self.state._camera_y)
+            self.state._pending_key_pulses = frozenset()
+            self.state._pending_mouse_pulses = frozenset()
             self.state._camera_x = self.state._camera_y = 0.0
-        logger.info("Open-Oasis step", world_id=result.world_id, index=result.index,
-                    generation_seconds=outcome.elapsed)
+            if changed:
+                await self.send(self._state_update())
         return OpenOasisOutput(main_video=result.frame)
 
     async def _select_conditioning(self, source: str, name: str) -> ConditioningChanged:
-        self._conditioning_name = name
+        self.state._conditioning_name = name
         self._queue_reset()
         await self.send(self._state_update())
-        assert self._conditioning is not None
+        assert self.state._conditioning is not None
         return ConditioningChanged(
-            source=source, selection=name, prompt_frames=len(self._conditioning)
+            source=source, selection=name, prompt_frames=len(self.state._conditioning)
         )
 
     def _queue_reset(self) -> None:
@@ -481,5 +482,5 @@ class OpenOasis(ReactorApp):
             camera_x=self.state._camera_x,
             camera_y=self.state._camera_y,
             seed=self.state._seed,
-            conditioning=self._conditioning_name,
+            conditioning=self.state._conditioning_name,
         )
