@@ -79,3 +79,6 @@ build:
       MAX_JOBS=4 python -m pip install --no-cache-dir --no-build-isolation
       'transformer-engine[pytorch]==2.7.0'
     - python -m pip install --no-cache-dir --no-build-isolation flash-attn==2.8.1
+    # The pinned DA3 source imports addict without declaring it in its metadata.
+    - python -m pip install --no-cache-dir addict==2.4.0
+    - python -c 'from depth_anything_3.api import DepthAnything3; print("DA3 inference API import verified")'
