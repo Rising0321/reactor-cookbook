@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Literal
 
 from reactor_runtime import (
     ApplicationError,
@@ -23,11 +23,12 @@ from reactor_runtime import (
 from yume_assets import (
     YumeConfig,
     configure_environment,
+    prepare_assets,
     read_config,
 )
 from yume_images import (
-    validate_image,
-    validate_video,
+    prepare_image,
+    prepare_video,
 )
 from yume_model import YumeAnchor, YumeInput, YumeModel, YumeResult
 from yume_types import (
@@ -36,6 +37,7 @@ from yume_types import (
     Movement,
     PromptChanged,
     RolloutResetQueued,
+    RolloutLimitReached,
     SceneQueued,
     StateUpdate,
     View,
@@ -77,49 +79,35 @@ class Yume15(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: YumeConfig | None = None
-        self._engine = YumeModel()
-        self._world_id = 0
-        self._applied_world_id: int | None = None
-        self._mode: (
-            Literal["image_to_video", "video_to_video", "text_to_video"] | None
-        ) = None
-        self._image: UploadedFile | None = None
-        self._video: UploadedFile | None = None
-        self._image_name: str | None = None
-        self._seed = 42
-        self._chunk_index = 0
-        self._generating = False
+        self._engine: YumeModel
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned public assets and load the 5B model on one GPU."""
         config = read_config(config_path, get_weights_path())
         configure_environment(config)
         self._config = config
-        self._seed = config.seed
-        self._engine.load(config_path, get_weights_path())
+        prepare_assets(config)
+        self._engine = YumeModel()
+        self._engine.load(config)
 
     @session_started
     def on_session_started(self) -> None:
+        self.state._seed = self._require_config().seed
         self.state.prompt = ""
         self.state._pressed_keys = frozenset()
-        self._world_id += 1
-        self._applied_world_id = None
-        self._mode = None
-        self._image = None
-        self._video = None
-        self._image_name = None
-        self._chunk_index = 0
-        self._generating = False
+        self.state._world_id += 1
+        self.state._applied_world_id = None
+        self.state._mode = None
+        self.state._image = None
+        self.state._video = None
+        self.state._image_name = None
+        self.state._chunk_index = 0
+        self.state._complete = False
 
     @session_ended
     def on_session_ended(self) -> None:
         self._engine.reset()
-        self._applied_world_id = None
-        self._mode = None
-        self._image = None
-        self._video = None
-        self._image_name = None
-        self._chunk_index = 0
+        self.output.flush()
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
@@ -153,14 +141,19 @@ class Yume15(ReactorApp):
             description="Seed used to initialize this rollout. Use `-1` to retain the session's current seed.",
         ),
     ) -> SceneQueued:
-        validate_image(image)
+        pixels = await asyncio.to_thread(prepare_image, image)
         config = self._require_config()
         normalized = prompt.strip() or config.default_upload_prompt
         if seed >= 0:
-            self._seed = seed
-        self._mode, self._image, self._video, self._image_name = (
+            self.state._seed = seed
+        (
+            self.state._mode,
+            self.state._image,
+            self.state._video,
+            self.state._image_name,
+        ) = (
             "image_to_video",
-            image,
+            pixels,
             None,
             image.name,
         )
@@ -168,10 +161,10 @@ class Yume15(ReactorApp):
         self._request_reset()
         await self.send(self._state_update())
         return SceneQueued(
-            mode=self._mode,
+            mode=self.state._mode,
             conditioning_name=image.name,
             prompt=normalized,
-            seed=self._seed,
+            seed=self.state._seed,
         )
 
     @event(
@@ -197,29 +190,34 @@ class Yume15(ReactorApp):
             description="Seed used to initialize this rollout. Use `-1` to retain the session's current seed.",
         ),
     ) -> SceneQueued:
-        validate_video(video)
         normalized = prompt.strip()
         if not normalized:
             raise CommandError(
                 "prompt_required",
                 "YUME video continuation requires a non-empty prompt.",
             )
+        frames = await asyncio.to_thread(prepare_video, video)
         if seed >= 0:
-            self._seed = seed
-        self._mode, self._image, self._video, self._image_name = (
+            self.state._seed = seed
+        (
+            self.state._mode,
+            self.state._image,
+            self.state._video,
+            self.state._image_name,
+        ) = (
             "video_to_video",
             None,
-            video,
+            frames,
             video.name,
         )
         self.state.prompt = normalized
         self._request_reset()
         await self.send(self._state_update())
         return SceneQueued(
-            mode=self._mode,
+            mode=self.state._mode,
             conditioning_name=video.name,
             prompt=normalized,
-            seed=self._seed,
+            seed=self.state._seed,
         )
 
     @event(
@@ -247,8 +245,13 @@ class Yume15(ReactorApp):
                 "prompt_required", "YUME text-to-video requires a non-empty prompt."
             )
         if seed >= 0:
-            self._seed = seed
-        self._mode, self._image, self._video, self._image_name = (
+            self.state._seed = seed
+        (
+            self.state._mode,
+            self.state._image,
+            self.state._video,
+            self.state._image_name,
+        ) = (
             "text_to_video",
             None,
             None,
@@ -258,10 +261,10 @@ class Yume15(ReactorApp):
         self._request_reset()
         await self.send(self._state_update())
         return SceneQueued(
-            mode=self._mode,
+            mode=self.state._mode,
             conditioning_name=None,
             prompt=normalized,
-            seed=self._seed,
+            seed=self.state._seed,
         )
 
     @event(
@@ -350,28 +353,37 @@ class Yume15(ReactorApp):
     ) -> RolloutResetQueued:
         self._require_scene()
         if seed >= 0:
-            self._seed = seed
-        replaced = self._chunk_index
-        self._engine.reset()
-        self._applied_world_id = None
+            self.state._seed = seed
+        replaced = self.state._chunk_index
         self._request_reset()
         await self.send(self._state_update())
-        return RolloutResetQueued(seed=self._seed, replaced_chunks=replaced)
+        return RolloutResetQueued(seed=self.state._seed, replaced_chunks=replaced)
 
     async def process_input(self) -> YumeInput:
-        if self._mode is None:
+        if self.state._mode is None:
             raise ApplicationError("no scene selected")
-        movement, view = self._resolve_controls(self.state._pressed_keys)
+        if self.state._complete:
+            raise ApplicationError("rollout complete; reset or select a scene")
+        movement, view = self._map_controls(self.state._pressed_keys)
         anchor = None
-        if self._world_id != self._applied_world_id:
-            media = self._image or self._video
-            anchor = YumeAnchor(
-                self._mode,
-                media.data if media else None,
-                Path(media.name).suffix if media else "",
-                self._seed,
+        if self.state._world_id != self.state._applied_world_id:
+            media = (
+                self.state._image
+                if self.state._image is not None
+                else self.state._video
             )
-        return YumeInput(self._world_id, anchor, self.state.prompt, movement, view)
+            anchor = YumeAnchor(
+                mode=self.state._mode,
+                media=media,
+                seed=self.state._seed,
+            )
+        return YumeInput(
+            world_id=self.state._world_id,
+            anchor=anchor,
+            prompt=self.state.prompt,
+            movement=movement,
+            view=view,
+        )
 
     def generate(self, input: YumeInput) -> YumeResult:
         return self._engine.generate(input)
@@ -381,31 +393,34 @@ class Yume15(ReactorApp):
             # Invalid model state and GPU failures cannot be repaired by a silent reset.
             raise outcome.error
         result: YumeResult = outcome.result
-        self._applied_world_id = result.world_id
-        self._generating = False
-        self._chunk_index = result.chunk_index
+        self.state._applied_world_id = result.world_id
+        self.state._chunk_index = result.chunk_index
+        self.state._complete = result.complete
+        movement, view = self._map_controls(self.state._pressed_keys)
         await self.send(
             ChunkCompleted(
                 chunk=result.chunk_index,
                 frames=int(result.frames.shape[0]),
                 generation_seconds=round(outcome.elapsed, 3),
-                prompt=result.prompt,
-                conditioned_prompt=result.conditioned_prompt,
-                movement=result.movement,
-                view=result.view,
+                prompt=self.state.prompt,
+                movement=movement,
+                view=view,
             )
         )
+        if result.complete:
+            await self.send(RolloutLimitReached(completed_chunks=result.chunk_index))
         await self.send(self._state_update())
         return YumeOutput(main_video=result.frames)
 
     def _request_reset(self) -> None:
         self.output.flush()
         self._clear_controls()
-        self._world_id += 1
-        self._chunk_index = 0
+        self.state._world_id += 1
+        self.state._chunk_index = 0
+        self.state._complete = False
 
     def _require_scene(self) -> None:
-        if self._mode is None:
+        if self.state._mode is None:
             raise CommandError("scene_required", "Select an image or text scene first.")
 
     def _require_config(self) -> YumeConfig:
@@ -416,8 +431,8 @@ class Yume15(ReactorApp):
     def _next_chunk(self) -> int:
         return (
             1
-            if self._world_id != self._applied_world_id
-            else self._chunk_index + 1 + int(self._generating)
+            if self.state._world_id != self.state._applied_world_id
+            else self.state._chunk_index + 1
         )
 
     def _clear_controls(self) -> None:
@@ -436,16 +451,23 @@ class Yume15(ReactorApp):
             )
         return _MOVEMENT_KEYS[movement_keys], _VIEW_KEYS[view_keys]
 
+    def _map_controls(self, keys: frozenset[str]) -> tuple[Movement, View]:
+        """Map state already validated atomically by the command handler."""
+        movement = keys.intersection({"w", "a", "s", "d"})
+        return _MOVEMENT_KEYS[movement], _VIEW_KEYS[keys.difference(movement)]
+
     def _state_update(self) -> StateUpdate:
         return StateUpdate(
-            mode=self._mode or "uninitialized",
-            conditioning_name=self._image_name,
+            mode=self.state._mode or "uninitialized",
+            conditioning_name=self.state._image_name,
             prompt=self.state.prompt,
             pressed_keys=self._ordered_keys(),
-            seed=self._seed,
-            reset_queued=self._mode is not None
-            and self._world_id != self._applied_world_id,
-            generating=self._generating,
-            completed_chunks=self._chunk_index,
-            next_chunk=None if self._mode is None else self._next_chunk(),
+            seed=self.state._seed,
+            reset_queued=self.state._mode is not None
+            and self.state._world_id != self.state._applied_world_id,
+            limit_reached=self.state._complete,
+            completed_chunks=self.state._chunk_index,
+            next_chunk=None
+            if self.state._mode is None or self.state._complete
+            else self._next_chunk(),
         )

@@ -2,54 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import sys
 
 import numpy as np
 import torch
-from PIL import Image
 
 from yume_assets import YumeConfig
 from yume_model import Movement, View
 
-MOVEMENT_TEXT: dict[Movement, str] = {
-    "none": "The camera's movement direction remains stationary (·).",
-    "forward": "The camera pushes forward (W).",
-    "backward": "The camera pulls back (S).",
-    "left": "The camera moves to the left (A).",
-    "right": "The camera moves to the right (D).",
-    "forward_left": "The camera pushes forward and moves to the left (W+A).",
-    "forward_right": "The camera pushes forward and moves to the right (W+D).",
-    "backward_left": "The camera pulls back and moves to the left (S+A).",
-    "backward_right": "The camera pulls back and moves to the right (S+D).",
-}
-VIEW_TEXT: dict[View, str] = {
-    "none": "The rotation direction of the camera remains stationary (·).",
-    "pan_left": "The camera pans to the left (←).",
-    "pan_right": "The camera pans to the right (→).",
-    "tilt_up": "The camera tilts up (↑).",
-    "tilt_down": "The camera tilts down (↓).",
-    "tilt_up_left": "The camera tilts up and pans to the left (↑←).",
-    "tilt_up_right": "The camera tilts up and pans to the right (↑→).",
-    "tilt_down_left": "The camera tilts down and pans to the left (↓←).",
-    "tilt_down_right": "The camera tilts down and pans to the right (↓→).",
-}
-
-
-def conditioned_prompt(prompt: str, movement: Movement, view: View) -> str:
-    """Encode controls in the caption format used to train and sample YUME."""
-    distance = 0 if movement == "none" else 4
-    rotation = 0 if view == "none" else 4
-    return " ".join(
-        (
-            "First-person perspective.",
-            MOVEMENT_TEXT[movement],
-            VIEW_TEXT[view],
-            f"Actual distance moved:{distance} at 100 meters per second.",
-            f"Angular change rate (turn speed):{rotation}.",
-            f"View rotation speed:{rotation}.",
-            prompt.strip(),
-        )
-    )
+from yume_controls import conditioned_prompt
 
 
 class YumeBackend:
@@ -58,6 +19,7 @@ class YumeBackend:
     def __init__(self, config: YumeConfig) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("YUME-5B requires CUDA")
+        sys.path.insert(0, str(config.source_path))
         from wan23 import Yume
         from wan23.configs import WAN_CONFIGS
 
@@ -87,12 +49,9 @@ class YumeBackend:
     def reset(
         self,
         *,
-        image: Path | None,
-        video: Path | None = None,
-        prompt: str,
+        image: np.ndarray | None,
+        video: np.ndarray | None = None,
         seed: int,
-        movement: Movement,
-        view: View,
     ) -> None:
         """Initialize image or text mode while preserving upstream 32/8 context semantics."""
         self.generator.manual_seed(seed)
@@ -107,18 +66,18 @@ class YumeBackend:
         if image is None and video is None:
             return
         if video is not None:
-            visible = self._load_video(video)
+            visible = (
+                torch.from_numpy(video.copy())
+                .permute(3, 0, 1, 2)
+                .float()
+                .div(127.5)
+                .sub(1)
+                .to(self.device)
+            )
         else:
             assert image is not None
-            rgb = (
-                Image.open(image)
-                .convert("RGB")
-                .resize(
-                    (self.config.width, self.config.height), Image.Resampling.BILINEAR
-                )
-            )
             pixels = (
-                torch.from_numpy(np.asarray(rgb).copy())
+                torch.from_numpy(image.copy())
                 .permute(2, 0, 1)
                 .float()
                 .div(127.5)
@@ -142,33 +101,10 @@ class YumeBackend:
         self.model_input_pixels = model_pixels
         self.model_input_latent = torch.cat([first, second], dim=1)
 
-    def _load_video(self, path: Path) -> torch.Tensor:
-        """Match sample_5b.py's first 33 frames at its assumed 30 FPS."""
-        import av
-
-        with av.open(str(path)) as container:
-            images = [frame.to_image() for frame in container.decode(video=0)]
-        if len(images) < 33:
-            raise ValueError("YUME video conditioning requires at least 33 frames")
-        tensors = []
-        for image in images[:33]:
-            rgb = image.convert("RGB").resize(
-                (self.config.width, self.config.height), Image.Resampling.BICUBIC
-            )
-            tensors.append(torch.from_numpy(np.asarray(rgb).copy()).permute(2, 0, 1))
-        return (
-            torch.stack(tensors)
-            .permute(1, 0, 2, 3)
-            .float()
-            .div(127.5)
-            .sub(1)
-            .to(self.device)
-        )
-
     @torch.inference_mode()
     def generate_chunk(
         self, *, prompt: str, movement: Movement, view: View
-    ) -> tuple[np.ndarray, str]:
+    ) -> np.ndarray:
         """Denoise only the newest eight latents, decode one 32-frame chunk, and retain clean context."""
         from wan23.utils.utils import masks_like
 
@@ -273,7 +209,6 @@ class YumeBackend:
             ]
         if self.model_input_latent is None:
             self.model_input_latent = latent[:, -latent_frames:]
-            self.model_input_pixels = video[:, -self.config.frames_per_chunk :]
         elif self.chunk_index == 0:
             self.model_input_latent = torch.cat(
                 [
@@ -282,21 +217,12 @@ class YumeBackend:
                 ],
                 dim=1,
             )
-            self.model_input_pixels = torch.cat(
-                [
-                    self.model_input_pixels[:, : -self.config.frames_per_chunk],
-                    video[:, -self.config.frames_per_chunk :],
-                ],
-                dim=1,
-            )
         else:
             self.model_input_latent = torch.cat(
                 [self.model_input_latent, latent[:, -latent_frames:]], dim=1
             )
-            self.model_input_pixels = torch.cat(
-                [self.model_input_pixels, video[:, -self.config.frames_per_chunk :]],
-                dim=1,
-            )
+        # Pixel conditioning is read only while preparing the first chunk.
+        self.model_input_pixels = None
         self.chunk_index += 1
         frames = (
             video.clamp(-1, 1)
@@ -307,7 +233,7 @@ class YumeBackend:
             .cpu()
             .numpy()
         )
-        return frames, text
+        return frames
 
     def end_session(self) -> None:
         self.model_input_latent = None

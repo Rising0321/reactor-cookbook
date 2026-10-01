@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
-
 import numpy as np
 
 Movement = Literal[
@@ -35,14 +32,17 @@ View = Literal[
 
 @dataclass(frozen=True)
 class YumeAnchor:
+    """New world's RGB uint8 image (704,1280,3) or video (33,704,1280,3)."""
+
     mode: str
-    media: bytes | None
-    suffix: str
+    media: np.ndarray | None
     seed: int
 
 
 @dataclass(frozen=True)
 class YumeInput:
+    """One continuation; anchor stays present until a result acknowledges world_id."""
+
     world_id: int
     anchor: YumeAnchor | None
     prompt: str
@@ -52,78 +52,66 @@ class YumeInput:
 
 @dataclass(frozen=True)
 class YumeResult:
+    """Actual progress and CPU uint8 RGB frames (29,H,W,3)."""
+
     world_id: int
     chunk_index: int
     frames: np.ndarray
-    prompt: str
-    conditioned_prompt: str
-    movement: Movement
-    view: View
+    complete: bool
 
 
 class NoAnchor(Exception):
     """A fresh YUME world needs its selected scene."""
 
 
+class RolloutExhausted(Exception):
+    """The configured, finite rollout has completed."""
+
+
 class YumeModel:
     def __init__(self) -> None:
-        self.backend = None
-        self.world_id: int | None = None
-        self.chunk_index = 0
+        self._backend = None
+        self._world_id: int | None = None
+        self._chunk_index = 0
+        self._max_chunks = 10
 
-    def load(self, config_path: Path | None, weights_root: Path) -> None:
-        from yume_assets import activate_source, prepare_assets, read_config
-
-        self.config = read_config(config_path, weights_root)
-        prepare_assets(self.config)
-        activate_source(self.config)
+    def load(self, config) -> None:
         from yume_backend import YumeBackend
 
-        self.backend = YumeBackend(self.config)
+        self._max_chunks = config.max_chunks
+        self._backend = YumeBackend(config)
 
     def generate(self, input: YumeInput) -> YumeResult:
-        if input.world_id != self.world_id:
+        if self._backend is None:
+            raise RuntimeError("YUME was not loaded")
+        if input.world_id != self._world_id:
             anchor = input.anchor
             if anchor is None:
                 raise NoAnchor("a new world requires a scene anchor")
-            kwargs = {
-                "image": None,
-                "video": None,
-                "prompt": input.prompt,
-                "seed": anchor.seed,
-                "movement": "none",
-                "view": "none",
-            }
-            if anchor.media is None:
-                self.backend.reset(**kwargs)
-            else:
-                with tempfile.NamedTemporaryFile(
-                    suffix=anchor.suffix, dir=self.config.runtime_dir
-                ) as media:
-                    media.write(anchor.media)
-                    media.flush()
-                    kwargs["image" if anchor.mode == "image_to_video" else "video"] = (
-                        Path(media.name)
-                    )
-                    self.backend.reset(**kwargs)
-            self.world_id = input.world_id
-            self.chunk_index = 0
-        frames, exact_prompt = self.backend.generate_chunk(
+            if anchor.mode != "text_to_video" and anchor.media is None:
+                raise NoAnchor("image and video worlds require decoded media")
+            self._backend.reset(
+                image=anchor.media if anchor.mode == "image_to_video" else None,
+                video=anchor.media if anchor.mode == "video_to_video" else None,
+                seed=anchor.seed,
+            )
+            self._world_id = input.world_id
+            self._chunk_index = 0
+        if self._chunk_index >= self._max_chunks:
+            raise RolloutExhausted("select or reset a scene to continue")
+        frames = self._backend.generate_chunk(
             prompt=input.prompt, movement=input.movement, view=input.view
         )
-        self.chunk_index += 1
+        self._chunk_index += 1
         return YumeResult(
-            self.world_id,
-            self.chunk_index,
-            np.ascontiguousarray(frames),
-            input.prompt,
-            exact_prompt,
-            input.movement,
-            input.view,
+            world_id=self._world_id,
+            chunk_index=self._chunk_index,
+            frames=np.ascontiguousarray(frames),
+            complete=self._chunk_index == self._max_chunks,
         )
 
     def reset(self) -> None:
-        if self.backend is not None:
-            self.backend.end_session()
-        self.world_id = None
-        self.chunk_index = 0
+        if self._backend is not None:
+            self._backend.end_session()
+        self._world_id = None
+        self._chunk_index = 0

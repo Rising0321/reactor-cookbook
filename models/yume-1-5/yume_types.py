@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Literal
+import numpy as np
+from yume_model import Movement, View
 
 from reactor_runtime import (
     InputField,
@@ -13,29 +15,6 @@ from reactor_runtime import (
     Video,
 )
 
-Movement = Literal[
-    "none",
-    "forward",
-    "backward",
-    "left",
-    "right",
-    "forward_left",
-    "forward_right",
-    "backward_left",
-    "backward_right",
-]
-View = Literal[
-    "none",
-    "pan_left",
-    "pan_right",
-    "tilt_up",
-    "tilt_down",
-    "tilt_up_left",
-    "tilt_up_right",
-    "tilt_down_left",
-    "tilt_down_right",
-]
-
 
 class YumeOutput(Output):
     """Carry the next 29-frame continuation on `main_video`."""
@@ -44,15 +23,24 @@ class YumeOutput(Output):
 
 
 class YumeState(InputState):
-    """Store the prompt exposed through Reactor's generated state command."""
+    """Scene text and private per-session rollout bookkeeping."""
 
     prompt: str = InputField(
         default="",
         max_length=4096,
         moderate=True,
-        description="Scene and event description for forthcoming chunks. Scene commands initialize it, and the generated setter or `set_prompt` changes it at the next chunk boundary without restarting the world.",
+        description="Scene and event description for forthcoming chunks. Scene commands initialize it, and `set_prompt` changes it after a scene is selected at the next chunk boundary without restarting the world.",
     )
     _pressed_keys: frozenset[str] = frozenset()
+    _world_id: int = 0
+    _applied_world_id: int | None = None
+    _mode: Literal["image_to_video", "video_to_video", "text_to_video"] | None = None
+    _image: np.ndarray | None = None
+    _video: np.ndarray | None = None
+    _image_name: str | None = None
+    _seed: int = 42
+    _chunk_index: int = 0
+    _complete: bool = False
 
 
 class StateUpdate(ModelMessage):
@@ -78,8 +66,8 @@ class StateUpdate(ModelMessage):
     reset_queued: bool = MessageField(
         description="Whether the next chunk boundary will restart from the selected scene and discard accumulated history."
     )
-    generating: bool = MessageField(
-        description="Whether a continuation chunk is currently being generated."
+    limit_reached: bool = MessageField(
+        description="True when this rollout has ended; select or reset a scene to continue."
     )
     completed_chunks: int = MessageField(
         description="Number of chunks completed since the current world was initialized or last reset."
@@ -107,7 +95,9 @@ class SceneQueued(ModelMessage):
 class ActionChanged(ModelMessage):
     """Emitted after one control key changes state or all controls are released."""
 
-    key: str = MessageField(description="Changed key, or `all` when `release_controls` released the complete set.")
+    key: str = MessageField(
+        description="Changed key, or `all` when `release_controls` released the complete set."
+    )
     pressed: bool = MessageField(
         description="Whether `key` is held after the change; always false when `key` is `all`."
     )
@@ -133,7 +123,9 @@ class PromptChanged(ModelMessage):
 class RolloutResetQueued(ModelMessage):
     """Emitted when the selected scene is accepted for restart at the next boundary."""
 
-    seed: int = MessageField(description="Seed that will initialize the restarted rollout.")
+    seed: int = MessageField(
+        description="Seed that will initialize the restarted rollout."
+    )
     replaced_chunks: int = MessageField(
         description="Number of completed chunks whose accumulated history the reset will discard."
     )
@@ -142,7 +134,9 @@ class RolloutResetQueued(ModelMessage):
 class ChunkCompleted(ModelMessage):
     """Emitted after one 29-frame continuation chunk completes."""
 
-    chunk: int = MessageField(description="One-based index of the completed chunk in the current rollout.")
+    chunk: int = MessageField(
+        description="One-based index of the completed chunk in the current rollout."
+    )
     frames: int = MessageField(
         description="Number of RGB frames delivered for this chunk on `main_video`; currently 29."
     )
@@ -152,12 +146,17 @@ class ChunkCompleted(ModelMessage):
     prompt: str = MessageField(
         description="Scene and event description used for this chunk, excluding YUME's generated control text."
     )
-    conditioned_prompt: str = MessageField(
-        description="Exact text condition used for this chunk, including YUME's movement, view, and speed controls."
-    )
     movement: Movement = MessageField(
         description="Translation direction applied throughout this completed chunk."
     )
     view: View = MessageField(
         description="Pan and tilt direction applied throughout this completed chunk."
+    )
+
+
+class RolloutLimitReached(ModelMessage):
+    """Emitted after the final chunk completes; reset or select a scene to continue."""
+
+    completed_chunks: int = MessageField(
+        description="Total completed chunks in this finished rollout."
     )

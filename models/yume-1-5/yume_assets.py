@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +19,6 @@ class YumeConfig:
     checkpoint_repo: str
     checkpoint_revision: str
     cache_dir: Path
-    runtime_dir: Path
     width: int
     height: int
     frames_per_chunk: int
@@ -29,7 +27,7 @@ class YumeConfig:
     shift: float
     seed: int
     default_upload_prompt: str
-    warmup_chunks: int
+    max_chunks: int
 
 
 def read_config(path: Path | None, weights_root: Path | None = None) -> YumeConfig:
@@ -43,14 +41,13 @@ def read_config(path: Path | None, weights_root: Path | None = None) -> YumeConf
 
     source, assets, inference = raw["source"], raw["assets"], raw["inference"]
     config = YumeConfig(
-        source_path=local(source["path"]),
+        source_path=_local_path(source["path"], path.parent),
         source_url=str(source["url"]),
         source_revision=str(source["revision"]),
         checkpoint_path=local(assets["checkpoint_path"]),
         checkpoint_repo=str(assets["checkpoint_repo"]),
         checkpoint_revision=str(assets["checkpoint_revision"]),
         cache_dir=local(assets["cache_dir"]),
-        runtime_dir=local(assets["runtime_dir"]),
         width=int(inference["width"]),
         height=int(inference["height"]),
         frames_per_chunk=int(inference["frames_per_chunk"]),
@@ -59,7 +56,7 @@ def read_config(path: Path | None, weights_root: Path | None = None) -> YumeConf
         shift=float(inference["shift"]),
         seed=int(inference["seed"]),
         default_upload_prompt=str(inference["default_upload_prompt"]).strip(),
-        warmup_chunks=int(inference["warmup_chunks"]),
+        max_chunks=int(inference["max_chunks"]),
     )
     if (config.width, config.height) != (1280, 704):
         raise ValueError("YUME-5B public checkpoint uses 1280x704 generation")
@@ -67,39 +64,48 @@ def read_config(path: Path | None, weights_root: Path | None = None) -> YumeConf
         raise ValueError(
             "YUME's native continuation window is 32 pixel / 8 latent frames"
         )
-    if config.sample_steps <= 0 or config.warmup_chunks < 0:
-        raise ValueError("sample_steps must be positive and warmup_chunks non-negative")
+    if config.sample_steps <= 0 or config.max_chunks <= 0:
+        raise ValueError("sample_steps and max_chunks must be positive")
     if not config.default_upload_prompt:
         raise ValueError("default_upload_prompt must be non-empty")
     return config
 
 
 def configure_environment(config: YumeConfig) -> None:
-    """Keep every mutable model/tool cache on the NVMe volume."""
+    """Set deployment caches without overriding operator choices."""
     paths = {
         "HF_HOME": config.cache_dir,
         "HUGGINGFACE_HUB_CACHE": config.cache_dir / "hub",
         "TRANSFORMERS_CACHE": config.cache_dir / "transformers",
-        "XDG_CACHE_HOME": config.runtime_dir / "xdg",
-        "TRITON_CACHE_DIR": config.runtime_dir / "triton",
-        "TORCHINDUCTOR_CACHE_DIR": config.runtime_dir / "torchinductor",
-        "CUDA_CACHE_PATH": config.runtime_dir / "cuda",
+        "XDG_CACHE_HOME": config.cache_dir / "xdg",
+        "TRITON_CACHE_DIR": config.cache_dir / "triton",
+        "TORCHINDUCTOR_CACHE_DIR": config.cache_dir / "torchinductor",
+        "CUDA_CACHE_PATH": config.cache_dir / "cuda",
     }
     for key, value in paths.items():
         value.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault(key, str(value))
     if os.environ.get("HF_KEY") and not os.environ.get("HF_TOKEN"):
         os.environ["HF_TOKEN"] = os.environ["HF_KEY"]
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def prepare_assets(config: YumeConfig) -> None:
     """Ensure immutable upstream source and checkpoint snapshots exist."""
-    config.runtime_dir.mkdir(parents=True, exist_ok=True)
     if not (config.source_path / ".git").is_dir():
         config.source_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["git", "clone", config.source_url, str(config.source_path)], check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(config.source_path),
+                "checkout",
+                "--detach",
+                config.source_revision,
+            ],
+            check=True,
         )
     actual = subprocess.run(
         ["git", "-C", str(config.source_path), "rev-parse", "HEAD"],
@@ -121,14 +127,6 @@ def prepare_assets(config: YumeConfig) -> None:
             local_dir=config.checkpoint_path,
             cache_dir=config.cache_dir,
         )
-
-
-def activate_source(config: YumeConfig) -> None:
-    """Import the pinned upstream checkout without modifying it."""
-    root = str(config.source_path.resolve())
-    if root in sys.path:
-        sys.path.remove(root)
-    sys.path.insert(0, root)
 
 
 def _local_path(value: object, root: Path) -> Path:

@@ -17,9 +17,9 @@ from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 from yume import Yume15
 from yume_assets import read_config
-from yume_backend import conditioned_prompt
-from yume_images import validate_image
-from yume_model import NoAnchor, YumeInput
+from yume_controls import conditioned_prompt
+from yume_images import prepare_image
+from yume_model import NoAnchor, YumeInput, YumeModel
 from yume_types import YumeOutput, YumeState
 
 
@@ -66,11 +66,12 @@ def test_conditioning_explicitly_distinguishes_stationary_and_motion() -> None:
 
 
 def test_upload_is_decodable() -> None:
-    validate_image(uploaded_image())
+    prepare_image(uploaded_image())
 
 
 def test_blank_image_prompt_uses_neutral_configured_prompt() -> None:
     model = Yume15()
+    model._engine = YumeModel()
     model.state = YumeState()
     model._config = read_config(Path(__file__).parents[1] / "yume.yaml")
     model.output = cast(Any, type("Output", (), {"flush": lambda self: None})())
@@ -95,20 +96,18 @@ def test_one_turn_is_one_chunk_and_prompt_can_change_without_reset(
             self, *, prompt: str, movement: str, view: str
         ) -> tuple[np.ndarray, str]:
             self.calls += 1
-            return np.zeros(
-                (29, 8, 8, 3), dtype=np.uint8
-            ), f"{movement}|{view}|{prompt}"
+            return np.zeros((29, 8, 8, 3), dtype=np.uint8)
 
         def end_session(self) -> None:
             return
 
     model = Yume15()
+    model._engine = YumeModel()
     model.state = YumeState()
     model._config = read_config(Path(__file__).parents[1] / "yume.yaml")
     backend = FakeBackend()
-    model._engine.backend = backend
-    model._engine.config = SimpleNamespace(runtime_dir=tmp_path)
-    model._seed = 42
+    model._engine._backend = backend
+    model.state._seed = 42
     asyncio.run(model.set_image(uploaded_image(), "A forest trail", 42))
 
     async def generate() -> tuple[np.ndarray, np.ndarray]:
@@ -141,19 +140,21 @@ def test_reset_flushes_media() -> None:
             self.flushes += 1
 
     model = Yume15()
+    model._engine = YumeModel()
     model.state = YumeState()
     output = FakeOutput()
     model.output = cast(Any, output)
     model._request_reset()
     assert output.flushes == 1
-    assert model._world_id != model._applied_world_id
+    assert model.state._world_id != model.state._applied_world_id
     assert model.state._pressed_keys == frozenset()
 
 
 def test_held_keys_combine_and_release_independently() -> None:
     model = Yume15()
+    model._engine = YumeModel()
     model.state = YumeState()
-    model._mode = "text_to_video"
+    model.state._mode = "text_to_video"
     asyncio.run(model.set_key_state("w", True))
     asyncio.run(model.set_key_state("a", True))
     asyncio.run(model.set_key_state("arrow_up", True))
@@ -167,6 +168,7 @@ def test_held_keys_combine_and_release_independently() -> None:
 
 def test_refusal_never_calls_model() -> None:
     app = Yume15()
+    app._engine = YumeModel()
     app.state = YumeState()
     app._engine = Mock()
     with pytest.raises(ApplicationError):
@@ -176,6 +178,7 @@ def test_refusal_never_calls_model() -> None:
 
 def test_generate_forwards_frozen_input_without_reading_state() -> None:
     app = Yume15()
+    app._engine = YumeModel()
     value = YumeInput(1, None, "forest", "none", "none")
     with pytest.raises(FrozenInstanceError):
         value.prompt = "changed"
@@ -189,6 +192,7 @@ def test_generate_forwards_frozen_input_without_reading_state() -> None:
 
 def test_ten_continuous_hook_steps_send_anchor_once() -> None:
     app = Yume15()
+    app._engine = YumeModel()
     app.state = YumeState()
     app.send = AsyncMock()
     anchors = []
@@ -198,12 +202,12 @@ def test_ten_continuous_hook_steps_send_anchor_once() -> None:
             anchors.append(kwargs)
 
         def generate_chunk(self, **kwargs):
-            return np.zeros((29, 8, 8, 3), np.uint8), kwargs["prompt"]
+            return np.zeros((29, 8, 8, 3), np.uint8)
 
         def end_session(self):
             pass
 
-    app._engine.backend = Backend()
+    app._engine._backend = Backend()
 
     async def drive():
         await app.set_text_scene("forest", 42)
@@ -214,8 +218,12 @@ def test_ten_continuous_hook_steps_send_anchor_once() -> None:
             assert result.chunk_index == index
             await app.process_output(StepOutcome(result=result, elapsed=0.5))
         assert len(anchors) == 1
-        states = [c.args[0] for c in app.send.call_args_list if type(c.args[0]).__name__ == "StateUpdate"]
-        assert all(not state.generating for state in states)
+        states = [
+            c.args[0]
+            for c in app.send.call_args_list
+            if type(c.args[0]).__name__ == "StateUpdate"
+        ]
+        assert all(not state.limit_reached for state in states[:-1])
         await app.reset(43)
         assert (await app.process_input()).anchor is not None
 
@@ -224,9 +232,170 @@ def test_ten_continuous_hook_steps_send_anchor_once() -> None:
 
 def test_model_error_reaches_output_without_counting_step() -> None:
     app = Yume15()
+    app._engine = YumeModel()
     app.state = YumeState()
+    app._engine._backend = Mock()
     with pytest.raises(NoAnchor) as caught:
         app.generate(YumeInput(1, None, "forest", "none", "none"))
     with pytest.raises(NoAnchor):
         asyncio.run(app.process_output(StepOutcome(error=caught.value)))
-    assert app._chunk_index == app._engine.chunk_index == 0
+    assert app.state._chunk_index == app._engine._chunk_index == 0
+
+
+def test_bad_video_is_command_error():
+    from reactor_runtime import CommandError
+    from yume_images import prepare_video
+
+    with pytest.raises(CommandError, match="decoded"):
+        prepare_video(UploadedFile("bad.mp4", "video/mp4", b"invalid"))
+
+
+def test_new_session_restores_config_seed():
+    app = Yume15()
+    app._config = read_config(Path(__file__).parents[1] / "yume.yaml")
+    app.state = YumeState()
+    app.state._seed = 123
+    app.on_session_started()
+    assert app.state._seed == 42
+
+
+def test_application_fake_model_final_chunk_and_refusal():
+    from yume_model import YumeResult
+
+    app = Yume15()
+    app.state = YumeState()
+    app._engine = Mock()
+    app.send = AsyncMock()
+    asyncio.run(app.set_text_scene("forest", 42))
+    step = asyncio.run(app.process_input())
+    result = YumeResult(step.world_id, 10, np.zeros((29, 2, 2, 3), np.uint8), True)
+    app._engine.generate.return_value = result
+    assert app.generate(step) is result
+    app.send.reset_mock()
+    asyncio.run(app.process_output(StepOutcome(result=result, elapsed=1.0)))
+    assert [type(c.args[0]).__name__ for c in app.send.call_args_list] == [
+        "ChunkCompleted",
+        "RolloutLimitReached",
+        "StateUpdate",
+    ]
+    with pytest.raises(ApplicationError, match="complete"):
+        asyncio.run(app.process_input())
+    asyncio.run(app.reset(-1))
+    assert asyncio.run(app.process_input()).anchor is not None
+
+
+def test_model_cap_and_reset_are_explicit():
+    from yume_model import YumeAnchor, RolloutExhausted
+
+    engine = YumeModel()
+    backend = Mock()
+    backend.generate_chunk.return_value = np.zeros((29, 2, 2, 3), np.uint8)
+    engine._backend = backend
+    engine._max_chunks = 1
+    step = YumeInput(1, YumeAnchor("text_to_video", None, 42), "forest", "none", "none")
+    assert engine.generate(step).complete
+    with pytest.raises(RolloutExhausted):
+        engine.generate(YumeInput(1, None, "forest", "none", "none"))
+    assert backend.generate_chunk.call_count == 1
+    engine.reset()
+    backend.end_session.assert_called_once()
+    assert engine.generate(step).chunk_index == 1
+
+
+def test_image_anchor_is_prepared_once():
+    app = Yume15()
+    app.state = YumeState()
+    app._config = read_config(Path(__file__).parents[1] / "yume.yaml")
+    asyncio.run(app.set_image(uploaded_image(), "forest", 42))
+    anchor = asyncio.run(app.process_input()).anchor
+    assert anchor.media.shape == (704, 1280, 3)
+    assert anchor.media.dtype == np.uint8
+    assert anchor.media is asyncio.run(app.process_input()).anchor.media
+
+
+def test_video_preparation_is_bounded(monkeypatch):
+    import av
+    from yume_images import prepare_video
+
+    class Container:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def decode(self, video):
+            for i in range(33):
+                yield SimpleNamespace(
+                    width=16, height=16, to_image=lambda: Image.new("RGB", (16, 16))
+                )
+            raise AssertionError("decoded more than the required 33 frames")
+
+    monkeypatch.setattr(av, "open", lambda _: Container())
+    result = prepare_video(UploadedFile("video.mp4", "video/mp4", b"fixture"))
+    assert result.shape == (33, 704, 1280, 3)
+
+
+def test_model_imports_without_runtime():
+    import subprocess, sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import builtins
+original=builtins.__import__
+def guarded(name,*args,**kwargs):
+    if name.startswith('reactor_runtime'): raise AssertionError(name)
+    return original(name,*args,**kwargs)
+builtins.__import__=guarded
+import yume_model, yume_controls
+yume_model.YumeModel()
+""",
+        ],
+        cwd=Path(__file__).parents[1],
+        check=True,
+    )
+
+
+def test_first_checkout_pins_revision_before_loading_weights(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import yume_assets
+
+    config = replace(
+        read_config(Path(__file__).parents[1] / "yume.yaml"),
+        source_path=tmp_path / "source",
+        checkpoint_path=tmp_path / "weights",
+    )
+    config.checkpoint_path.mkdir()
+    (config.checkpoint_path / "diffusion_pytorch_model.safetensors").touch()
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if "clone" in args:
+            (config.source_path / ".git").mkdir(parents=True)
+        return SimpleNamespace(stdout=config.source_revision)
+
+    monkeypatch.setattr(yume_assets.subprocess, "run", run)
+    yume_assets.prepare_assets(config)
+    assert calls[0][1] == "clone"
+    assert calls[1][-3:] == ["checkout", "--detach", config.source_revision]
+    assert calls[2][-2:] == ["rev-parse", "HEAD"]
+
+
+def test_video_scene_passes_prepared_cpu_anchor(monkeypatch):
+    import yume
+
+    app = Yume15()
+    app.state = YumeState()
+    app._config = read_config(Path(__file__).parents[1] / "yume.yaml")
+    frames = np.zeros((33, 704, 1280, 3), np.uint8)
+    decode = Mock(return_value=frames)
+    monkeypatch.setattr(yume, "prepare_video", decode)
+    media = UploadedFile("scene.mp4", "video/mp4", b"fixture")
+    asyncio.run(app.set_video_scene(media, "forest", 42))
+    step = asyncio.run(app.process_input())
+    assert step.anchor.media is frames and step.anchor.mode == "video_to_video"
+    decode.assert_called_once_with(media)
