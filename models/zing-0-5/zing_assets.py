@@ -31,11 +31,11 @@ def read_config(path: Path | None, weights_root: Path) -> ZingAdapterConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     source, assets, inference = raw["source"], raw["assets"], raw["inference"]
     result = ZingAdapterConfig(
-        source_path=(path.parent / Path(source["path"])).resolve(),
+        source_path=(path.parent / Path(source["path"]).expanduser()).resolve(),
         source_revision=str(source["revision"]),
         repo_id=str(assets["repo_id"]),
         asset_revision=str(assets["revision"]),
-        asset_path=(weights_root / Path(assets["path"])).resolve(),
+        asset_path=(weights_root / Path(assets["path"]).expanduser()).resolve(),
         width=int(inference["width"]),
         height=int(inference["height"]),
         seed=int(inference["seed"]),
@@ -78,14 +78,50 @@ def prepare_assets(config: ZingAdapterConfig) -> None:
         raise RuntimeError(
             f"Zing source is {actual}; expected {config.source_revision}"
         )
-    required = config.asset_path / "generator" / "model.pt"
-    if not required.is_file():
+    required = tuple(
+        config.asset_path / name
+        for name in (
+            "generator/model.pt",
+            "pretrained/vae/config.json",
+            "pretrained/vae/diffusion_pytorch_model.safetensors",
+            "pretrained/text_encoder/config.json",
+            "pretrained/text_encoder/model.safetensors.index.json",
+            "pretrained/text_encoder/model-00001-of-00003.safetensors",
+            "pretrained/text_encoder/model-00002-of-00003.safetensors",
+            "pretrained/text_encoder/model-00003-of-00003.safetensors",
+            "pretrained/tokenizer/tokenizer_config.json",
+            "pretrained/tokenizer/tokenizer.json",
+            "pretrained/tokenizer/spiece.model",
+            "pretrained/tokenizer/special_tokens_map.json",
+        )
+    )
+    if any(not path.is_file() or path.stat().st_size == 0 for path in required):
         from huggingface_hub import snapshot_download
 
-        token = os.environ.get("HF_KEY") or os.environ.get("HF_TOKEN")
+        token = os.environ.get("HF_TOKEN") or os.environ.get("HF_KEY")
         snapshot_download(
             repo_id=config.repo_id,
             revision=config.asset_revision,
             local_dir=config.asset_path,
             token=token,
         )
+    # Hub metadata can consider an existing empty file current; force only those files.
+    empty = [
+        path.relative_to(config.asset_path).as_posix()
+        for path in required
+        if path.is_file() and path.stat().st_size == 0
+    ]
+    if empty:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=config.repo_id,
+            revision=config.asset_revision,
+            local_dir=config.asset_path,
+            allow_patterns=empty,
+            force_download=True,
+            token=os.environ.get("HF_TOKEN") or os.environ.get("HF_KEY"),
+        )
+    for path in required:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f"Zing asset is missing or empty: {path}")

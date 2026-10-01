@@ -5,23 +5,131 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import FrozenInstanceError, replace
-from unittest.mock import Mock
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
-from types import SimpleNamespace
-from reactor_runtime import ApplicationError, StepOutcome, CommandError
 from PIL import Image
-from reactor_runtime import UploadedFile
+from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
 from zing import Zing
-from zing_model import ZingModel, LOCAL_ATTN_SIZE, SINK_SIZE
 from zing_assets import read_config
 from zing_images import prepare_image
+from zing_model import LOCAL_ATTN_SIZE, SINK_SIZE, ZingModel
 from zing_types import ZingOutput, ZingState
+
+
+@pytest.mark.parametrize("value", ["~/source", "relative/source", "/absolute/source"])
+def test_config_paths_expand_home_and_ignore_cwd(tmp_path, monkeypatch, value):
+    import yaml
+
+    import zing_assets as assets
+
+    path = Path(__file__).parents[1] / "zing.yaml"
+    raw = yaml.safe_load(path.read_text())
+    raw["source"]["path"] = value
+    raw["assets"]["path"] = value
+    monkeypatch.setattr(assets.yaml, "safe_load", lambda text: raw)
+    monkeypatch.chdir(tmp_path)
+    config = assets.read_config(path, tmp_path)
+    expected = Path(value).expanduser()
+    assert config.source_path == (path.parent / expected).resolve()
+    assert config.asset_path == (tmp_path / expected).resolve()
+
+
+@pytest.mark.parametrize(
+    "damaged",
+    [
+        "generator/model.pt",
+        "pretrained/vae/config.json",
+        "pretrained/vae/diffusion_pytorch_model.safetensors",
+        "pretrained/text_encoder/config.json",
+        "pretrained/text_encoder/model.safetensors.index.json",
+        "pretrained/text_encoder/model-00001-of-00003.safetensors",
+        "pretrained/text_encoder/model-00002-of-00003.safetensors",
+        "pretrained/text_encoder/model-00003-of-00003.safetensors",
+        "pretrained/tokenizer/tokenizer_config.json",
+        "pretrained/tokenizer/tokenizer.json",
+        "pretrained/tokenizer/spiece.model",
+        "pretrained/tokenizer/special_tokens_map.json",
+    ],
+)
+@pytest.mark.parametrize("empty", [False, True])
+def test_asset_download_repairs_each_required_file(
+    tmp_path, monkeypatch, damaged, empty
+):
+    import sys
+    from dataclasses import replace
+
+    import zing_assets as assets
+
+    config = assets.read_config(Path(__file__).parents[1] / "zing.yaml", tmp_path)
+    config = replace(config, source_path=tmp_path / "source")
+    (config.source_path / ".git").mkdir(parents=True)
+    monkeypatch.setattr(
+        assets.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(stdout=config.source_revision),
+    )
+    root = config.asset_path
+    files = [
+        "generator/model.pt",
+        "pretrained/vae/config.json",
+        "pretrained/vae/diffusion_pytorch_model.safetensors",
+        "pretrained/text_encoder/config.json",
+        "pretrained/text_encoder/model.safetensors.index.json",
+        "pretrained/text_encoder/model-00001-of-00003.safetensors",
+        "pretrained/text_encoder/model-00002-of-00003.safetensors",
+        "pretrained/text_encoder/model-00003-of-00003.safetensors",
+        "pretrained/tokenizer/tokenizer_config.json",
+        "pretrained/tokenizer/tokenizer.json",
+        "pretrained/tokenizer/spiece.model",
+        "pretrained/tokenizer/special_tokens_map.json",
+    ]
+
+    def populate(**kwargs):
+        for name in files:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+
+    populate()
+    target = root / damaged
+    if empty:
+        target.write_bytes(b"")
+    else:
+        target.unlink()
+
+    def download_snapshot(**kwargs):
+        # Simulate Hub reusing stale metadata for an existing zero-byte file.
+        populate()
+        if empty and not kwargs.get("force_download"):
+            target.write_bytes(b"")
+
+    download = Mock(side_effect=download_snapshot)
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download)
+    )
+    monkeypatch.setenv("HF_TOKEN", "preferred")
+    monkeypatch.setenv("HF_KEY", "legacy")
+    assets.prepare_assets(config)
+    assert download.call_count == (2 if empty else 1)
+    if empty:
+        assert download.call_args.kwargs["force_download"] is True
+        assert download.call_args.kwargs["allow_patterns"] == [damaged]
+    assert download.call_args.kwargs["revision"] == config.asset_revision
+    assert download.call_args.kwargs["token"] == "preferred"
+    download.reset_mock()
+    assets.prepare_assets(config)
+    download.assert_not_called()
+    target.unlink()
+    download.side_effect = None
+    with pytest.raises(RuntimeError, match="missing or empty"):
+        assets.prepare_assets(config)
 
 
 def test_contract_covers_text_image_and_all_native_controls() -> None:
@@ -351,7 +459,7 @@ def test_limit_retains_world_and_releases_controls():
 
 
 def test_native_key_values_and_fixed_memory_geometry():
-    from zing_model import action_values, NATIVE_KEYS
+    from zing_model import NATIVE_KEYS, action_values
 
     assert (LOCAL_ATTN_SIZE, SINK_SIZE) == (97, 9)
     for index, key in enumerate(NATIVE_KEYS):
@@ -383,6 +491,7 @@ def test_missing_example_keeps_current_selection(tmp_path, monkeypatch):
 
 def test_fake_model_final_message_order():
     from unittest.mock import AsyncMock
+
     from zing_model import ZingResult
 
     model = Zing()
@@ -409,7 +518,7 @@ def test_fake_model_final_message_order():
 
 
 def test_model_failure_limit_and_reset():
-    from zing_model import ZingInput, RolloutComplete, NotSeeded
+    from zing_model import NotSeeded, RolloutComplete, ZingInput
 
     model = ZingModel()
     model.config = SimpleNamespace(max_chunks=1)
@@ -427,7 +536,8 @@ def test_model_failure_limit_and_reset():
 
 
 def test_model_graph_without_runtime():
-    import subprocess, sys
+    import subprocess
+    import sys
 
     subprocess.run(
         [

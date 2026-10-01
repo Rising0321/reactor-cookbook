@@ -62,6 +62,7 @@ until an explicit reset or new image selection. The manifest records
 ## Tests
 
 ```sh
+cd models/zing-0-5  # From the repository root.
 PYTHONPATH=. python -m pytest tests/ -q
 ```
 
