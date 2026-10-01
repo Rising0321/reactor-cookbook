@@ -1,35 +1,42 @@
-# The Runtime release is pinned by build.runtime_version in reactor.yaml.
-# Keep only model dependencies here; do not install reactor-runtime directly.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 --extra-index-url https://download.pytorch.org/whl/cu128
 
+# CUDA stack used by the pinned upstream source.
 torch==2.7.1+cu128
 torchvision==0.22.1+cu128
+# Upstream inference stack: Lyra-2/requirements.txt at 9fffc9a.
+# The upstream folder has no installable package; its modules load from the
+# image checkout. Web server, training, testing and transitive pins are omitted.
 accelerate==1.8.1
 diffusers==0.35.2
 peft==0.17.1
 megatron-core==0.12.1
 transformers==4.57.1
-numpy>=2.0
+
+# Adapter input preparation and config parsing.
+numpy>=2.1,<2.5
 pandas==2.2.3
-pillow==11.1.0
-opencv-python-headless==4.11.0.86
+Pillow>=11,<13
+opencv-python-headless>=4.11,<5
 scikit-image==0.25.2
 scipy==1.15.3
-av>=18.0.0
+av>=18
 decord==0.6.0
 imageio[pyav,ffmpeg]==2.37.0
 imageio-ffmpeg==0.6.0
 ffmpegcv
 hydra-core==1.3.2
 omegaconf==2.3.0
-PyYAML==6.0.3
+PyYAML>=6,<7
 sentencepiece==0.2.0
 tiktoken==0.9.0
 tokenizers==0.22
 ftfy==6.3.1
 webdataset==0.2.111
 zarr==2.18.3
-tensorstore==0.1.45
+# Python 3.12 wheels; the upstream 0.1.45 pin predates this Python version.
+tensorstore>=0.1.67,<0.2
 numcodecs==0.13.1
 boto3==1.38.31
 fsspec==2025.5.1
@@ -39,12 +46,10 @@ tyro==0.9.32
 tqdm==4.67.1
 psutil==7.0.0
 loguru==0.7.3
-rich==14.0.0
 matplotlib==3.10.7
 fvcore==0.1.5.post20221221
 iopath==0.1.10
 huggingface-hub==0.35.3
-httpx==0.28.1
 pyquaternion
 lru-dict
 OpenEXR==3.2.3
@@ -55,8 +60,12 @@ termcolor
 braceexpand
 fasteners
 lazy-loader>=0.4
+
+# Native extensions (VIPE/Depth Anything, Transformer Engine, FlashAttention).
+packaging>=24.2
+setuptools>=77
+wheel
+ninja
 hatchling
 hatch-vcs>=0.4
 editables
-orjson==3.11.3
-protobuf==7.35.1
