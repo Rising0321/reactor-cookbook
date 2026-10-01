@@ -1,5 +1,8 @@
 """Client-facing avatar inputs, audiovisual tracks and session snapshots."""
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from reactor_runtime import Audio, InputState, MessageField, ModelMessage, Output, Video
 
 
@@ -13,6 +16,12 @@ class LiveAvatarOutput(Output):
 
 
 class LiveAvatarState(InputState):
+    _directory: TemporaryDirectory | None = None
+    _image: Path | None = None
+    _audio: Path | None = None
+    _pose: Path | None = None
+    _take_id: int = 0
+    _applied_take_id: int | None = None
     _image_name: str | None = None
     _audio_name: str | None = None
     _pose_name: str | None = None

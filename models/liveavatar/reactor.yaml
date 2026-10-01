@@ -9,7 +9,7 @@ model:
       count: 3
 runtime:
   import: liveavatar_pipeline:LiveAvatar
-  weights_path: /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
+  weights_path: ~/.cache/reactor_registry/liveavatar
 build:
   runtime_version: "3.6.0"
   python_version: "3.12"
@@ -23,6 +23,7 @@ build:
     - python -c 'from flash_attn import flash_attn_func; from flash_attn.cute import flash_attn_func as fa4; print("FA2/FA4 imports verified")'
     - git clone https://github.com/Alibaba-Quark/LiveAvatar.git /opt/liveavatar-source && git -C /opt/liveavatar-source checkout --detach c3c47d031d8bf3247428333c1fe610579c71a551
   runtime_env:
+    ENABLE_COMPILE: "false"
     LIVEAVATAR_TURBO: "1"
     LIVEAVATAR_STEPS: "4"
     LIVEAVATAR_SOURCE: /opt/liveavatar-source

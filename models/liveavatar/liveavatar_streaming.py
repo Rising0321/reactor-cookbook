@@ -9,9 +9,7 @@ Weight loading, conditioning helpers and cache allocation are inherited.
 """
 
 import gc
-import os
 import random
-import subprocess
 import sys
 import time
 from copy import deepcopy
@@ -19,10 +17,8 @@ from copy import deepcopy
 import numpy as np
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from diffusers import FlowMatchEulerDiscreteScheduler
 from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V
-from liveavatar.utils.router.utils import process_masks_to_routing_logits
 from PIL import Image
 from torchvision import transforms
 from tqdm import tqdm
@@ -123,118 +119,11 @@ class StreamingWanS2V(WanS2V):
         crop_opreat = transforms.CenterCrop((HEIGHT, WIDTH))
         tensor_trans = transforms.ToTensor()
         ref_image = np.array(Image.open(ref_image_path).convert("RGB"))
-        if enable_tts is True:
-            audio_path = self.tts(tts_prompt_audio, tts_prompt_text, tts_text)
         self.audio_encoder.model.to(device=self.device, dtype=self.param_dtype)
         self.audio_encoder.model.requires_grad_(False)
         self.audio_encoder.model.eval()
-        if "+" in audio_path:
-            audio_paths = audio_path.split("+")
-            audio_embs = []
-            nr_list = []
-            for path in audio_paths:
-                audio_emb_i, nr_i = self.encode_audio(path, infer_frames=infer_frames)
-                audio_embs.append(audio_emb_i)
-                nr_list.append(nr_i)
-            min_frames = min(emb.shape[-1] for emb in audio_embs)
-            audio_embs = [emb[..., :min_frames] for emb in audio_embs]
-            nr = min(nr_list)
-            audio_emb = torch.cat(audio_embs, dim=0)
-            print(f"rank {dist.get_rank()} processing SAM2")
-            input_video_for_sam2 = (
-                input_video_for_sam2
-                if input_video_for_sam2 is not None
-                else ref_image_path
-            )
-            routing_logits = None
-            rank = dist.get_rank()
-            if rank == 0:
-                video_path_bytes = input_video_for_sam2.encode("utf-8")
-                path_length = torch.tensor(
-                    [len(video_path_bytes)], dtype=torch.long, device=self.device
-                )
-            else:
-                path_length = torch.tensor([0], dtype=torch.long, device=self.device)
-            dist.broadcast(path_length, src=0)
-            if rank == 0:
-                path_tensor = torch.ByteTensor(list(video_path_bytes)).to(self.device)
-            else:
-                path_tensor = torch.zeros(
-                    path_length.item(), dtype=torch.uint8, device=self.device
-                )
-            dist.broadcast(path_tensor, src=0)
-            video_path = path_tensor.cpu().numpy().tobytes().decode("utf-8")
-            print(f"Rank {rank}: video_path: {video_path}")
-            parent_dir = os.path.dirname(video_path)
-            sam2_output_base = parent_dir
-            if rank == 0:
-                sam2_cmd = [
-                    "python",
-                    "liveavatar/utils/router/sam2_tools.py",
-                    "--video_folder",
-                    video_path,
-                    "--output_path",
-                    sam2_output_base,
-                ]
-                try:
-                    subprocess.run(sam2_cmd, check=True)
-                except subprocess.CalledProcessError as e:
-                    print(f"Rank {rank}: SAM2 processing failed: {e}")
-                    raise e
-                dist.barrier()
-            else:
-                dist.barrier()
-            base_name = os.path.basename(video_path).split(".")[0]
-            tracking_mask_results_dir = os.path.join(
-                sam2_output_base, base_name, "tracking_mask_results"
-            )
-            print(f"Rank {rank}: Looking for masks in: {tracking_mask_results_dir}")
-            target_shape = (1, infer_frames // 4, HEIGHT // 8, WIDTH // 8)
-            routing_logits = process_masks_to_routing_logits(
-                tracking_mask_results_dir, shape=target_shape
-            )
-            num_actors = routing_logits.shape[-1]
-            routing_logits = routing_logits.reshape(
-                1, infer_frames // 4, HEIGHT // 8 // 2, WIDTH // 8 // 2, num_actors
-            )
-            routing_logits = routing_logits.to(
-                device=self.device, dtype=self.param_dtype
-            )
-            mask = routing_logits.permute(4, 1, 2, 3, 0)
-
-            def dilate_mask_by_ratio(
-                mask_tensor: torch.Tensor, ratio: float = 0.3, thr: float = 0.5
-            ) -> torch.Tensor:
-                A, T, H, W, _ = mask_tensor.shape
-                out = torch.zeros_like(mask_tensor)
-                bin_mask = (mask_tensor > thr).to(dtype=mask_tensor.dtype)
-                for a in range(A):
-                    for t in range(T):
-                        m2d = bin_mask[a, t, :, :, 0]
-                        if m2d.any():
-                            ys, xs = torch.where(m2d)
-                            box_h = int(ys.max() - ys.min() + 1)
-                            box_w = int(xs.max() - xs.min() + 1)
-                            radius = max(1, int(ratio * max(box_h, box_w) + 0.9999))
-                            k = 2 * radius + 1
-                            x = m2d[None, None, :, :]
-                            x = F.max_pool2d(x, kernel_size=k, stride=1, padding=radius)
-                            out[a, t, :, :, 0] = (x[0, 0] > 0).to(mask_tensor.dtype)
-                        else:
-                            out[a, t, :, :, 0] = m2d
-                return out
-
-            mask = dilate_mask_by_ratio(mask, ratio=0.1, thr=0.5)
-            mask_bool = mask > 0.5
-            total_count = mask_bool.sum(dim=0, keepdim=True)
-            others_present = total_count - mask_bool.to(total_count.dtype) > 0
-            mask = (~others_present).to(dtype=mask.dtype)
-            m = (mask[0][0].detach().to(torch.float16).cpu().numpy() > 0.5).astype(
-                np.uint8
-            ) * 255
-            Image.fromarray(m.squeeze()).save("tmp/mask/mask.png")
-        else:
-            audio_emb, nr = self.encode_audio(audio_path, infer_frames=infer_frames)
+        # The application supplies one prepared speech file per take.
+        audio_emb, nr = self.encode_audio(audio_path, infer_frames=infer_frames)
         self.audio_encoder.model.to("cpu")
         if num_repeat is None or num_repeat > nr:
             num_repeat = nr

@@ -1,4 +1,4 @@
-"""NVMe asset locations and pinned upstream setup for stage-one debugging."""
+"""Application-owned preparation of pinned source and checkpoint paths."""
 
 from __future__ import annotations
 
@@ -6,76 +6,46 @@ import os
 import subprocess
 from pathlib import Path
 
-ROOT = Path("/opt/dlami/nvme")
+from liveavatar_model import LiveAvatarSettings
+
 SOURCE_REVISION = "c3c47d031d8bf3247428333c1fe610579c71a551"
 BASE_REVISION = "dab4e9c55bbe4c8c4d03db1c2c98c7f0ac9c454b"
 LORA_REVISION = "92cdccd12a91e8a63767a7c821b7c75e51d5a172"
-SOURCE = Path(
-    os.environ.get("LIVEAVATAR_SOURCE", ROOT / "ruixing/liveavatar-upstream-20260916")
-)
-LOCAL_WEIGHTS_ONLY = os.environ.get("LIVEAVATAR_LOCAL_WEIGHTS_ONLY") == "1"
 
 
-WORK = ROOT / ".cache_hf/reactor_registry/liveavatar-stage1"
-
-
-def configure_cache_environment(weights_root: Path | None = None) -> None:
-    global WORK
-    if weights_root is not None:
-        WORK = weights_root / ".runtime"
-    cache_root = WORK / "cache" if LOCAL_WEIGHTS_ONLY else ROOT / ".cache_hf"
-    for name, value in {
-        "UV_CACHE_DIR": WORK / "uv" if LOCAL_WEIGHTS_ONLY else ROOT / ".cache_uv",
-        "UV_PYTHON_INSTALL_DIR": WORK / "python"
-        if LOCAL_WEIGHTS_ONLY
-        else ROOT / ".cache_uv/python",
-        "HF_HOME": cache_root,
-        "HF_HUB_CACHE": cache_root / "hub",
-        "TRANSFORMERS_CACHE": cache_root / "hub",
-        "XDG_CACHE_HOME": cache_root / "liveavatar-cache",
-        "TORCH_HOME": cache_root / "torch",
-        "TMPDIR": WORK / "tmp",
-        "TORCHINDUCTOR_CACHE_DIR": WORK / "inductor",
-        "CUTE_DSL_CACHE_DIR": WORK / "cute",
-        "FLASH_ATTENTION_CUTE_DSL_CACHE_DIR": WORK / "fa4",
+def configure_cache_environment(weights_root: Path) -> Path:
+    """Keep generated caches under the mount, respecting operator overrides."""
+    work = weights_root / ".runtime"
+    for name, relative in {
+        "HF_HOME": "cache",
+        "XDG_CACHE_HOME": "cache",
+        "TORCH_HOME": "torch",
+        "TMPDIR": "tmp",
+        "TORCHINDUCTOR_CACHE_DIR": "inductor",
+        "CUTE_DSL_CACHE_DIR": "cute",
+        "FLASH_ATTENTION_CUTE_DSL_CACHE_DIR": "fa4",
     }.items():
-        os.environ[name] = str(value)
-        value.mkdir(parents=True, exist_ok=True)
-    os.environ["ENABLE_COMPILE"] = "false"
+        path = Path(os.environ.setdefault(name, str(work / relative)))
+        path.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    return work
 
 
-def prepare_assets(weights_root: Path | None = None) -> tuple[Path, Path]:
-    configure_cache_environment(weights_root)
-    if not SOURCE.exists():
-        if LOCAL_WEIGHTS_ONLY:
-            raise RuntimeError(
-                "The container must include the pinned LiveAvatar source"
-            )
-        subprocess.run(
-            [
-                "git",
-                "clone",
-                "https://github.com/Alibaba-Quark/LiveAvatar.git",
-                str(SOURCE),
-            ],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(SOURCE), "checkout", "--detach", SOURCE_REVISION],
-            check=True,
+def prepare_assets(
+    weights_root: Path, source: Path, *, local_only: bool
+) -> tuple[Path, Path]:
+    """Validate the build's source and prepare weights; never mutate a checkout."""
+    if not source.is_dir():
+        raise RuntimeError(
+            "The serving image must include the pinned LiveAvatar source"
         )
     revision = subprocess.check_output(
-        ["git", "-C", str(SOURCE), "rev-parse", "HEAD"], text=True
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
     ).strip()
     if revision != SOURCE_REVISION:
-        raise RuntimeError(
-            f"Expected upstream {SOURCE_REVISION}, found {revision}; use a separate checkout"
-        )
-    if LOCAL_WEIGHTS_ONLY:
-        if weights_root is None:
-            raise ValueError("Local model loading requires an explicit weights root")
-        weights = weights_root
-        base, lora = weights / "wan2_2", weights / "liveavatar_lora"
+        raise RuntimeError(f"Expected upstream {SOURCE_REVISION}, found {revision}")
+    if local_only:
+        base, lora = weights_root / "wan2_2", weights_root / "liveavatar_lora"
         required = [
             base / "config.json",
             base / "Wan2.1_VAE.pth",
@@ -90,10 +60,39 @@ def prepare_assets(weights_root: Path | None = None) -> tuple[Path, Path]:
 
     from huggingface_hub import snapshot_download
 
-    base = Path(snapshot_download("Wan-AI/Wan2.2-S2V-14B", revision=BASE_REVISION))
-    lora = Path(snapshot_download("Quark-Vision/Live-Avatar", revision=LORA_REVISION))
+    cache = weights_root / "huggingface"
+    base = Path(
+        snapshot_download(
+            "Wan-AI/Wan2.2-S2V-14B", revision=BASE_REVISION, cache_dir=cache
+        )
+    )
+    lora = Path(
+        snapshot_download(
+            "Quark-Vision/Live-Avatar", revision=LORA_REVISION, cache_dir=cache
+        )
+    )
     return base, lora
 
 
-if __name__ == "__main__":
-    print(prepare_assets())
+def prepare_settings(weights_root: Path) -> LiveAvatarSettings:
+    """Resolve deployment choices once, before constructing the model."""
+    source = (
+        Path(os.environ.get("LIVEAVATAR_SOURCE", "/opt/liveavatar-source"))
+        .expanduser()
+        .resolve()
+    )
+    work = configure_cache_environment(weights_root)
+    base, lora = prepare_assets(
+        weights_root,
+        source,
+        local_only=os.environ.get("LIVEAVATAR_LOCAL_WEIGHTS_ONLY", "1") == "1",
+    )
+    if os.environ.get("LIVEAVATAR_STEPS", "4") != "4":
+        raise ValueError("This serving recipe preserves the released four-step sampler")
+    return LiveAvatarSettings(
+        source=source,
+        base=base,
+        lora=lora,
+        work=work,
+        turbo=os.environ.get("LIVEAVATAR_TURBO", "1") == "1",
+    )

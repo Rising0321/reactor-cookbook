@@ -15,7 +15,7 @@ ROOT = Path(__file__).parents[1]
 def test_profiles_keep_four_steps_and_dedicated_decoder(monkeypatch, turbo, world_size):
     monkeypatch.setenv("LIVEAVATAR_TURBO", turbo)
     monkeypatch.delenv("LIVEAVATAR_STEPS", raising=False)
-    plan = turbo_plan()
+    plan = turbo_plan(turbo == "1")
     assert plan["world_size"] == world_size
     assert plan["sampling_steps"] == 4
     assert plan["output_rank"] == world_size - 1

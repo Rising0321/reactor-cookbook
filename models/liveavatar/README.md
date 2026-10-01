@@ -8,11 +8,6 @@ and stream the resulting video with the uploaded speech.
 The recipe serves LiveAvatar's four-step Turbo profile on three NVIDIA B200
 GPUs. A session waits for your inputs and an explicit `start` command.
 
-Reactor Runtime 3.6 drives the application through `process_input()`,
-`generate()` and `process_output()`. A separate `liveavatar_model.py` owns
-native take state and reports clip progress through typed results. Take IDs
-apply the selected conditions once while preserving the native TPP stream.
-
 ## Prerequisites
 
 - The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation),
@@ -53,6 +48,8 @@ the health endpoint can already return HTTP 200.
 
 The container uses the prepared weights and keeps persistent runtime data
 beneath the weights mount. Storage locations are chosen by the operator.
+The source is pinned during the image build; startup validates that checkout
+and the mounted weights. Existing cache environment settings are respected.
 
 ## Connect and prepare a take
 
@@ -100,7 +97,7 @@ A running take rejects input changes. Send `stop`, await its reply, update
 conditions, then send `start` for another take. Commands run between inference
 turns, so an in-flight clip can delay a stop or reset reply.
 
-## Runtime boundary and output
+## Output and take lifetime
 
 The model loads once at service startup. Each take uses the selected image,
 audio and conditions throughout its generation. Automatic completion retains
@@ -137,11 +134,10 @@ Rejected commands return `command_error`. Missing image or audio produces
 
 ## Inference performance and verification
 
-Three-B200 container tests observed approximately 1.55–1.56 seconds of worker
-build time for a steady 48-frame clip, which represents 1.92 seconds of
-playback. First-clip preparation and compilation add substantial latency.
-These worker timings exclude client backpressure and allow work to overlap;
-end-to-end latency also depends on media transport and client buffering.
+The first clip includes model preparation and compilation. Throughput depends
+on hardware, clip conditions and transport; use received video timing when
+measuring realtime playback. Stop/reset can add model-loading latency to the
+next take.
 
 Playback can contain waiting silence while the next clip is being generated.
 

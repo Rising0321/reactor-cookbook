@@ -27,6 +27,8 @@ from liveavatar_types import (
     TakeChanged,
 )
 from PIL import Image
+from reactor_runtime.distributed import DistributedRunner
+from liveavatar_turbo import turbo_plan
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -42,6 +44,15 @@ from reactor_runtime import (
 )
 
 
+def _save_reference(data: bytes, temporary: Path, destination: Path) -> None:
+    """Validate and convert on the command's CPU preparation thread."""
+    with Image.open(io.BytesIO(data)) as decoded:
+        if decoded.width * decoded.height > 40_000_000:
+            raise ValueError("Image exceeds 40 million pixels")
+        decoded.convert("RGB").save(temporary)
+        temporary.replace(destination)
+
+
 class LiveAvatar(ReactorApp):
     state: LiveAvatarState
     fps = 25
@@ -49,37 +60,58 @@ class LiveAvatar(ReactorApp):
 
     def __init__(self):
         super().__init__()
-        self._engine = LiveAvatarModel()
-        self._directory = None
-        self._image: Path | None = None
-        self._audio: Path | None = None
-        self._pose: Path | None = None
-        self._take_id = 0
-        self._applied_take_id = None
+        self._engine: DistributedRunner | None = None
+        self._settings = None
+        self._work: Path | None = None
 
     def load(self, config_path: Path | None = None):
         from reactor_runtime import get_weights_path
 
         weights_root = get_weights_path()
-        assets.configure_cache_environment(weights_root)
-        self._engine.load(weights_root)
+        settings = assets.prepare_settings(weights_root)
+        self._work = settings.work
+        self._settings = settings
+        self._start_engine()
+
+    def _start_engine(self) -> None:
+        if self._engine is None:
+            runner = DistributedRunner(
+                LiveAvatarModel,
+                world_size=turbo_plan(self._settings.turbo)["world_size"],
+                load_kwargs={"settings": self._settings},
+                start_timeout=3600,
+                call_timeout=660,
+            )
+            runner.start()
+            self._engine = runner
+
+    def _release_engine(self) -> None:
+        if self._engine is not None:
+            # Cancellation must tear down all ranks together: a native TPP
+            # continuation can be blocked in CUDA send/recv or awaiting demand.
+            self._engine.shutdown()
+            self._engine = None
 
     @session_started
     async def on_session_started(self):
-        self._directory = tempfile.TemporaryDirectory(
-            prefix="session-", dir=assets.WORK
+        if self._work is None:
+            raise RuntimeError("LiveAvatar was not loaded")
+        self.state._directory = tempfile.TemporaryDirectory(
+            prefix="session-", dir=self._work
         )
-        self._image = self._audio = self._pose = None
-        self._applied_take_id = None
+        self.state._image = self.state._audio = self.state._pose = None
+        self.state._applied_take_id = None
 
     @session_ended
     async def on_session_ended(self):
-        await asyncio.to_thread(self._engine.reset)
-        if self._directory is not None:
-            self._directory.cleanup()
-            self._directory = None
-        self._image = self._audio = self._pose = None
-        self._applied_take_id = None
+        try:
+            await asyncio.to_thread(self._release_engine)
+        finally:
+            if self.state._directory is not None:
+                self.state._directory.cleanup()
+                self.state._directory = None
+            self.state._image = self.state._audio = self.state._pose = None
+            self.state._applied_take_id = None
 
     @connected
     async def on_connected(self, client: ClientInfo):
@@ -92,9 +124,9 @@ class LiveAvatar(ReactorApp):
             )
 
     def _path(self, name: str) -> Path:
-        if self._directory is None:
+        if self.state._directory is None:
             raise CommandError("session_required", "A session must be active.")
-        return Path(self._directory.name) / name
+        return Path(self.state._directory.name) / name
 
     async def _send_state_update(self):
         await self.send(StateUpdate.from_state(self.state))
@@ -114,14 +146,15 @@ class LiveAvatar(ReactorApp):
         try:
             if not image.data or image.size > 25 * 1024**2:
                 raise ValueError("Image must be nonempty and at most 25 MiB")
-            with Image.open(io.BytesIO(image.data)) as decoded:
-                if decoded.width * decoded.height > 40_000_000:
-                    raise ValueError("Image exceeds 40 million pixels")
-                decoded.convert("RGB").save(self._path("reference-new.png"))
-                self._path("reference-new.png").replace(self._path("reference.png"))
-        except Exception as exc:
+            await asyncio.to_thread(
+                _save_reference,
+                image.data,
+                self._path("reference-new.png"),
+                self._path("reference.png"),
+            )
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
             raise CommandError("invalid_image", str(exc)) from exc
-        self._image = self._path("reference.png")
+        self.state._image = self._path("reference.png")
         self.state._image_name = image.name
         await self._send_state_update()
         return InputAccepted(field="avatar_image")
@@ -144,37 +177,50 @@ class LiveAvatar(ReactorApp):
             )
         raw, target = self._path("audio-upload"), self._path("driving-new.wav")
         raw.write_bytes(audio.data)
-        result = await asyncio.to_thread(
-            subprocess.run,
-            [
-                "ffmpeg",
-                "-v",
-                "error",
-                "-nostdin",
-                "-y",
-                "-i",
-                str(raw),
-                "-vn",
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                str(target),
-            ],
-            capture_output=True,
-        )
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    "-i",
+                    str(raw),
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    str(target),
+                ],
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise CommandError(
+                "invalid_audio", "Audio conversion failed or timed out"
+            ) from error
+        finally:
+            raw.unlink(missing_ok=True)
         if result.returncode:
             raise CommandError("invalid_audio", "Cannot decode the uploaded audio")
         import soundfile as sf
 
-        info = sf.info(target)
+        try:
+            info = sf.info(target)
+        except (RuntimeError, OSError) as error:
+            raise CommandError(
+                "invalid_audio", "Converted audio is unreadable"
+            ) from error
         if info.duration < 48 / 25:
             raise CommandError(
                 "audio_too_short",
                 "Supply at least 1.92 seconds of audio for one native clip",
             )
         target.replace(self._path("driving.wav"))
-        self._audio = self._path("driving.wav")
+        self.state._audio = self._path("driving.wav")
         self.state._audio_name = audio.name
         await self._send_state_update()
         return InputAccepted(field="audio")
@@ -193,7 +239,7 @@ class LiveAvatar(ReactorApp):
     ) -> InputAccepted:
         self._require_idle()
         if pose_video is None:
-            self._pose = None
+            self.state._pose = None
             self.state._pose_name = None
         else:
             if not pose_video.data or pose_video.size > 100 * 1024**2:
@@ -202,28 +248,34 @@ class LiveAvatar(ReactorApp):
                 )
             path = self._path("pose-new.mp4")
             path.write_bytes(pose_video.data)
-            result = await asyncio.to_thread(
-                subprocess.run,
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "v:0",
-                    "-show_entries",
-                    "stream=width",
-                    "-of",
-                    "csv=p=0",
-                    str(path),
-                ],
-                capture_output=True,
-            )
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=width",
+                        "-of",
+                        "csv=p=0",
+                        str(path),
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise CommandError(
+                    "invalid_pose", "Video inspection failed or timed out"
+                ) from error
             if result.returncode or not result.stdout.strip():
                 raise CommandError(
                     "invalid_pose", "Upload must contain a readable video track"
                 )
             path.replace(self._path("pose.mp4"))
-            self._pose = self._path("pose.mp4")
+            self.state._pose = self._path("pose.mp4")
             self.state._pose_name = pose_video.name
         await self._send_state_update()
         return InputAccepted(field="pose_video")
@@ -283,14 +335,15 @@ class LiveAvatar(ReactorApp):
     )
     async def start(self) -> TakeChanged:
         self._require_idle()
-        if self._image is None or self._audio is None:
+        if self.state._image is None or self.state._audio is None:
             raise CommandError(
                 "inputs_required", "Upload reference image and driving audio first"
             )
+        await asyncio.to_thread(self._start_engine)
         self.state._running = True
         self.state._chunks = self.state._frames = 0
         self.state._error = None
-        self._take_id += 1
+        self.state._take_id += 1
         await self._send_state_update()
         return TakeChanged(action="start")
 
@@ -299,9 +352,9 @@ class LiveAvatar(ReactorApp):
         description="End the take and clear queued playback while retaining selected inputs, options and progress for inspection or another `start`. Valid while idle or generating in an active session. Returns `take_changed` and broadcasts `state_update`. Handled between inference turns, so an in-flight clip can delay the reply. Explicit stopping is reported by this reply; `generation_ended` reports automatic completion or failure.",
     )
     async def stop_take(self) -> TakeChanged:
-        await asyncio.to_thread(self._engine.reset)
+        await asyncio.to_thread(self._release_engine)
         self.state._running = False
-        self._applied_take_id = None
+        self.state._applied_take_id = None
         self.output.flush()
         await self._send_state_update()
         return TakeChanged(action="stop")
@@ -311,9 +364,13 @@ class LiveAvatar(ReactorApp):
         description="End the take, clear queued playback and selected inputs, and restore the session defaults. Valid while idle or generating in an active session; an in-flight clip can delay the reply. Returns `take_changed` and broadcasts `state_update` with cleared image, audio, pose, text, progress and error, seed 420 and clip limit 10000. Select image and audio again before `start`.",
     )
     async def reset(self) -> TakeChanged:
-        await self.stop_take()
-        self._image = self._audio = self._pose = None
+        await asyncio.to_thread(self._release_engine)
+        self.output.flush()
+        directory = self.state._directory
+        take_id = self.state._take_id
         self.state = LiveAvatarState()
+        self.state._directory = directory
+        self.state._take_id = take_id
         await self._send_state_update()
         return TakeChanged(action="reset")
 
@@ -321,26 +378,26 @@ class LiveAvatar(ReactorApp):
         if self.state is None or not self.state._running:
             raise ApplicationError("Upload image and audio, then start a take")
         conditions = None
-        if self._take_id != self._applied_take_id:
-            if self._image is None or self._audio is None:
+        if self.state._take_id != self.state._applied_take_id:
+            if self.state._image is None or self.state._audio is None:
                 raise ApplicationError("A take requires an uploaded image and audio")
             conditions = TakeConditions(
-                self._image,
-                self._audio,
-                self._pose,
-                self.state._prompt,
-                self.state._negative_prompt,
-                self.state._seed,
-                self.state._max_chunks,
+                image=self.state._image,
+                audio=self.state._audio,
+                pose=self.state._pose,
+                prompt=self.state._prompt,
+                negative_prompt=self.state._negative_prompt,
+                seed=self.state._seed,
+                max_chunks=self.state._max_chunks,
             )
-        return LiveAvatarInput(self._take_id, conditions)
+        return LiveAvatarInput(take_id=self.state._take_id, conditions=conditions)
 
     def generate(self, input: LiveAvatarInput) -> LiveAvatarResult:
         return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> LiveAvatarOutput | None:
         if isinstance(outcome.error, TakeFailed):
-            await asyncio.to_thread(self._engine.reset)
+            await asyncio.to_thread(self._release_engine)
             self.state._running = False
             self.state._error = str(outcome.error)
             await self.send(GenerationEnded(reason=self.state._error))
@@ -350,7 +407,7 @@ class LiveAvatar(ReactorApp):
             # Contract or device failures outside the native take are not recoverable.
             raise outcome.error
         result: LiveAvatarResult = outcome.result
-        self._applied_take_id = result.take_id
+        self.state._applied_take_id = result.take_id
         self.state._chunks, self.state._frames = result.chunks, result.frames
         if result.complete:
             await asyncio.to_thread(self._engine.reset)

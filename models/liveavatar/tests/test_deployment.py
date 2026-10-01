@@ -22,9 +22,6 @@ def test_manifest_has_native_yaml_build_and_three_gpu_profile():
 def test_local_weights_are_resolved_without_hf_download(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
-    monkeypatch.setattr(assets, "SOURCE", source)
-    monkeypatch.setattr(assets, "LOCAL_WEIGHTS_ONLY", True)
-    monkeypatch.setattr(assets, "configure_cache_environment", lambda *args: None)
     monkeypatch.setattr(
         subprocess,
         "check_output",
@@ -43,13 +40,13 @@ def test_local_weights_are_resolved_without_hf_download(tmp_path, monkeypatch):
         path = tmp_path / name
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(b"fixture")
-    assert assets.prepare_assets(tmp_path) == (
+    assert assets.prepare_assets(tmp_path, source, local_only=True) == (
         tmp_path / "wan2_2",
         tmp_path / "liveavatar_lora",
     )
     (tmp_path / "wan2_2/config.json").unlink()
     with pytest.raises(RuntimeError, match="Incomplete mounted weights"):
-        assets.prepare_assets(tmp_path)
+        assets.prepare_assets(tmp_path, source, local_only=True)
 
 
 def test_weight_materialization_dereferences_and_never_overwrites(tmp_path):
@@ -66,3 +63,74 @@ def test_weight_materialization_dereferences_and_never_overwrites(tmp_path):
     other.write_bytes(b"different")
     with pytest.raises(FileExistsError):
         link_or_copy(other, destination)
+
+
+def test_cache_setup_respects_operator_paths(tmp_path, monkeypatch):
+    import os
+
+    keys = [
+        "HF_HOME",
+        "XDG_CACHE_HOME",
+        "TORCH_HOME",
+        "TMPDIR",
+        "TORCHINDUCTOR_CACHE_DIR",
+        "CUTE_DSL_CACHE_DIR",
+        "FLASH_ATTENTION_CUTE_DSL_CACHE_DIR",
+    ]
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    custom = tmp_path / "operator-cache"
+    monkeypatch.setenv("HF_HOME", str(custom))
+    work = assets.configure_cache_environment(tmp_path / "weights")
+    assert os.environ["HF_HOME"] == str(custom)
+    assert custom.is_dir()
+    assert work == tmp_path / "weights/.runtime"
+    assert Path(os.environ["TMPDIR"]).is_relative_to(work)
+
+
+def test_model_load_uses_explicit_settings_without_asset_preparation(
+    tmp_path, monkeypatch
+):
+    import pickle
+    import liveavatar_parallel
+    from liveavatar_model import LiveAvatarModel, LiveAvatarSettings
+    from unittest.mock import Mock
+
+    settings = LiveAvatarSettings(
+        source=tmp_path,
+        base=tmp_path / "base",
+        lora=tmp_path / "lora",
+        work=tmp_path / "work",
+    )
+    assert pickle.loads(pickle.dumps(settings)) == settings
+    backend = Mock()
+    monkeypatch.setattr(liveavatar_parallel, "ParallelBackend", backend)
+    monkeypatch.setattr(
+        assets,
+        "prepare_assets",
+        Mock(side_effect=AssertionError("model must not prepare assets")),
+    )
+    model = LiveAvatarModel()
+    model.load(settings)
+    backend.assert_called_once_with(settings=settings, rank=0, world_size=1)
+
+
+def test_model_files_do_not_read_deployment_environment():
+    import ast
+
+    root = Path(__file__).parents[1]
+    for name in [
+        "liveavatar_model.py",
+        "liveavatar_parallel.py",
+        "liveavatar_parallel_worker.py",
+        "liveavatar_turbo.py",
+    ]:
+        tree = ast.parse((root / name).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+                assert ast.unparse(node.value) != "os.environ", (name, node.lineno)
+            if isinstance(node, ast.Call):
+                assert ast.unparse(node.func) not in {"os.getenv", "os.environ.get"}, (
+                    name,
+                    node.lineno,
+                )

@@ -44,8 +44,20 @@ class Backend:
 
 def app():
     result = LiveAvatar()
+    result._engine = LiveAvatarModel()
+    result._engine.shutdown = Mock()
+
+    # This fixture exercises app/model integration with a CPU backend. Restart
+    # creates another fake runner without spawning GPU workers.
+    def restart():
+        if result._engine is None:
+            result._engine = LiveAvatarModel()
+            result._engine.shutdown = Mock()
+            result._engine._backend = Backend()
+
+    result._start_engine = restart
     result.state = LiveAvatarState()
-    result._image, result._audio = Path("image.png"), Path("audio.wav")
+    result.state._image, result.state._audio = Path("image.png"), Path("audio.wav")
     result.send = AsyncMock()
     result.output = Mock()
     result._engine._backend = Backend()
@@ -67,7 +79,6 @@ def test_generate_reads_only_snapshot():
     with pytest.raises(FrozenInstanceError):
         value.take_id = 99
     model.state = None
-    model._image = model._audio = None
     result = model.generate(value)
     assert result.take_id == value.take_id and result.chunks == 1
     assert not hasattr(result, "input")
@@ -105,7 +116,7 @@ def test_failed_chunk_never_acknowledges_or_counts():
         model.generate(asyncio.run(model.process_input()))
     assert model._engine._chunks == 0
     asyncio.run(model.process_output(StepOutcome(error=error.value)))
-    assert model._applied_take_id is None and model.state._chunks == 0
+    assert model.state._applied_take_id is None and model.state._chunks == 0
     assert model.state._error == "worker failed" and not model.state._running
     assert all(
         type(c.args[0]).__name__ != "ChunkComplete" for c in model.send.call_args_list
@@ -172,3 +183,23 @@ liveavatar_model.LiveAvatarModel()
     subprocess.run(
         [sys.executable, "-c", code], cwd=Path(__file__).parents[1], check=True
     )
+
+
+@pytest.mark.parametrize(
+    "bad_audio",
+    [
+        np.full((1, 86400), 2, np.float32),
+        np.zeros((1, 86400), np.int16),
+        np.full((1, 86400), np.nan, np.float32),
+    ],
+)
+def test_invalid_audio_does_not_count_clip(bad_audio):
+    model = LiveAvatarModel()
+    model._backend = Backend()
+    model._backend.next = lambda: (np.zeros((45, 2, 2, 3), np.uint8), bad_audio)
+    step = LiveAvatarInput(
+        1, TakeConditions(Path("image"), Path("audio"), None, "", "", 420, 1)
+    )
+    with pytest.raises(ValueError, match="48 kHz"):
+        model.generate(step)
+    assert model._chunks == model._frames == 0

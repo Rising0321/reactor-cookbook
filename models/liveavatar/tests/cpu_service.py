@@ -6,6 +6,7 @@ from reactor_runtime.serve import main
 
 from liveavatar_audio import OUTPUT_SAMPLE_RATE, playback_audio
 from liveavatar_pipeline import LiveAvatar
+from liveavatar_model import LiveAvatarModel
 
 
 class Surrogate:
@@ -32,6 +33,11 @@ class Surrogate:
 
 
 def load(self, config_path=None):
+    from reactor_runtime import get_weights_path
+
+    self._work = get_weights_path() / ".runtime"
+    self._work.mkdir(parents=True, exist_ok=True)
+    self._engine = LiveAvatarModel()
     self._engine._backend = Surrogate()
 
 

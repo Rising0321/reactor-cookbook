@@ -1,4 +1,4 @@
-"""Materialize pinned checkpoints without symlinks; reuse local NVMe blobs."""
+"""Materialize pinned checkpoints without symlinks; reuse the operator's HF cache."""
 
 import argparse
 import errno
@@ -6,9 +6,7 @@ import os
 import shutil
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
-
-from liveavatar_assets import BASE_REVISION, LORA_REVISION, configure_cache_environment
+from liveavatar_assets import BASE_REVISION, LORA_REVISION
 
 
 def link_or_copy(source, destination):
@@ -34,7 +32,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-download", action="store_true")
     args = parser.parse_args()
-    configure_cache_environment()
+    from huggingface_hub import snapshot_download
+
     for repo, revision, folder in [
         ("Wan-AI/Wan2.2-S2V-14B", BASE_REVISION, "wan2_2"),
         ("Quark-Vision/Live-Avatar", LORA_REVISION, "liveavatar_lora"),
