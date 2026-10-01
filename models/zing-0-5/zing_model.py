@@ -1,15 +1,26 @@
 """Runtime-independent native Zing rollout and CPU step contract."""
+
 from dataclasses import dataclass
-from pathlib import Path
-import tempfile
 
 import numpy as np
-from PIL import Image
-from zing_assets import read_config, configure_environment, prepare_assets, activate_source
+from zing_assets import ZingAdapterConfig
+
+# Released generator memory geometry, not tunable serving controls.
+LOCAL_ATTN_SIZE = 97
+SINK_SIZE = 9
+NATIVE_KEYS = ("w", "a", "s", "d", "i", "j", "k", "l")
+
+
+def action_values(pressed) -> list[float]:
+    """Native training order: translation WASD followed by view IJKL."""
+    active = set(pressed)
+    return [float(key in active) for key in NATIVE_KEYS]
 
 
 @dataclass(frozen=True)
 class ZingInput:
+    """One block; a fresh image world supplies uint8 RGB (704,1248,3)."""
+
     world_id: int
     image: np.ndarray | None
     prompt: str
@@ -20,12 +31,11 @@ class ZingInput:
 
 @dataclass(frozen=True)
 class ZingResult:
+    """Actual progress and CPU uint8 RGB (T,H,W,3) video; no echoed controls."""
+
     world_id: int
     frames: np.ndarray
     index: int
-    prompt: str
-    pressed_keys: frozenset[str]
-    cache_frames: int
     complete: bool
 
 
@@ -44,13 +54,11 @@ class ZingModel:
         self.world_id: int | None = None
         self.index = 0
 
-    def load(self, config_path: Path | None, weights_root: Path) -> None:
-        self.config = read_config(config_path, weights_root)
-        configure_environment(self.config)
-        prepare_assets(self.config)
-        activate_source(self.config)
+    def load(self, config: ZingAdapterConfig) -> None:
         from zing_backend import ZingBackend
-        self.backend = ZingBackend(self.config)
+
+        self.config = config
+        self.backend = ZingBackend(config)
 
     def reset(self) -> None:
         if self.backend is not None:
@@ -64,21 +72,18 @@ class ZingModel:
         if input.world_id != self.world_id:
             if input.image_required and input.image is None:
                 raise NotSeeded("no anchor for new image-conditioned world")
-            if input.image is None:
-                self.backend.reset(image=None, prompt=input.prompt, seed=input.seed)
-            else:
-                directory = self.config.asset_path / "uploads"
-                directory.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(suffix=".png", dir=directory) as image:
-                    Image.fromarray(input.image).save(image.name)
-                    self.backend.reset(image=Path(image.name), prompt=input.prompt, seed=input.seed)
+            self.backend.reset(image=input.image, prompt=input.prompt, seed=input.seed)
             self.world_id = input.world_id
             self.index = 0
         if self.index >= self.config.max_chunks:
             raise RolloutComplete("rollout limit reached; reset required")
-        frames = self.backend.generate_chunk(prompt=input.prompt, pressed_keys=input.pressed_keys)
+        frames = self.backend.generate_chunk(
+            prompt=input.prompt, pressed_keys=input.pressed_keys
+        )
         self.index += 1
         return ZingResult(
-            self.world_id, frames, self.index, input.prompt, input.pressed_keys,
-            self.backend.cache_frames(), self.index >= self.config.max_chunks,
+            world_id=self.world_id,
+            frames=frames,
+            index=self.index,
+            complete=self.index >= self.config.max_chunks,
         )

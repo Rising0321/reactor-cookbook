@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from typing import Literal
-from reactor_runtime import InputField, InputState, MessageField, ModelMessage, Output, Video
+import numpy as np
+from reactor_runtime import (
+    InputField,
+    InputState,
+    MessageField,
+    ModelMessage,
+    Output,
+    Video,
+)
 
 ZingKey = Literal["w", "a", "s", "d", "i", "j", "k", "l"]
 
@@ -27,6 +35,15 @@ class ZingState(InputState):
         ),
     )
     _pressed_keys: frozenset[str] = frozenset()
+    _conditioning: Literal["none", "text", "uploaded", "built_in"] = "none"
+    _image: np.ndarray | None = None
+    _image_name: str | None = None
+    _seed: int = 42
+    _active_prompt: str | None = None
+    _completed_chunks: int = 0
+    _limit_reached: bool = False
+    _world_epoch: int = 0
+    _applied_world_id: int | None = None
 
 
 class StateUpdate(ModelMessage):
@@ -60,9 +77,6 @@ class StateUpdate(ModelMessage):
     reset_queued: bool = MessageField(
         description="Whether a fresh world will be initialized before the next chunk."
     )
-    generating: bool = MessageField(
-        description="Whether image preparation or one video chunk is in progress."
-    )
     max_chunks: int = MessageField(
         description="Maximum chunks before generation stops; a new world requires "
         "an explicit reset or image selection."
@@ -80,8 +94,12 @@ class StateUpdate(ModelMessage):
 class RolloutLimitReached(ModelMessage):
     """Emitted once when the final chunk completes, without replacing the world."""
 
-    completed_chunks: int = MessageField(description="Completed chunks in the exhausted world.")
-    max_chunks: int = MessageField(description="Maximum chunks supported by this rollout.")
+    completed_chunks: int = MessageField(
+        description="Completed chunks in the exhausted world."
+    )
+    max_chunks: int = MessageField(
+        description="Maximum chunks supported by this rollout."
+    )
     world_epoch: int = MessageField(
         description="Identifier of the exhausted world; no implicit reset occurs."
     )
@@ -90,7 +108,9 @@ class RolloutLimitReached(ModelMessage):
 class PromptQueued(ModelMessage):
     """Emitted when a prompt is accepted for a forthcoming chunk."""
 
-    prompt: str = MessageField(description="Normalized prompt accepted by `set_prompt`.")
+    prompt: str = MessageField(
+        description="Normalized prompt accepted by `set_prompt`."
+    )
     applies_to_chunk: int = MessageField(
         description="One-based chunk that will first sample the accepted prompt."
     )
@@ -146,7 +166,7 @@ class RolloutReset(ModelMessage):
 
 
 class ChunkCompleted(ModelMessage):
-    """Emitted after one causal chunk finishes and before its RGB frames stream."""
+    """Emitted after one video chunk finishes and before its RGB frames stream."""
 
     chunk: int = MessageField(description="One-based index of the completed chunk.")
     video_frames: int = MessageField(
@@ -158,7 +178,4 @@ class ChunkCompleted(ModelMessage):
     prompt: str = MessageField(description="Prompt sampled by the completed chunk.")
     action_keys: list[str] = MessageField(
         description="Complete held control state sampled by the completed chunk."
-    )
-    cache_frames: int = MessageField(
-        description="Number of prior world positions retained for subsequent chunks."
     )

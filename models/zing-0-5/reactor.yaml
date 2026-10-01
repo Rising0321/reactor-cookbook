@@ -1,11 +1,11 @@
 $schema: reactor/v2
 model:
   name: zing-0-5
-  version: v0.2.2
+  version: v0.1.0
   description: Explore Zing 0.5 through prompt, image, and its native W/A/S/D/I/J/K/L controls.
   resources:
     gpu:
-      type: NVIDIA_H100_80GB
+      type: NVIDIA_B200
       count: 1
 runtime:
   import: zing:Zing
@@ -25,6 +25,7 @@ build:
     - build-essential
     - git
   build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
     CUDA_HOME: /usr/local/cuda
     MAX_JOBS: "16"
     TORCH_CUDA_ARCH_LIST: "10.0"
