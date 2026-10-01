@@ -71,3 +71,13 @@ usage terms. The manifest enables recording of `main_video`.
 
 For remote browsers, arrange reachable WebRTC media transport in addition to
 HTTP signalling; forwarding only the HTTP port over SSH does not forward UDP.
+
+
+## Tests
+
+From the repository root, run the CPU contract tests without model weights:
+
+```sh
+cd models/yume-1-5
+PYTHONPATH=. python -m pytest tests/ -q
+```

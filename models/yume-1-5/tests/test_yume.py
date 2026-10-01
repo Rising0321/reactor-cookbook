@@ -15,12 +15,95 @@ import pytest
 from PIL import Image
 from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
+
 from yume import Yume15
 from yume_assets import read_config
 from yume_controls import conditioned_prompt
 from yume_images import prepare_image
 from yume_model import NoAnchor, YumeInput, YumeModel
 from yume_types import YumeOutput, YumeState
+
+
+@pytest.mark.parametrize(
+    "damaged",
+    [
+        "diffusion_pytorch_model.safetensors",
+        "config.json",
+        "Wan2.2_VAE.pth",
+        "models_t5_umt5-xxl-enc-bf16.pth",
+        "google/umt5-xxl/tokenizer.json",
+        "google/umt5-xxl/tokenizer_config.json",
+        "google/umt5-xxl/spiece.model",
+        "google/umt5-xxl/special_tokens_map.json",
+    ],
+)
+@pytest.mark.parametrize("empty", [False, True])
+def test_asset_download_repairs_each_required_file(
+    tmp_path, monkeypatch, damaged, empty
+):
+    import sys
+    from dataclasses import replace
+
+    import yume_assets as assets
+
+    config = assets.read_config(Path(__file__).parents[1] / "yume.yaml", tmp_path)
+    config = replace(config, source_path=tmp_path / "source")
+    (config.source_path / ".git").mkdir(parents=True)
+    monkeypatch.setattr(
+        assets.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(stdout=config.source_revision),
+    )
+    root = config.checkpoint_path
+    files = [
+        "diffusion_pytorch_model.safetensors",
+        "config.json",
+        "Wan2.2_VAE.pth",
+        "models_t5_umt5-xxl-enc-bf16.pth",
+        "google/umt5-xxl/tokenizer.json",
+        "google/umt5-xxl/tokenizer_config.json",
+        "google/umt5-xxl/spiece.model",
+        "google/umt5-xxl/special_tokens_map.json",
+    ]
+
+    def populate(**kwargs):
+        for name in files:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+
+    populate()
+    target = root / damaged
+    if empty:
+        target.write_bytes(b"")
+    else:
+        target.unlink()
+
+    def download_snapshot(**kwargs):
+        # Simulate Hub reusing stale metadata for an existing zero-byte file.
+        populate()
+        if empty and not kwargs.get("force_download"):
+            target.write_bytes(b"")
+
+    download = Mock(side_effect=download_snapshot)
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download)
+    )
+
+    assets.prepare_assets(config)
+    assert download.call_count == (2 if empty else 1)
+    if empty:
+        assert download.call_args.kwargs["force_download"] is True
+        assert download.call_args.kwargs["allow_patterns"] == [damaged]
+    assert download.call_args.kwargs["revision"] == config.checkpoint_revision
+
+    download.reset_mock()
+    assets.prepare_assets(config)
+    download.assert_not_called()
+    target.unlink()
+    download.side_effect = None
+    with pytest.raises(RuntimeError, match="missing or empty"):
+        assets.prepare_assets(config)
 
 
 def uploaded_image() -> UploadedFile:
@@ -244,6 +327,7 @@ def test_model_error_reaches_output_without_counting_step() -> None:
 
 def test_bad_video_is_command_error():
     from reactor_runtime import CommandError
+
     from yume_images import prepare_video
 
     with pytest.raises(CommandError, match="decoded"):
@@ -285,7 +369,7 @@ def test_application_fake_model_final_chunk_and_refusal():
 
 
 def test_model_cap_and_reset_are_explicit():
-    from yume_model import YumeAnchor, RolloutExhausted
+    from yume_model import RolloutExhausted, YumeAnchor
 
     engine = YumeModel()
     backend = Mock()
@@ -315,6 +399,7 @@ def test_image_anchor_is_prepared_once():
 
 def test_video_preparation_is_bounded(monkeypatch):
     import av
+
     from yume_images import prepare_video
 
     class Container:
@@ -337,7 +422,8 @@ def test_video_preparation_is_bounded(monkeypatch):
 
 
 def test_model_imports_without_runtime():
-    import subprocess, sys
+    import subprocess
+    import sys
 
     subprocess.run(
         [
@@ -361,6 +447,7 @@ yume_model.YumeModel()
 
 def test_first_checkout_pins_revision_before_loading_weights(tmp_path, monkeypatch):
     from dataclasses import replace
+
     import yume_assets
 
     config = replace(
@@ -369,7 +456,19 @@ def test_first_checkout_pins_revision_before_loading_weights(tmp_path, monkeypat
         checkpoint_path=tmp_path / "weights",
     )
     config.checkpoint_path.mkdir()
-    (config.checkpoint_path / "diffusion_pytorch_model.safetensors").touch()
+    for name in [
+        "diffusion_pytorch_model.safetensors",
+        "config.json",
+        "Wan2.2_VAE.pth",
+        "models_t5_umt5-xxl-enc-bf16.pth",
+        "google/umt5-xxl/tokenizer.json",
+        "google/umt5-xxl/tokenizer_config.json",
+        "google/umt5-xxl/spiece.model",
+        "google/umt5-xxl/special_tokens_map.json",
+    ]:
+        path = config.checkpoint_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
     calls = []
 
     def run(args, **kwargs):

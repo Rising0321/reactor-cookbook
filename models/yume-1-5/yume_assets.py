@@ -117,8 +117,20 @@ def prepare_assets(config: YumeConfig) -> None:
         raise RuntimeError(
             f"YUME source is {actual}; expected {config.source_revision}"
         )
-    required = config.checkpoint_path / "diffusion_pytorch_model.safetensors"
-    if not required.is_file():
+    required = tuple(
+        config.checkpoint_path / name
+        for name in (
+            "diffusion_pytorch_model.safetensors",
+            "config.json",
+            "Wan2.2_VAE.pth",
+            "models_t5_umt5-xxl-enc-bf16.pth",
+            "google/umt5-xxl/tokenizer.json",
+            "google/umt5-xxl/tokenizer_config.json",
+            "google/umt5-xxl/spiece.model",
+            "google/umt5-xxl/special_tokens_map.json",
+        )
+    )
+    if any(not path.is_file() or path.stat().st_size == 0 for path in required):
         from huggingface_hub import snapshot_download
 
         snapshot_download(
@@ -127,6 +139,26 @@ def prepare_assets(config: YumeConfig) -> None:
             local_dir=config.checkpoint_path,
             cache_dir=config.cache_dir,
         )
+    # Hub metadata can consider an existing empty file current; force only those files.
+    empty = [
+        path.relative_to(config.checkpoint_path).as_posix()
+        for path in required
+        if path.is_file() and path.stat().st_size == 0
+    ]
+    if empty:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id=config.checkpoint_repo,
+            revision=config.checkpoint_revision,
+            local_dir=config.checkpoint_path,
+            allow_patterns=empty,
+            force_download=True,
+            cache_dir=config.cache_dir,
+        )
+    for path in required:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f"YUME asset is missing or empty: {path}")
 
 
 def _local_path(value: object, root: Path) -> Path:
