@@ -66,6 +66,7 @@ MIT license. Attribution and source information accompany it in
 `example_images/`. It is selected only by `random_scene`.
 
 ```sh
+cd models/open-oasis  # From the repository root.
 PYTHONPATH=. python -m pytest tests/ -q
 ```
 
