@@ -159,3 +159,13 @@ silence.
 Review the upstream repositories and model cards for their usage terms.
 Checkpoint revisions are pinned in `liveavatar_assets.py`, and the image's
 source revision is pinned in `reactor.yaml`.
+
+
+## Tests
+
+From the repository root, run the CPU contract tests without model weights:
+
+```sh
+cd models/liveavatar
+PYTHONPATH=. python -m pytest tests/ -q
+```
