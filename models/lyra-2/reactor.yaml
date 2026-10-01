@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: lyra-2-dmd
-  version: v0.1.0
+  version: v0.1.1
   description: Autoregressively explore an image-conditioned Lyra 2.0 video world one native 80-frame chunk at a time.
   resources:
     gpu: {type: NVIDIA_B200, count: 1}
@@ -20,6 +20,9 @@ runtime:
 build:
   runtime_version: "3.6.0"
   python_requirements: requirements.txt
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+    - https://pypi.org/simple
   cuda_version: "12.8.1"
   python_version: "3.12"
   system_packages:

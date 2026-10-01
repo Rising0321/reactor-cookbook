@@ -13,6 +13,9 @@ world continues. This recipe uses the released four-step video model.
 - The public Lyra 2.0 checkpoints, arranged under
   `source/Lyra-2/checkpoints/` in the weights directory according to the
   upstream instructions. Review the upstream source and model usage terms.
+- The image's upstream source directory must allow creation of its checkpoint
+  symlink at startup. With a read-only filesystem, provision that symlink to
+  the selected checkpoint mount before starting the service.
 
 ## Run
 
@@ -65,6 +68,7 @@ Ending the session clears its selections and progress. The manifest records
 ## Tests
 
 ```sh
+cd models/lyra-2  # From the repository root.
 PYTHONPATH=. python -m pytest tests/ -q
 ```
 

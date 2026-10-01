@@ -1,6 +1,5 @@
 # Model dependencies resolved with Reactor Runtime during `reactor build`.
 # `build.runtime_version` in reactor.yaml selects the Runtime release.
---extra-index-url https://download.pytorch.org/whl/cu128
 
 # CUDA stack used by the pinned upstream source.
 torch==2.7.1+cu128
