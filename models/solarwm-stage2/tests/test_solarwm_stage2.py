@@ -29,7 +29,7 @@ def test_config_paths_expand_home_and_ignore_cwd(tmp_path, monkeypatch, value):
 
     import solarwm_stage2_config as assets
 
-    path = Path(__file__).parents[1] / "solarwm.yaml"
+    path = Path(__file__).parents[1] / "solarwm_stage2.yaml"
     raw = yaml.safe_load(path.read_text())
     raw["source"]["path"] = value
     raw["assets"]["root"] = value
@@ -63,7 +63,7 @@ def test_asset_download_repairs_each_required_file(
 
     import solarwm_stage2_config as assets
 
-    config = assets.read_config(Path(__file__).parents[1] / "solarwm.yaml", tmp_path)
+    config = assets.read_config(Path(__file__).parents[1] / "solarwm_stage2.yaml", tmp_path)
     config = replace(config, source_path=tmp_path / "source")
     (config.source_path / ".git").mkdir(parents=True)
     monkeypatch.setattr(
@@ -381,7 +381,7 @@ def test_reset_only_queues_new_world():
 def test_config_paths_use_explicit_weights_root(tmp_path):
     from solarwm_stage2_config import read_config
 
-    config = read_config(Path(__file__).parents[1] / "solarwm.yaml", tmp_path)
+    config = read_config(Path(__file__).parents[1] / "solarwm_stage2.yaml", tmp_path)
     assert config.base_path.is_relative_to(tmp_path)
     assert config.checkpoint_path.is_relative_to(tmp_path)
     assert config.runtime_root.is_relative_to(tmp_path)

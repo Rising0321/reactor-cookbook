@@ -11,7 +11,7 @@ storage, and access to the gated
 [junchaoh-cs/SolarWM](https://huggingface.co/junchaoh-cs/SolarWM) repository.
 
 ```sh
-cd models/solarwm
+cd models/solarwm-stage2
 reactor build
 reactor run --gpus device=0 -e HF_TOKEN
 ```
@@ -65,7 +65,7 @@ persistent weights mount holds model assets and working data.
 Remote clients require reachable WebRTC media transport as well as HTTP
 signalling. An SSH HTTP-port forward alone does not carry UDP media.
 
-Source and checkpoint revisions are pinned in `solarwm.yaml`. Consult
+Source and checkpoint revisions are pinned in `solarwm_stage2.yaml`. Consult
 the upstream repository and model card for their usage terms.
 
 
@@ -74,6 +74,6 @@ the upstream repository and model card for their usage terms.
 From the repository root, run the CPU contract tests without model weights:
 
 ```sh
-cd models/solarwm
+cd models/solarwm-stage2
 PYTHONPATH=. python -m pytest tests/ -q
 ```
