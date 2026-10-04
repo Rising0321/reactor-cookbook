@@ -157,7 +157,8 @@ class OpenOasis(ReactorApp):
         description=(
             "Hold or release one Minecraft keyboard key for subsequent frames. Valid while "
             "the session is active; a newly pressed key is also preserved for one frame if it "
-            "is released before inference samples it. Emits `action_changed` and broadcasts "
+            "is released before the next generated `main_video` frame. Emits `action_changed` "
+            "and broadcasts "
             "`state_update`. Unsupported values are rejected before state changes."
         ),
     )
@@ -198,7 +199,8 @@ class OpenOasis(ReactorApp):
         description=(
             "Hold or release one Minecraft mouse button for subsequent frames. Valid while "
             "the session is active; a newly pressed button is also preserved for one frame if "
-            "it is released before inference samples it. Emits `action_changed` and broadcasts "
+            "it is released before the next generated `main_video` frame. Emits `action_changed` "
+            "and broadcasts "
             "`state_update`. Unsupported values are rejected before state changes."
         ),
     )

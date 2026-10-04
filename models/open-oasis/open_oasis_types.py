@@ -57,13 +57,13 @@ class ActionChanged(ModelMessage):
     camera_x: float = MessageField(
         description=(
             "Accumulated horizontal camera movement queued for the next generated frame, from "
-            "-1 to 1. It returns to zero after that frame is sampled."
+            "-1 to 1. It returns to zero after that frame is generated."
         )
     )
     camera_y: float = MessageField(
         description=(
             "Accumulated vertical camera movement queued for the next generated frame, from -1 "
-            "to 1. It returns to zero after that frame is sampled."
+            "to 1. It returns to zero after that frame is generated."
         )
     )
 

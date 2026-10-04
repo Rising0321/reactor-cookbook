@@ -54,8 +54,8 @@ Ending the session clears its selections and progress.
 `main_video` emits one new 640×360 RGB frame per step without audio.
 Playback follows generation throughput. The manifest enables video recording.
 
-Command replies include `action_changed`, `controls_released`,
-`conditioning_changed` and `rollout_reset`; read each reply from the awaited
+Command replies include `action_changed`, `conditioning_changed` and
+`rollout_reset`; read each reply from the awaited
 command. `state_update` broadcasts controls, seed and selected input so that
 all connected viewers can display the shared state.
 
