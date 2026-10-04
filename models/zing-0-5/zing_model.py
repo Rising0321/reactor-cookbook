@@ -19,7 +19,21 @@ def action_values(pressed) -> list[float]:
 
 @dataclass(frozen=True)
 class ZingInput:
-    """One block; a fresh image world supplies uint8 RGB (704,1248,3)."""
+    """Carry exactly what one chunk needs across to the model.
+
+    Attributes:
+        world_id: Identifies the world the application wants this chunk from.
+            An id the model has not applied asks for a fresh world.
+        image: The anchor for a fresh image world, uint8 RGB ``(704, 1248, 3)``
+            on the CPU. Carried only while the application has not seen
+            ``world_id`` reported back on a result; ``None`` otherwise, and
+            always ``None`` for a text world.
+        prompt: The scene prompt in effect for this chunk.
+        seed: The random seed a fresh world is sampled with.
+        pressed_keys: The movement and view keys held for this chunk, a subset
+            of ``NATIVE_KEYS``.
+        image_required: Whether a fresh world must start from ``image``.
+    """
 
     world_id: int
     image: np.ndarray | None
@@ -31,7 +45,16 @@ class ZingInput:
 
 @dataclass(frozen=True)
 class ZingResult:
-    """Actual progress and CPU uint8 RGB (T,H,W,3) video; no echoed controls."""
+    """Carry what one chunk produced back to the application.
+
+    Attributes:
+        world_id: The world these frames belong to. The application reads it
+            to learn the fresh world it asked for has started.
+        frames: Decoded RGB frames, uint8 ``(16, 704, 1248, 3)`` on the CPU.
+        index: The model's own one-based count of chunks in this world.
+        complete: Whether this chunk reached the world's chunk limit; the next
+            step on the same world raises ``RolloutComplete``.
+    """
 
     world_id: int
     frames: np.ndarray
@@ -48,6 +71,13 @@ class NotSeeded(Exception):
 
 
 class ZingModel:
+    """Hold the Zing weights and step one world 16 frames at a time.
+
+    The application constructs this class in its ``load()`` and reads it only
+    through ``ZingResult``. This class owns the native backend, the active
+    world, and its chunk count.
+    """
+
     def __init__(self) -> None:
         self.backend = None
         self.config = None
@@ -55,18 +85,27 @@ class ZingModel:
         self.index = 0
 
     def load(self, config: ZingAdapterConfig) -> None:
+        """Load the weights the prepared ``config`` names."""
         from zing_backend import ZingBackend
 
         self.config = config
         self.backend = ZingBackend(config)
 
     def reset(self) -> None:
+        """Forget the current world and release its caches; keep the weights."""
         if self.backend is not None:
             self.backend.end_session()
         self.world_id = None
         self.index = 0
 
     def generate(self, input: ZingInput) -> ZingResult:
+        """Generate one chunk, starting a fresh world first when the input asks for one.
+
+        Raises:
+            NotSeeded: The input names an image world this model has not
+                started and carries no anchor image.
+            RolloutComplete: The current world already reached its chunk limit.
+        """
         if self.backend is None or self.config is None:
             raise RuntimeError("Zing is not loaded")
         if input.world_id != self.world_id:

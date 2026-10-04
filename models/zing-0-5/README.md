@@ -66,6 +66,4 @@ cd models/zing-0-5  # From the repository root.
 PYTHONPATH=. python -m pytest tests/ -q
 ```
 
-Local contract tests require no model weights or GPU. The optional upstream
-camera-geometry test uses the pinned source checkout; set
-`ZING_TEST_SOURCE_PATH` when that checkout is outside the image.
+Local contract tests require no model weights or GPU.

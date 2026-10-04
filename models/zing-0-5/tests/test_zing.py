@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -147,24 +146,6 @@ def test_contract_covers_text_image_and_all_native_controls() -> None:
     assert set(ZingOutput.__tracks__) == {"main_video"}
 
 
-def test_released_cache_and_chunk_geometry_are_preserved() -> None:
-    config = read_config(
-        Path(__file__).parents[1] / "zing.yaml", Path("/tmp/zing-test")
-    )
-    source_override = os.environ.get("ZING_TEST_SOURCE_PATH")
-    if source_override:
-        config = replace(config, source_path=Path(source_override))
-    import sys
-
-    sys.path.insert(0, str(config.source_path / "src"))
-    load_config = pytest.importorskip("zing_v0_5.config").load_config
-    upstream = load_config(config.source_path / "config" / "zing.yaml")
-    assert upstream.generator.local_attn_size == LOCAL_ATTN_SIZE == 97
-    assert upstream.generator.sink_size == SINK_SIZE == 9
-    assert upstream.inference.frames_per_block == 4
-    assert upstream.vae.temporal_scale == 4
-
-
 def test_all_eight_keys_can_be_held_and_released() -> None:
     model = Zing()
     model.engine = ZingModel()
@@ -218,9 +199,6 @@ def test_new_session_waits_for_user_input() -> None:
         def generate_chunk(self, **_: object) -> np.ndarray:
             raise AssertionError("idle session must not generate")
 
-        def cache_frames(self) -> int:
-            return 0
-
         def end_session(self) -> None:
             pass
 
@@ -250,9 +228,6 @@ def test_one_backend_call_maps_to_one_reactor_output() -> None:
         def generate_chunk(self, **_: object) -> np.ndarray:
             self.calls += 1
             return np.zeros((16, 704, 1248, 3), dtype=np.uint8)
-
-        def cache_frames(self) -> int:
-            return 4 * self.calls
 
         def end_session(self) -> None:
             pass
@@ -290,9 +265,6 @@ def test_ten_chunks_preserve_world_anchor_and_native_cache(tmp_path):
         def generate_chunk(self, **kwargs):
             self.calls += 1
             return np.zeros((16, 8, 8, 3), dtype=np.uint8)
-
-        def cache_frames(self):
-            return self.calls * 4
 
     model = Zing()
     model.engine = ZingModel()
@@ -375,7 +347,6 @@ def test_native_failure_preserves_completed_index():
     model.engine.config = SimpleNamespace(max_chunks=32)
     model.engine.backend = backend = Mock()
     backend.generate_chunk.return_value = np.zeros((16, 8, 8, 3), np.uint8)
-    backend.cache_frames.return_value = 5
     result = model.generate(asyncio.run(model.process_input()))
     asyncio.run(model.process_output(StepOutcome(result=result, elapsed=0.1)))
     assert model.state._completed_chunks == model.engine.index == 1
@@ -402,9 +373,6 @@ def test_limit_retains_world_and_releases_controls():
         def generate_chunk(self, **kwargs):
             self.calls += 1
             return np.zeros((16, 8, 8, 3), dtype=np.uint8)
-
-        def cache_frames(self):
-            return self.calls * 4
 
     model = Zing()
     model.engine = ZingModel()

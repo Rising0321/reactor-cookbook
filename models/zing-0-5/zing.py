@@ -74,18 +74,7 @@ class Zing(ReactorApp):
 
     @session_started
     def on_session_started(self) -> None:
-        config = self._require_config()
-        self.state.prompt = ""
-        self.state._pressed_keys = frozenset()
-        self.state._applied_world_id = None
-        self.state._conditioning = "none"
-        self.state._image = None
-        self.state._image_name = None
-        self.state._seed = config.seed
-        self.state._active_prompt = None
-        self.state._completed_chunks = 0
-        self.state._limit_reached = False
-        self.state._world_epoch = 0
+        self.state._seed = self._require_config().seed
 
     @session_ended
     def on_session_ended(self) -> None:
@@ -167,7 +156,8 @@ class Zing(ReactorApp):
             moderate=True,
             description=(
                 "Anchor uploaded through Reactor as JPEG, PNG, WebP, or BMP, up to 25 MiB and "
-                "100 million pixels. EXIF orientation is applied before resizing to `main_video`."
+                "100 million pixels. EXIF orientation is applied, then the image is center-cropped "
+                "to the `main_video` aspect and resized to 1248x704."
             ),
         ),
         prompt: str = InputField(
@@ -318,7 +308,8 @@ class Zing(ReactorApp):
             "Queue a fresh world from the selected text or image condition and current prompt. "
             "Use after selecting a prompt or image; the reset clears progress, releases held "
             "controls, and resumes continuous generation from chunk one. Emits `rollout_reset` "
-            "and broadcasts `state_update` on success."
+            "and broadcasts `state_update` on success, or `command_error` when no prompt or "
+            "image is selected."
         ),
     )
     async def reset(
