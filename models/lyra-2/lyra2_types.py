@@ -145,10 +145,8 @@ class CameraChanged(ModelMessage):
     roll: float = MessageField(
         description="Active counterclockwise-to-clockwise roll rate."
     )
-    applies_to_chunk: int | None = MessageField(
-        description=(
-            "One-based first chunk expected to sample this state, or null before image selection."
-        )
+    applies_to_chunk: int = MessageField(
+        description="One-based number of the first chunk generated with these camera values."
     )
 
 

@@ -13,21 +13,22 @@ peft==0.17.1
 megatron-core==0.12.1
 transformers==4.57.1
 
-# Adapter input preparation and config parsing.
+# This folder's own imports: input preparation and config parsing.
 numpy>=2.1,<2.5
-pandas==2.2.3
 Pillow>=11,<13
+PyYAML>=6,<7
+
+# Upstream inference dependencies, imported from the image checkout.
+pandas==2.2.3
 opencv-python-headless>=4.11,<5
 scikit-image==0.25.2
 scipy==1.15.3
-av>=18
 decord==0.6.0
 imageio[pyav,ffmpeg]==2.37.0
 imageio-ffmpeg==0.6.0
 ffmpegcv
 hydra-core==1.3.2
 omegaconf==2.3.0
-PyYAML>=6,<7
 sentencepiece==0.2.0
 tiktoken==0.9.0
 tokenizers==0.22
@@ -60,7 +61,8 @@ braceexpand
 fasteners
 lazy-loader>=0.4
 
-# Native extensions (VIPE/Depth Anything, Transformer Engine, FlashAttention).
+# Build-only tools for the `--no-build-isolation` installs in `build.run`
+# (VIPE, Depth Anything, Transformer Engine, FlashAttention); nothing imports them.
 packaging>=24.2
 setuptools>=77
 wheel

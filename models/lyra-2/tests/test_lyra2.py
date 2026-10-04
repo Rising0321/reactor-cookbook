@@ -1,15 +1,20 @@
 """Drive the step boundary and native continuity without model weights."""
 
 import asyncio
+import io
+import os
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import numpy as np
 import pytest
-from reactor_runtime import ApplicationError, StepOutcome
+from PIL import Image
+from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
 
+import lyra2
 from lyra2 import Lyra2
+from lyra2_images import prepare_image
 from lyra2_camera import Lyra2CameraPlanner
 from lyra2_model import Lyra2Input, Lyra2Model, NoAnchor
 from lyra2_types import ChunkCompleted, Lyra2State
@@ -176,8 +181,6 @@ def test_six_axes_are_continuous_between_chunks():
 
 
 def test_rejects_non_native_chunk_size():
-    import pytest
-
     with pytest.raises(ValueError, match="exactly 80"):
         planner().plan_chunk(
             forward=0,
@@ -192,12 +195,6 @@ def test_rejects_non_native_chunk_size():
 
 
 # Input preparation and session/worker ownership regression tests.
-import io
-import os
-from PIL import Image
-from reactor_runtime import CommandError, UploadedFile
-from lyra2_images import prepare_image
-import lyra2
 
 
 def upload(data=b"invalid"):

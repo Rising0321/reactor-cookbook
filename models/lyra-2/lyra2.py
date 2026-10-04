@@ -40,7 +40,7 @@ from lyra2_types import (
 
 
 class Lyra2(ReactorApp):
-    """Explore an image-conditioned world through native 80-frame AR updates."""
+    """Explore an image-conditioned world, streamed as 80-frame video chunks."""
 
     state: Lyra2State
     buffer_size = 80
@@ -317,12 +317,8 @@ class Lyra2(ReactorApp):
         fresh = self.state._world_id != self.state._applied_world_id
         camera = None
         if not fresh:
-            controls = {
-                name: getattr(self.state, name)
-                for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll")
-            }
             camera = self.state._planner.plan_chunk(
-                **controls, frame_count=80, intrinsics=self.state._intrinsics
+                **self._axes(), frame_count=80, intrinsics=self.state._intrinsics
             )
         return Lyra2Input(
             world_id=self.state._world_id,
@@ -372,34 +368,35 @@ class Lyra2(ReactorApp):
         self.state._applied_world_id = None
         self._clear_motion()
 
+    def _axes(self) -> dict[str, float]:
+        return {
+            "forward": self.state.forward,
+            "strafe": self.state.strafe,
+            "vertical": self.state.vertical,
+            "pitch": self.state.pitch,
+            "yaw": self.state.yaw,
+            "roll": self.state.roll,
+        }
+
     def _clear_motion(self) -> None:
-        for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll"):
-            setattr(self.state, name, 0.0)
+        self.state.forward = 0.0
+        self.state.strafe = 0.0
+        self.state.vertical = 0.0
+        self.state.pitch = 0.0
+        self.state.yaw = 0.0
+        self.state.roll = 0.0
 
     def _camera_message(self) -> CameraChanged:
-        values = {
-            name: getattr(self.state, name)
-            for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll")
-        }
-        return CameraChanged(
-            **values,
-            applies_to_chunk=None
-            if self.state._anchor is None
-            else self.state._chunk + 1,
-        )
+        return CameraChanged(**self._axes(), applies_to_chunk=self.state._chunk + 1)
 
     def _state(self) -> StateUpdate:
-        values = {
-            name: getattr(self.state, name)
-            for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll")
-        }
         return StateUpdate(
             image_name=self.state._image_name,
             prompt=self.state.prompt,
             active_prompt=self.state._active_prompt,
             seed=self.state._seed,
             completed_chunks=self.state._chunk,
-            **values,
+            **self._axes(),
         )
 
     def _require_image(self) -> None:

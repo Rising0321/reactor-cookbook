@@ -21,12 +21,10 @@ def prepare_image(upload: UploadedFile) -> np.ndarray:
                 raise ValueError("Unsupported image format")
             if image.width * image.height > 100_000_000:
                 raise ValueError("Image exceeds 100 million pixels")
-            import cv2
-
-            return cv2.resize(
-                np.asarray(image.convert("RGB")),
-                (768, 448),
-                interpolation=cv2.INTER_AREA,
-            )
+            # Area averaging when shrinking, linear interpolation when enlarging.
+            shrinking = image.width >= 768 and image.height >= 448
+            resample = Image.Resampling.BOX if shrinking else Image.Resampling.BILINEAR
+            fitted = image.convert("RGB").resize((768, 448), resample)
+            return np.ascontiguousarray(fitted, dtype=np.uint8)
     except (Image.DecompressionBombError, OSError, ValueError) as error:
         raise CommandError("invalid_image", str(error)) from error

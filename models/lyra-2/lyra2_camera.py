@@ -10,7 +10,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CameraChunk:
-    """World-to-camera poses and intrinsics for one native AR step."""
+    """World-to-camera poses and intrinsics for one 80-frame chunk."""
 
     w2c: np.ndarray
     intrinsics: np.ndarray
