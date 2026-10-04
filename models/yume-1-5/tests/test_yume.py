@@ -190,6 +190,7 @@ def test_one_turn_is_one_chunk_and_prompt_can_change_without_reset(
     model._config = read_config(Path(__file__).parents[1] / "yume.yaml")
     backend = FakeBackend()
     model._engine._backend = backend
+    model._engine._max_chunks = 10
     model.state._seed = 42
     asyncio.run(model.set_image(uploaded_image(), "A forest trail", 42))
 
@@ -291,6 +292,7 @@ def test_ten_continuous_hook_steps_send_anchor_once() -> None:
             pass
 
     app._engine._backend = Backend()
+    app._engine._max_chunks = 10
 
     async def drive():
         await app.set_text_scene("forest", 42)
@@ -366,6 +368,28 @@ def test_application_fake_model_final_chunk_and_refusal():
         asyncio.run(app.process_input())
     asyncio.run(app.reset(-1))
     assert asyncio.run(app.process_input()).anchor is not None
+
+
+def test_controls_are_refused_at_the_chunk_limit():
+    from reactor_runtime import CommandError
+
+    app = Yume15()
+    app.state = YumeState()
+    app.send = AsyncMock()
+    asyncio.run(app.set_text_scene("forest", 42))
+    app.state._complete = True
+    for command in (
+        app.set_prompt("a river"),
+        app.set_key_state("w", True),
+        app.release_controls(),
+    ):
+        with pytest.raises(CommandError, match="Reset YUME"):
+            asyncio.run(command)
+    assert app.state.prompt == "forest"
+    assert not app.state._pressed_keys
+    asyncio.run(app.reset(-1))
+    assert not app.state._complete
+    assert asyncio.run(app.set_prompt("a river")).applies_to_chunk == 1
 
 
 def test_model_cap_and_reset_are_explicit():

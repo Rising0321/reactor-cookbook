@@ -269,7 +269,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_prompt",
-        description="Change the scene and event description without restarting the world. It is valid after a scene is selected and applies from the next chunk boundary. Emits `prompt_changed` and `state_update` on success, or `command_error` if no scene exists or `prompt` is blank.",
+        description="Change the scene and event description without restarting the world. It is valid after a scene is selected and applies from the next chunk boundary. Emits `prompt_changed` and `state_update` on success, or `command_error` if no scene exists, the world has reached its chunk limit (after `rollout_limit_reached`), or `prompt` is blank.",
     )
     async def set_prompt(
         self,
@@ -280,7 +280,7 @@ class Yume15(ReactorApp):
             description="Non-empty description used to condition forthcoming chunks. It does not alter a chunk already being generated or discard visual history.",
         ),
     ) -> PromptChanged:
-        self._require_scene()
+        self._require_available_rollout()
         normalized = prompt.strip()
         if not normalized:
             raise CommandError("prompt_required", "YUME requires a non-empty prompt.")
@@ -291,7 +291,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_key_state",
-        description="Press or release one persistent movement or view key. It is valid after a scene is selected and affects the next chunk boundary. Compatible keys may be held together. Emits `action_changed` and `state_update` on success, or `command_error` for no scene or an unsupported combination.",
+        description="Press or release one persistent movement or view key. It is valid after a scene is selected and affects the next chunk boundary. Compatible keys may be held together. Emits `action_changed` and `state_update` on success, or `command_error` for no scene, a world at its chunk limit (after `rollout_limit_reached`), or an unsupported combination.",
     )
     async def set_key_state(
         self,
@@ -305,7 +305,7 @@ class Yume15(ReactorApp):
             description="Set to `true` to hold `key`, or `false` to release it. The resulting held-key set applies from the next chunk boundary.",
         ),
     ) -> ActionChanged:
-        self._require_scene()
+        self._require_available_rollout()
         updated = (
             self.state._pressed_keys.union((key,))
             if pressed
@@ -324,10 +324,10 @@ class Yume15(ReactorApp):
 
     @event(
         name="release_controls",
-        description="Release every held movement and view key. It is valid after a scene is selected and restores stationary controls from the next chunk boundary. Emits `action_changed` and `state_update` on success, or `command_error` if no scene exists.",
+        description="Release every held movement and view key. It is valid after a scene is selected and restores stationary controls from the next chunk boundary. Emits `action_changed` and `state_update` on success, or `command_error` if no scene exists or the world has reached its chunk limit (after `rollout_limit_reached`).",
     )
     async def release_controls(self) -> ActionChanged:
-        self._require_scene()
+        self._require_available_rollout()
         self._clear_controls()
         result = ActionChanged(
             key="all",
@@ -422,6 +422,15 @@ class Yume15(ReactorApp):
     def _require_scene(self) -> None:
         if self.state._mode is None:
             raise CommandError("scene_required", "Select an image or text scene first.")
+
+    def _require_available_rollout(self) -> None:
+        """Reject controls that cannot apply until a scene or reset starts a new world."""
+        self._require_scene()
+        if self.state._complete:
+            raise CommandError(
+                "rollout_limit_reached",
+                "Reset YUME or select a scene before changing the prompt or controls.",
+            )
 
     def _require_config(self) -> YumeConfig:
         if self._config is None:

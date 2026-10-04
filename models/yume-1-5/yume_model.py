@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from yume_assets import YumeConfig
+    from yume_backend import YumeBackend
 
 Movement = Literal[
     "none",
@@ -69,19 +74,38 @@ class RolloutExhausted(Exception):
 
 
 class YumeModel:
+    """Hold the YUME weights and step one world 29 frames at a time.
+
+    A world is identified by ``YumeInput.world_id``. When the input names a
+    world this model has not started, ``generate`` starts it from
+    ``input.anchor`` and then produces that world's first chunk; an input that
+    names the current world continues it. ``YumeResult.world_id`` reports the
+    world the frames belong to, so the application knows when to stop sending
+    the anchor.
+
+    ``YumeResult.chunk_index`` is the one-based count of chunks in the current
+    world. The world ends after ``YumeConfig.max_chunks`` chunks: the result
+    that reaches the limit has ``complete`` set, and any later step on the same
+    world raises ``RolloutExhausted``. A step that asks for a new world without
+    an anchor, or with an image or video mode and no media, raises
+    ``NoAnchor``.
+    """
+
     def __init__(self) -> None:
-        self._backend = None
+        self._backend: YumeBackend | None = None
         self._world_id: int | None = None
         self._chunk_index = 0
-        self._max_chunks = 10
+        self._max_chunks = 0
 
-    def load(self, config) -> None:
+    def load(self, config: YumeConfig) -> None:
+        """Load the weights the prepared ``config`` names."""
         from yume_backend import YumeBackend
 
         self._max_chunks = config.max_chunks
         self._backend = YumeBackend(config)
 
     def generate(self, input: YumeInput) -> YumeResult:
+        """Produce the next chunk, starting a new world first when the input asks for one."""
         if self._backend is None:
             raise RuntimeError("YUME was not loaded")
         if input.world_id != self._world_id:
@@ -111,6 +135,7 @@ class YumeModel:
         )
 
     def reset(self) -> None:
+        """Forget the current world and release its context; keep the weights."""
         if self._backend is not None:
             self._backend.end_session()
         self._world_id = None
