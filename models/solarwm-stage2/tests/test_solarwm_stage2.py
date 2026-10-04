@@ -63,7 +63,9 @@ def test_asset_download_repairs_each_required_file(
 
     import solarwm_stage2_config as assets
 
-    config = assets.read_config(Path(__file__).parents[1] / "solarwm_stage2.yaml", tmp_path)
+    config = assets.read_config(
+        Path(__file__).parents[1] / "solarwm_stage2.yaml", tmp_path
+    )
     config = replace(config, source_path=tmp_path / "source")
     (config.source_path / ".git").mkdir(parents=True)
     monkeypatch.setattr(
