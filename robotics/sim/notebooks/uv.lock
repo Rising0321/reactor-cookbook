@@ -249,18 +249,20 @@ i2rt = [
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python", marker = "extra == 'i2rt'", specifier = ">=4.10" },
-    { name = "reactor-sdk", specifier = ">=1.1.1" },
+    { name = "reactor-sdk", specifier = ">=1.8.0,<2" },
 ]
 provides-extras = ["i2rt"]
 
 [[package]]
 name = "reactor-sdk"
-version = "1.2.0"
+version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/da/49890b0c45e4a6e1112cc5b8fe414fab71685a269d83d874d1c639715c8b/reactor_sdk-1.2.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:19a9ad4c5ead2dcbd71fdcc52cb00718e2f5ec4273b45c9b7db534dbd31bbd10", size = 9005382, upload-time = "2026-09-01T14:57:16.789Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/24/4a0a67708efad17692ddb658efc6abb715912790b66cea78db42267b12a4/reactor_sdk-1.2.0-py3-none-macosx_13_0_x86_64.whl", hash = "sha256:d7d48e35586fd144109e76f2aeefce3277039736f9c5b2d4af1ecffe370e11f8", size = 10245464, upload-time = "2026-09-01T14:57:18.984Z" },
-    { url = "https://files.pythonhosted.org/packages/36/4b/0496f3f9da142b9429da7f4dfc391c42cd64eb220e793ba8040c8f3d477c/reactor_sdk-1.2.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:70958afa0e2eaf13b97c29e5af30be498dd037a822d422c490b323fb42676d27", size = 10369118, upload-time = "2026-09-01T14:57:20.975Z" },
-    { url = "https://files.pythonhosted.org/packages/39/a2/adf0fb336364d192f52dd409111beadfbb60d49c379f9e5314af718cba1f/reactor_sdk-1.2.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:9077b1d4eed0cabd8868260ceec5125ee68babe62f94b60e33098274774b6756", size = 11036639, upload-time = "2026-09-01T14:57:23.127Z" },
-    { url = "https://files.pythonhosted.org/packages/6c/2a/4188bfa55c7a872b40fbcf90624a7deae0ce800c349420a6c1e428403431/reactor_sdk-1.2.0-py3-none-win_amd64.whl", hash = "sha256:3abe89378f69c358a3f1fb9766350a11eda58dec9318ede1040ee02c15bd9964", size = 9763426, upload-time = "2026-09-01T14:57:25.232Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/fa/cb3d3e15b9152e2a549305b21eea29f165b5a0fcffa62df2bd3005e48721/reactor_sdk-1.8.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:8929fc09b9cb0130040a502456c6f8c6f771a8e9fe67c2353f747212dc3329a5", size = 9101728, upload-time = "2026-10-06T01:06:01.48Z" },
+    { url = "https://files.pythonhosted.org/packages/34/53/9dbd21ba60aa5408f641c4b7325f99f4140e637c3d5c2293d83775ab8f2f/reactor_sdk-1.8.0-py3-none-macosx_13_0_x86_64.whl", hash = "sha256:0c5bd4721916af083f9e29f986b94b525e379e96c50012e57b0357c2d8c3d11a", size = 10347761, upload-time = "2026-10-06T01:06:03.614Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/4a/a9bb85c72e1b9574669f2676eb2504345241d4cc756544a0dce2a4dc929c/reactor_sdk-1.8.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:aab9a95e06da0690c1f95ef7e5f4b6882d595eea4dc09bf0685f27d5456c6375", size = 10469321, upload-time = "2026-10-06T01:06:05.595Z" },
+    { url = "https://files.pythonhosted.org/packages/36/ea/19fe7b225796b4570fc828f3bfefabd9a2bdd3e4b868e2899c1443796fe5/reactor_sdk-1.8.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:b96c8e5a80c6d195833a6ef71dfbb0c7ef08a483a7cffde259ac9dea25304dd7", size = 11138749, upload-time = "2026-10-06T01:06:07.892Z" },
+    { url = "https://files.pythonhosted.org/packages/54/4a/96d3b6785ed07822c0cd01cafba3d5da94a5233b494a4efe590a2b19ed7c/reactor_sdk-1.8.0-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:ced81a3181b3985af5e3eecf5683c374fe362f4658d5bfac8d25bb3ceccdba71", size = 10504531, upload-time = "2026-10-06T01:06:10.28Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/c7/fe07020b4549cd0fb587a65a92a38c8e9a903ce9bc14b036464943e9e44d/reactor_sdk-1.8.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:c13c61522d4f6e00dc0158df6f49e4bebcc664dbd46ed3457d2ce46d211eef6f", size = 11190164, upload-time = "2026-10-06T01:06:12.877Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/ba/11ff7c8e99c05a97cc7eaa0976e1401aad18457b469061f9aef3a4d1145d/reactor_sdk-1.8.0-py3-none-win_amd64.whl", hash = "sha256:4af4f0bc6e0c961a03aa31085a1ae660edf73f3bcecfe19d8fcdcb478a735aa2", size = 9853284, upload-time = "2026-10-06T01:06:15.275Z" },
 ]
