@@ -1,0 +1,32 @@
+$schema: reactor/v2
+model:
+  name: edenlive
+  version: v0.2.1
+  description: EdenLive 5B native games with synchronized draft and generated video.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+runtime:
+  import: edenlive_app:EdenLive
+  config: edenlive.yaml
+build:
+  runtime_version: "3.8.3"
+  python_version: "3.12"
+  cuda_version: "13.0.2"
+  python_requirements: requirements.txt
+  system_packages:
+    - python3.12-dev
+    - build-essential
+    - ffmpeg
+    - nodejs
+    - npm
+    - libgl1
+    - libglib2.0-0
+  run:
+    - python -m playwright install --with-deps chromium
+  runtime_env:
+    EDEN_GAME_GPU: "0"
+    HF_HUB_OFFLINE: "1"
+    TOKENIZERS_PARALLELISM: "false"
+    OMP_NUM_THREADS: "8"

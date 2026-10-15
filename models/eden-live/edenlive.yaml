@@ -1,0 +1,5 @@
+source: source
+checkpoint: weights/EdenLive
+attention_backend: fa4
+cuda_graph: true
+compile_model: true
