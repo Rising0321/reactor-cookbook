@@ -61,16 +61,22 @@ class EdenModel:
         self._chunk_index = 0
 
     def load(
-        self, *, source: Path, weights: Path,
-        attention_backend: str = "native", cuda_graph: bool = False,
+        self,
+        *,
+        source: Path,
+        weights: Path,
+        attention_backend: str = "native",
+        cuda_graph: bool = False,
         compile_model: bool = False,
     ) -> None:
         """Load the authorized native model once, in the Runner's worker."""
         from edenlive_backend import EdenBackend
 
         self._backend = EdenBackend(
-            source=source, weights=weights,
-            attention_backend=attention_backend, cuda_graph=cuda_graph,
+            source=source,
+            weights=weights,
+            attention_backend=attention_backend,
+            cuda_graph=cuda_graph,
             compile_model=compile_model,
         )
 

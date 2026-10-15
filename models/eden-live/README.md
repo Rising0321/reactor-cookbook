@@ -123,11 +123,14 @@ measured about **57.6 FPS** (0.208 s per 12-frame steady-state chunk), versus **
 for the native eager profile. These timings include DINO conditioning, generation,
 cache finalization, decoding and RGB transfer; they exclude game capture, transport,
 warmup and prompt re-encoding. Playback remains **24 FPS**.
-FA4 changes floating-point reduction order; the accelerated profile is not claimed to
+FA4 and compiler fusions change floating-point reduction order; this profile is not claimed to
 produce bit-identical video. The raw-frame parity check above applies to the native
 fixed-kernel profile.
 
-Capture and inference use a bounded pipeline; both views display the same simulation frames after inference completes.
+The accelerated profile also passed a 13-chunk Cryo Crossing browser run with ten
+controls, live prompt edits, pause/resume, reconnect and relay-only TURN/TCP.
+Capture and inference use a bounded pipeline; both views display the same simulation
+frames after inference completes.
 End-to-end responsiveness includes capture, inference, transport and playback buffering.
 Custom-reference quality and arbitrary long sessions still
 need broader evaluation; the integration does not invoke the optional coding agent.

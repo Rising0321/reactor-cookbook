@@ -135,15 +135,27 @@ async def test_model_passes_execution_settings_without_loading_runtime(monkeypat
     stub.EdenBackend = lambda **kwargs: calls.append(kwargs) or FakeBackend()
     monkeypatch.setitem(sys.modules, "edenlive_backend", stub)
     model = EdenModel()
-    model.load(source=Path("/source"), weights=Path("/weights"),
-               attention_backend="fa4", cuda_graph=True)
-    assert calls == [dict(source=Path("/source"), weights=Path("/weights"),
-                          attention_backend="fa4", cuda_graph=True, compile_model=False)]
+    model.load(
+        source=Path("/source"),
+        weights=Path("/weights"),
+        attention_backend="fa4",
+        cuda_graph=True,
+    )
+    assert calls == [
+        {
+            "source": Path("/source"),
+            "weights": Path("/weights"),
+            "attention_backend": "fa4",
+            "cuda_graph": True,
+            "compile_model": False,
+        }
+    ]
     assert model._chunk_index == 0 and model._world_id is None
 
 
 async def test_invalid_execution_options_fail_before_asset_loading(tmp_path):
     from edenlive_assets import resolve_assets
+
     config = tmp_path / "edenlive.yaml"
     config.write_text("attention_backend: sparse\n")
     with pytest.raises(ValueError, match="attention_backend"):
@@ -157,27 +169,37 @@ async def test_fa4_dense_layout_is_local_and_rejects_multiple_gpus(monkeypatch):
     from edenlive_attention import install_flash_attention4
 
     calls = []
+
     class Tensor:
         def __init__(self, name, transposes=()):
             self.name, self.transposes = name, transposes
+
         def transpose(self, a, b):
             return Tensor(self.name, self.transposes + ((a, b),))
+
     class Attention:
         def __init__(self, qkv_format="bshd"):
             self.qkv_format = qkv_format
             self.device_mesh = None
+
         def is_context_parallel_enabled(self):
             return self.device_mesh is not None
+
     class MultiHead:
         def __init__(self):
             self.attn_op = Attention()
+
     def flash(query, key, value, **kwargs):
         calls.append((query, key, value, kwargs))
         return Tensor("output"), None
+
     for name, attributes in (
-        ("flash_attn.cute", dict(flash_attn_func=flash)),
-        ("flashdreams.core.attention.cp", dict(ContextParallelAttention=Attention)),
-        ("flashdreams.recipes.wan.transformer.impl.modules", dict(MultiHeadAttention=MultiHead)),
+        ("flash_attn.cute", {"flash_attn_func": flash}),
+        ("flashdreams.core.attention.cp", {"ContextParallelAttention": Attention}),
+        (
+            "flashdreams.recipes.wan.transformer.impl.modules",
+            {"MultiHeadAttention": MultiHead},
+        ),
     ):
         module = ModuleType(name)
         module.__dict__.update(attributes)

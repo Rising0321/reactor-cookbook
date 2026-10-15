@@ -7,8 +7,12 @@ from pathlib import Path
 
 class EdenBackend:
     def __init__(
-        self, *, source: Path, weights: Path,
-        attention_backend: str = "native", cuda_graph: bool = False,
+        self,
+        *,
+        source: Path,
+        weights: Path,
+        attention_backend: str = "native",
+        cuda_graph: bool = False,
         compile_model: bool = False,
     ) -> None:
         # Imports stay inside the Runner worker; source is resolved by the app.
@@ -65,7 +69,9 @@ class EdenBackend:
             compile_encoder=False,
         ).setup()
         if compile_model:
-            from flashdreams.infra.acceleration.cuda_graph_dispatch import CUDAGraphDispatch
+            from flashdreams.infra.acceleration.cuda_graph_dispatch import (
+                CUDAGraphDispatch,
+            )
             from flashdreams.infra.cuda_graph import CUDAGraphWrapper
 
             # Retain eager precision-cast boundaries and let the native cache
@@ -83,7 +89,8 @@ class EdenBackend:
             decoder.decoder = torch.compile(decoder.decoder, options=options)
             if cuda_graph:
                 decoder._decoder_wrapper = CUDAGraphWrapper(
-                    decoder.decoder, warmup_iters=decoder._warmup_iters,
+                    decoder.decoder,
+                    warmup_iters=decoder._warmup_iters,
                 )
             self.dino._call = torch.compile(self.dino.encoder, options=options)
         self.cache = None
