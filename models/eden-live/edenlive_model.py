@@ -1,9 +1,24 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Runtime-independent, one-chunk EdenLive inference contract."""
 
+import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+_WARMUP_PROMPT = "A stone corridor lit by torches."
+
+# One condition frame per latent frame: chunk-local draft frames 0, 4, 8.
+CONDITION_STRIDE = 4
+
+
+def condition_frames(draft: np.ndarray) -> np.ndarray:
+    """Select the draft frames a step conditions on, whichever source drew them."""
+    return np.ascontiguousarray(draft[::CONDITION_STRIDE])
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -21,11 +36,12 @@ class EdenAnchor:
 
 @dataclass(frozen=True, kw_only=True)
 class EdenInput:
-    """One frozen step: requested world, current text and three proxy images.
+    """One frozen step: requested world, current text and three draft images.
 
     ``anchor`` crosses only until the result acknowledges ``world_id``.
-    ``condition`` contains CPU RGB uint8 [3,704,1280,3], sampled at local
-    positions 0, 4 and 8 of the matching simulation chunk.
+    ``condition`` contains CPU RGB uint8 [3,704,1280,3]: the chunk's draft
+    frames 0, 4 and 8, from ``condition_frames``. The model does not know
+    which source drew them.
     """
 
     world_id: int
@@ -39,7 +55,7 @@ class EdenResult:
     """Completed world id, one-based chunk count and CPU RGB uint8 pixels.
 
     ``frames`` is [9,704,1280,3] initially and [12,704,1280,3] thereafter.
-    ``frames_wanted`` tells the application how many next proxy frames to capture.
+    ``frames_wanted`` tells the application how many draft frames the next step needs.
     """
 
     world_id: int
@@ -68,8 +84,14 @@ class EdenModel:
         attention_backend: str = "native",
         cuda_graph: bool = False,
         compile_model: bool = False,
+        warmup: bool = False,
     ) -> None:
-        """Load the authorized native model once, in the Runner's worker."""
+        """Load the authorized native model once, in the Runner's worker.
+
+        With ``warmup``, ``load()`` also generates throwaway worlds until every
+        compiled shape and CUDA graph a session uses exists, so the first
+        session's chunks run at steady-state speed.
+        """
         from edenlive_backend import EdenBackend
 
         self._backend = EdenBackend(
@@ -79,6 +101,37 @@ class EdenModel:
             cuda_graph=cuda_graph,
             compile_model=compile_model,
         )
+        if warmup:
+            self._warm_up()
+
+    def _warm_up(self) -> None:
+        """Run every path a session takes once, then forget the throwaway worlds.
+
+        A world's first chunks grow the cache, so each has its own shape; graphs
+        are captured once the cache is full, captured again after a prompt
+        change, and again in every new world. The first world runs past its
+        capture and through a prompt change, and the second checks that a fresh
+        world reuses what the first compiled.
+        """
+        backend = self._backend
+        steady = backend.capture_index + backend.graph_warmup + 2
+        recapture = backend.graph_warmup + 2
+        rng = np.random.default_rng(0)
+        started = time.perf_counter()
+        for world, chunks in enumerate((steady + recapture, steady)):
+            image = rng.integers(0, 256, (704, 1280, 3), np.uint8)
+            backend.reset()
+            backend.start(EdenAnchor(image=image, prompt=_WARMUP_PROMPT, seed=world))
+            seconds = []
+            for index in range(chunks):
+                prompt = _WARMUP_PROMPT if index < steady else f"{_WARMUP_PROMPT} It rains."
+                condition = rng.integers(0, 256, (3, 704, 1280, 3), np.uint8)
+                begun = time.perf_counter()
+                backend.step(index, condition, prompt)
+                seconds.append(round(time.perf_counter() - begun, 3))
+            logger.info("EdenLive warmup world %d chunk seconds: %s", world, seconds)
+        backend.reset()
+        logger.info("EdenLive warmup done in %.1f s", time.perf_counter() - started)
 
     def reset(self) -> None:
         """Drop the current rollout and caches while retaining loaded weights."""
@@ -93,10 +146,7 @@ class EdenModel:
         Malformed geometry raises ValueError. Native compute failures propagate;
         they must end the serving session rather than claim a completed chunk.
         """
-        if (
-            input.condition.shape != (3, 704, 1280, 3)
-            or input.condition.dtype != np.uint8
-        ):
+        if input.condition.shape != (3, 704, 1280, 3) or input.condition.dtype != np.uint8:
             raise ValueError("Expected three native 1280x704 RGB condition frames")
         if not input.prompt.strip():
             raise ValueError("The chunk prompt must be non-empty")

@@ -1,10 +1,17 @@
-"""Application-side native simulation, deterministic capture and event prompts."""
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+"""The native game as a draft source: simulation, capture, and event prompts."""
 
+import asyncio
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from threading import Condition
 
-import numpy as np
+from edenlive_draft import Draft, fit_frames
+from edenlive_model import CONDITION_STRIDE
+
+# The shipped games report their HUD state here; anything else is an outcome.
+_RUNNING_STATES = ("", "RUNNING", "READY")
 
 
 def event_lines(chunk) -> tuple[str, ...]:
@@ -30,21 +37,30 @@ def event_lines(chunk) -> tuple[str, ...]:
                 and not isinstance(event_id, bool)
             ):
                 indexed.append((event_id, text.strip()))
-    return tuple(
-        dict.fromkeys(text for _, text in sorted(indexed, key=lambda pair: pair[0]))
-    )
+    return tuple(dict.fromkeys(text for _, text in sorted(indexed, key=lambda pair: pair[0])))
+
+
+def reached_outcome(ui_state) -> bool:
+    """Whether a frame's HUD state says the game is over (won, lost, ...)."""
+    return isinstance(ui_state, Mapping) and ui_state.get("state", "") not in _RUNNING_STATES
 
 
 class EdenGame:
-    """One bounded native capture, with a latest-held-state mailbox per frame."""
+    """The native game as a draft source.
 
-    def __init__(self, *, source: Path, slug: str) -> None:
+    One bounded capture is in flight at a time, with a latest-held-keys mailbox
+    sampled once per captured frame.
+    """
+
+    kind = "game"
+
+    def __init__(self, *, source: Path, slug: str, size: tuple[int, int] = (1280, 704)) -> None:
         from eden.apps.game2v.game_renderer import GameCaptureWorker
         from eden.apps.game2v.game_timeline import GameTimeline
 
         self.timeline = GameTimeline(slug)
         self.capture = GameCaptureWorker(
-            slug, width=1280, height=704, games_root=source / "realtime/games"
+            slug, width=size[0], height=size[1], games_root=source / "realtime/games"
         )
         self._held = set()
         self._latest = frozenset()
@@ -53,6 +69,8 @@ class EdenGame:
         self._closed = False
         self._pending = None
         self._sampled = []
+        self._submitted_at = None
+        self._captured_at = None
 
     def set_keys(self, held: tuple[str, ...]) -> None:
         with self._gate:
@@ -71,9 +89,9 @@ class EdenGame:
             if self._closed:
                 raise CaptureClosed("Capture stopped")
             chosen = self._latest
-        events = [
-            {"action": key, "phase": "up"} for key in sorted(self._held - chosen)
-        ] + [{"action": key, "phase": "down"} for key in sorted(chosen - self._held)]
+        events = [{"action": key, "phase": "up"} for key in sorted(self._held - chosen)] + [
+            {"action": key, "phase": "down"} for key in sorted(chosen - self._held)
+        ]
         self._held = set(chosen)
         self._sampled.append(tuple(sorted(chosen)))
         return events
@@ -83,25 +101,49 @@ class EdenGame:
         if self._pending is None:
             self._sampled = []
             packet = self.timeline.begin_chunk(frames, 24)
+            self._submitted_at = time.monotonic()
+            self._captured_at = None
             self._pending = self.capture.submit(packet, drain_events=self._drain)
+            self._pending.add_done_callback(self._stamp_capture)
+
+    def _stamp_capture(self, _future) -> None:
+        self._captured_at = time.monotonic()
 
     def ready(self) -> bool:
         return self._pending is not None and self._pending.done()
 
-    def collect(self):
-        """Collect once; every captured frame remains paired with its inference."""
+    async def take(self) -> Draft | None:
+        """Return the captured chunk once it is ready; every frame keeps its keys."""
         if not self.ready():
-            raise RuntimeError("Capture is not ready")
+            return None
         chunk = self._pending.result()
         self._pending = None
-        proxy = np.stack([frame.ui_frame for frame in chunk.frames])
-        condition = np.stack(
-            [frame.condition_frame for frame in chunk.frames if frame.capture_condition]
-        )
         sampled = tuple(self._sampled)
         if len(sampled) != len(chunk.frames):
             raise RuntimeError("Input samples do not match captured frames")
-        return proxy, condition, chunk, sampled
+        conditioned = [i for i, frame in enumerate(chunk.frames) if frame.capture_condition]
+        if conditioned != list(range(0, len(chunk.frames), CONDITION_STRIDE)):
+            raise RuntimeError("Native condition frames are not every fourth draft frame")
+        metadata = tuple(
+            {
+                "source": self.kind,
+                "frame_id": frame.game_frame_id,
+                "simulation_tick": frame.simulation_tick,
+                "keys": list(keys),
+            }
+            for frame, keys in zip(chunk.frames, sampled, strict=True)
+        )
+        # The game may render below the draft size; scaling up runs off the loop.
+        frames = await asyncio.to_thread(fit_frames, [frame.ui_frame for frame in chunk.frames])
+        return Draft(
+            frames=frames,
+            metadata=metadata,
+            events=event_lines(chunk),
+            ended=reached_outcome(chunk.frames[-1].ui_state),
+            capture_seconds=None
+            if self._captured_at is None
+            else self._captured_at - self._submitted_at,
+        )
 
     def close(self):
         with self._gate:

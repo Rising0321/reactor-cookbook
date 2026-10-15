@@ -115,7 +115,7 @@ function Workspace() {
   const selected = games.find((g) => g[0] === world?.game);
   const availableKeys = gameKeys[world?.game] || [];
   useReactorMessage((message) => {
-    if (message.type === "eden_status") setWorld(message.data);
+    if (message.type === "state_update") setWorld(message.data);
   });
   useEffect(() => {
     if (status !== "ready") {
@@ -392,12 +392,24 @@ function Workspace() {
             <span>EdenLive render</span>
           </div>
           <div className="stage">
-            <ReactorView
-              track="main_video"
-              muted
-              videoObjectFit="contain"
-              className="video"
-            />
+            <div style={{ display: "flex", position: "absolute", inset: 0 }}>
+              <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+                <ReactorView
+                  track="draft_video"
+                  muted
+                  videoObjectFit="contain"
+                  className="video"
+                />
+              </div>
+              <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+                <ReactorView
+                  track="main_video"
+                  muted
+                  videoObjectFit="contain"
+                  className="video"
+                />
+              </div>
+            </div>
             {!world?.chunks && (
               <div className="placeholder">
                 <span className="eyebrow">
@@ -472,10 +484,14 @@ function Workspace() {
 
 createRoot(document.querySelector("#root")).render(
   <ReactorProvider
-    modelName="edenlive"
+    modelName="eden-live"
     local
     apiUrl={import.meta.env.VITE_REACTOR_URL || "http://localhost:8080"}
-    modelTracks={[{ name: "main_video", kind: "video", direction: "recvonly" }]}
+    modelTracks={[
+      { name: "source_video", kind: "video", direction: "sendonly" },
+      { name: "main_video", kind: "video", direction: "recvonly" },
+      { name: "draft_video", kind: "video", direction: "recvonly" },
+    ]}
     connectOptions={{ autoConnect: false }}
   >
     <Workspace />

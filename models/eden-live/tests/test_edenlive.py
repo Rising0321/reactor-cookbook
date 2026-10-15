@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Exercise real Runtime hooks with fake compute and the model's bookkeeping."""
 
 import asyncio
@@ -8,18 +9,24 @@ from pathlib import Path
 from threading import Condition, Event
 from types import ModuleType, SimpleNamespace
 
+import edenlive_app as edenlive
 import numpy as np
 import pytest
+from edenlive_app import EdenLive
+from edenlive_draft import ClientSource, Draft, fit_frames
+from edenlive_game import CaptureClosed, EdenGame, event_lines, reached_outcome
+from edenlive_model import (
+    CONDITION_STRIDE,
+    EdenInput,
+    EdenModel,
+    MissingAnchor,
+    condition_frames,
+)
+from edenlive_types import EdenState
 from PIL import Image
-from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
+from reactor_runtime import ApplicationError, CommandError, ReadMode, StepOutcome, UploadedFile
 from reactor_runtime.core.model import SessionStarted
 from reactor_runtime.interface.model.contract import ModelContract
-
-import edenlive_app as edenlive
-from edenlive_app import EdenLive
-from edenlive_game import CaptureClosed, EdenGame, event_lines
-from edenlive_model import EdenInput, EdenModel, EdenResult, MissingAnchor
-from edenlive_types import EdenState
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,13 +52,17 @@ class FakeBackend:
 
 
 class FakeGame:
+    kind = "game"
+
     def __init__(self, **kwargs):
+        self.slug = kwargs.get("slug")
         self.index = 0
         self.keys = []
         self.closed = False
         self.held = ()
         self.pending = None
         self.paused = False
+        self.outcome = False
 
     def set_keys(self, keys):
         self.held = keys
@@ -66,29 +77,50 @@ class FakeGame:
     def ready(self):
         return self.pending is not None
 
-    def collect(self):
+    async def take(self):
+        if not self.ready():
+            return None
         frames, self.pending = self.pending, None
         self.keys.append(self.held)
-        packet = SimpleNamespace(
-            frames=tuple(
-                SimpleNamespace(
-                    ui_state={"roundId": 0},
-                    game_frame_id=self.index + i + 1,
-                    simulation_tick=(self.index + i + 1) * 2,
-                )
-                for i in range(frames)
-            )
+        metadata = tuple(
+            {
+                "source": "game",
+                "frame_id": self.index + i + 1,
+                "simulation_tick": (self.index + i + 1) * 2,
+                "keys": list(self.held),
+            }
+            for i in range(frames)
         )
         self.index += frames
-        return (
-            np.full((frames, 704, 1280, 3), 7, np.uint8),
-            np.zeros((3, 704, 1280, 3), np.uint8),
-            packet,
-            (self.held,) * frames,
+        return Draft(
+            frames=np.full((frames, 704, 1280, 3), 7, np.uint8),
+            metadata=metadata,
+            ended=self.outcome,
         )
 
     def close(self):
         self.closed = True
+
+
+class FakeTrack:
+    """A client `source_video` track holding frames the test pushes."""
+
+    def __init__(self):
+        self.frames = []
+        self.reads = []
+
+    def push(self, count, value=5, shape=(720, 1280, 3)):
+        for _ in range(count):
+            self.frames.append(
+                SimpleNamespace(data=np.full(shape, value, np.uint8), pts=len(self.frames) / 24)
+            )
+
+    def try_read(self, n, mode=None):
+        self.reads.append((n, mode))
+        if len(self.frames) < n:
+            return None
+        latest, self.frames = self.frames[-n:], []
+        return latest
 
 
 async def app(monkeypatch):
@@ -97,6 +129,7 @@ async def app(monkeypatch):
     model = EdenModel()
     model._backend = FakeBackend()
     instance._engine = model
+    instance.media = SimpleNamespace(source_video=FakeTrack())
     instance._on_loop_ready()
     sent = []
     instance.bind_output(
@@ -118,6 +151,7 @@ async def ready(monkeypatch):
 async def test_schema_and_runtime_free_model_boundary():
     contract = ModelContract.of(EdenLive)
     assert set(contract.commands) == {
+        "set_source",
         "select_game",
         "set_image",
         "start",
@@ -162,6 +196,9 @@ async def test_invalid_execution_options_fail_before_asset_loading(tmp_path):
         resolve_assets(config, tmp_path)
     config.write_text('cuda_graph: "yes"\n')
     with pytest.raises(ValueError, match="boolean"):
+        resolve_assets(config, tmp_path)
+    config.write_text("game_capture: [832]\n")
+    with pytest.raises(ValueError, match="game_capture"):
         resolve_assets(config, tmp_path)
 
 
@@ -230,10 +267,11 @@ async def test_anchor_ack_prompt_and_frame_pairing(monkeypatch):
     assert first.anchor.seed == 7
     result = instance.generate(first)
     output = await instance.process_output(StepOutcome(result=result, elapsed=0.5))
-    assert output.main_video.shape == (9, 704, 2560, 3)
-    assert np.all(output.main_video[:, :, :1280] == 7)
-    assert np.all(output.main_video[:, :, 1280:] == 0)
+    assert output.main_video.shape == output.draft_video.shape == (9, 704, 1280, 3)
+    assert np.all(output.draft_video == 7)
+    assert np.all(output.main_video == 0)
     assert output.__metadata__["main_video"][0]["frame_id"] == 1
+    assert output.__metadata__["draft_video"] == output.__metadata__["main_video"]
     await instance.set_prompt(prompt="The cavern glows blue.")
     second = await instance.process_input()
     assert second.anchor is None and second.world_id == first.world_id
@@ -265,22 +303,25 @@ async def test_pause_update_resume_and_disconnect(monkeypatch):
     with pytest.raises(ApplicationError):
         await instance.process_input()
     await instance.set_paused(paused=False)
-    await instance.on_disconnected()
+    await instance.set_keys(keys=["w"], client=SimpleNamespace(id="player"))
+    await instance.on_disconnected(SimpleNamespace(id="viewer"))
+    assert instance.state.keys == ["w"]
+    await instance.on_disconnected(SimpleNamespace(id="player"))
     assert instance.state._started and instance.state._world_id == 1
     assert not instance.state.keys and model._backend.resets == 0
     await instance.process_input()
-    assert instance._game.keys == [()]
+    assert instance._draft_source.keys == [()]
 
 
 async def test_restart_and_session_seed_isolation(monkeypatch):
     instance, model, _ = await ready(monkeypatch)
-    first_game = instance._game
+    first_game = instance._draft_source
     await instance.start(seed=11)
     assert first_game.closed
     assert instance.state._world_id == 2
     assert (await instance.process_input()).anchor.seed == 11
     instance.on_session_ended()
-    assert model._backend.resets == 1 and instance._game is None
+    assert model._backend.resets == 1 and instance._draft_source is None
     assert EdenState()._seed == 2026092901
 
 
@@ -374,23 +415,18 @@ async def test_latest_keys_replace_unconsumed_transitions(monkeypatch):
     instance, _, _ = await ready(monkeypatch)
     await instance.set_keys(keys=["f"])
     await instance.set_keys(keys=[])
-    await instance.process_input()
-    assert instance._game.keys == [()]
-    assert instance.state._sampled_keys == ((),) * 9
-    step = EdenResult(
-        world_id=1,
-        chunk_index=1,
-        frames=np.zeros((9, 704, 1280, 3), np.uint8),
-        frames_wanted=12,
-    )
-    await instance.process_output(StepOutcome(result=step))
-    assert instance.state._sampled_keys == ()
+    snapshot = await instance.process_input()
+    assert instance._draft_source.keys == [()]
+    assert [frame["keys"] for frame in instance.state._draft.metadata] == [[]] * 9
+    output = await instance.process_output(StepOutcome(result=instance.generate(snapshot)))
+    assert output.__metadata__["main_video"][0]["keys"] == []
+    assert instance.state._draft is None
 
 
 async def test_terminal_game_pauses_until_fresh_start(monkeypatch):
     instance, _, _ = await ready(monkeypatch)
+    instance._draft_source.outcome = True
     snapshot = await instance.process_input()
-    instance.state._packet.frames[-1].ui_state = {"state": "WON"}
     await instance.process_output(StepOutcome(result=instance.generate(snapshot)))
     assert instance.state.paused and instance.state._ended
     with pytest.raises(ApplicationError):
@@ -441,6 +477,7 @@ def bare_game():
     game._held, game._latest, game._sampled = set(), frozenset(), []
     game._gate, game._paused, game._closed = Condition(), False, False
     game._pending = None
+    game._submitted_at = game._captured_at = None
     game.timeline = SimpleNamespace(begin_chunk=lambda frames, fps: frames)
     return game
 
@@ -465,6 +502,9 @@ async def test_capture_samples_latest_state_per_frame_without_replaying_taps():
                     ui_frame=pixels,
                     condition_frame=pixels,
                     capture_condition=i in (0, 4, 8),
+                    ui_state={"state": "WON"} if i == count - 1 else {},
+                    game_frame_id=i + 1,
+                    simulation_tick=2 * (i + 1),
                 )
             )
         future = Future()
@@ -475,8 +515,9 @@ async def test_capture_samples_latest_state_per_frame_without_replaying_taps():
     game.prepare(9)
     game.prepare(12)  # Completed captures also occupy the single slot.
     assert len(delivered) == 9
-    _, _, _, sampled = game.collect()
-    assert sampled == ((), ()) + (("f",),) * 7
+    draft = await game.take()
+    assert [frame["keys"] for frame in draft.metadata] == [[], []] + [["f"]] * 7
+    assert draft.frames.shape == (9, 704, 1280, 3) and draft.ended
     assert delivered[0] == []
     assert delivered[1] == []
     assert delivered[2] == [{"action": "f", "phase": "down"}]
@@ -493,23 +534,24 @@ async def test_capture_samples_latest_state_per_frame_without_replaying_taps():
 
 async def test_capture_wait_refuses_without_holding_runtime_lock(monkeypatch):
     instance, model, _ = await ready(monkeypatch)
-    monkeypatch.setattr(instance._game, "ready", lambda: False)
-    with pytest.raises(ApplicationError, match="draft chunk"):
+    monkeypatch.setattr(instance._draft_source, "ready", lambda: False)
+    with pytest.raises(ApplicationError, match="draft frames"):
         await instance.process_input()
     await instance.set_keys(keys=["w"])
     await instance.set_keys(keys=["d"])
-    assert instance._game.held == ("d",)
+    assert instance._draft_source.held == ("d",)
     assert model._backend.steps == []
 
 
-async def test_pipeline_starts_successor_before_model_and_keeps_pairing(monkeypatch):
+async def test_capture_waits_for_the_step_and_keeps_pairing(monkeypatch):
     instance, model, _ = await ready(monkeypatch)
     first = await instance.process_input()
-    assert instance._game.pending is None  # Wait for native first-result geometry.
+    assert instance._draft_source.pending is None
     await instance.process_output(StepOutcome(result=instance.generate(first)))
     for chunk in range(2, 13):
         snapshot = await instance.process_input()
-        assert instance._game.pending == 12  # Capture overlaps this generate.
+        # Nothing is captured ahead, so keys set between steps reach the next chunk.
+        assert instance._draft_source.pending is None
         result = instance.generate(snapshot)
         output = await instance.process_output(StepOutcome(result=result))
         metadata = output.__metadata__["main_video"]
@@ -549,4 +591,208 @@ async def test_capture_failure_is_not_hidden():
     game._pending = Future()
     game._pending.set_exception(RuntimeError("capture failed"))
     with pytest.raises(RuntimeError, match="capture failed"):
-        game.collect()
+        await game.take()
+
+
+async def test_game_refuses_a_condition_layout_the_shared_slice_would_miss():
+    game = bare_game()
+    game._sampled = [()] * 9
+    future = Future()
+    frame = SimpleNamespace(
+        ui_frame=np.zeros((2, 2, 3), np.uint8), ui_state={}, game_frame_id=1, simulation_tick=1
+    )
+    frames = [SimpleNamespace(**vars(frame), capture_condition=i in (1, 5, 9)) for i in range(9)]
+    future.set_result(SimpleNamespace(frames=frames))
+    game._pending = future
+    with pytest.raises(RuntimeError, match="every fourth"):
+        await game.take()
+
+
+async def test_hud_outcome_detection():
+    assert not reached_outcome({"state": "RUNNING"})
+    assert not reached_outcome({"roundId": 0})
+    assert not reached_outcome(None)
+    assert reached_outcome({"state": "LOST"})
+
+
+async def test_condition_frames_are_the_shared_stride():
+    draft = np.arange(12)[:, None, None, None] * np.ones((12, 2, 2, 3), np.uint8)
+    assert CONDITION_STRIDE == 4
+    assert [int(f[0, 0, 0]) for f in condition_frames(draft)] == [0, 4, 8]
+    assert len(condition_frames(draft[:9])) == 3
+
+
+async def test_fit_frames_cover_crops_any_client_geometry():
+    tall = np.zeros((1080, 720, 3), np.uint8)
+    tall[540, 360] = 255
+    wide = np.full((480, 1920, 3), 9, np.uint8)
+    exact = np.full((704, 1280, 3), 3, np.uint8)
+    fitted = fit_frames([tall, wide, exact])
+    assert fitted.shape == (3, 704, 1280, 3) and fitted.dtype == np.uint8
+    assert np.all(fitted[1] == 9) and np.all(fitted[2] == 3)
+
+
+async def test_client_source_reads_latest_frames_and_never_ends():
+    track = FakeTrack()
+    source = ClientSource(track)
+    assert await source.take() is None
+    source.prepare(9)
+    track.push(5)
+    assert await source.take() is None
+    track.push(20, value=8, shape=(480, 640, 3))
+    draft = await source.take()
+    assert draft.frames.shape == (9, 704, 1280, 3) and np.all(draft.frames == 8)
+    assert draft.metadata[0]["source"] == "client" and not draft.ended and draft.events == ()
+    assert track.reads[-1][1] is ReadMode.LATEST
+
+
+async def client_ready(monkeypatch):
+    instance, model, sent = await app(monkeypatch)
+    await instance.set_source(source="client")
+    data = io.BytesIO()
+    Image.new("RGB", (64, 64)).save(data, format="PNG")
+    await instance.set_image(
+        UploadedFile(name="look.png", mime_type="image/png", data=data.getvalue())
+    )
+    await instance.set_prompt(prompt="A neon city.")
+    await instance.start(seed=3)
+    return instance, model, sent
+
+
+async def test_client_source_goes_through_the_same_step(monkeypatch):
+    instance, model, sent = await client_ready(monkeypatch)
+    track = instance.media.source_video
+    with pytest.raises(ApplicationError, match="from the client"):
+        await instance.process_input()
+    track.push(9, value=40)
+    first = await instance.process_input()
+    assert first.anchor.seed == 3 and first.prompt == "A neon city."
+    assert np.all(first.condition == 40) and first.condition.shape == (3, 704, 1280, 3)
+    output = await instance.process_output(StepOutcome(result=instance.generate(first)))
+    assert np.all(output.draft_video == 40)
+    assert output.__metadata__["main_video"][0]["source"] == "client"
+    assert sent[-1].source == "client" and sent[-1].chunks == 1
+    track.push(12, value=41)
+    second = await instance.process_input()
+    assert second.anchor is None and np.all(second.condition == 41)
+
+
+async def test_switching_source_mid_world_keeps_the_world(monkeypatch):
+    instance, model, _ = await ready(monkeypatch)
+    first = await instance.process_input()
+    await instance.process_output(StepOutcome(result=instance.generate(first)))
+    game = instance._draft_source
+    await instance.set_source(source="client")
+    assert game.closed and isinstance(instance._draft_source, ClientSource)
+    instance.media.source_video.push(12, value=50)
+    step = await instance.process_input()
+    assert step.anchor is None and step.world_id == first.world_id
+    assert np.all(step.condition == 50)
+    await instance.process_output(StepOutcome(result=instance.generate(step)))
+    await instance.set_source(source="game")
+    assert isinstance(instance._draft_source, FakeGame) and instance._draft_source is not game
+    step = await instance.process_input()
+    assert step.anchor is None and np.all(step.condition == 7)
+    assert len(model._backend.anchors) == 1 and model._backend.resets == 1
+
+
+async def test_switching_away_from_an_ended_game_allows_resume(monkeypatch):
+    instance, _, _ = await ready(monkeypatch)
+    instance._draft_source.outcome = True
+    snapshot = await instance.process_input()
+    await instance.process_output(StepOutcome(result=instance.generate(snapshot)))
+    assert instance.state._ended
+    await instance.set_source(source="client")
+    await instance.set_paused(paused=False)
+    assert not instance.state._ended and not instance.state.paused
+
+
+async def test_source_refusals(monkeypatch):
+    instance, _, sent = await app(monkeypatch)
+    await instance.set_source(source="client")
+    with pytest.raises(CommandError) as error:
+        await instance.start(seed=0)
+    assert error.value.code == "image_required"
+    instance, _, _ = await client_ready(monkeypatch)
+    with pytest.raises(CommandError) as error:
+        await instance.set_source(source="game")
+    assert error.value.code == "game_required"
+    assert instance.state._source == "client"
+
+
+async def test_warmup_covers_capture_recapture_and_a_fresh_world(monkeypatch):
+    backend = FakeBackend()
+    backend.capture_index, backend.graph_warmup = 6, 2
+    stub = ModuleType("edenlive_backend")
+    stub.EdenBackend = lambda **kwargs: backend
+    monkeypatch.setitem(sys.modules, "edenlive_backend", stub)
+    model = EdenModel()
+    model.load(source=Path("/source"), weights=Path("/weights"), warmup=True)
+    steady, recapture = 6 + 2 + 2, 2 + 2
+    assert [index for index, _, _ in backend.steps] == [
+        *range(steady + recapture),
+        *range(steady),
+    ]
+    prompts = [prompt for _, _, prompt in backend.steps[: steady + recapture]]
+    assert len(set(prompts[:steady])) == 1 and prompts[steady] != prompts[0]
+    assert [anchor.seed for anchor in backend.anchors] == [0, 1]
+    assert backend.resets == 3
+    assert model._world_id is None and model._chunk_index == 0
+
+
+async def test_load_skips_warmup_unless_asked(monkeypatch):
+    backend = FakeBackend()
+    stub = ModuleType("edenlive_backend")
+    stub.EdenBackend = lambda **kwargs: backend
+    monkeypatch.setitem(sys.modules, "edenlive_backend", stub)
+    EdenModel().load(source=Path("/source"), weights=Path("/weights"))
+    assert backend.steps == []
+
+
+async def test_chunk_timer_splits_the_cycle_and_summarizes():
+    from edenlive_timing import SUMMARY_EVERY, ChunkTimer
+
+    timer = ChunkTimer()
+    assert (
+        timer.finished(1.0, frames=9, generate_s=0.3, capture_s=None, prompt_changed=True) is None
+    )
+    at = 1.0
+    for _ in range(SUMMARY_EVERY):
+        timer.attempt(at + 0.5)  # emit blocked 0.5 s
+        timer.attempt(at + 0.6)  # a refused attempt does not move the start
+        timer.drafted(at + 0.7)  # draft arrived 0.2 s after the first attempt
+        at += 1.0
+        sample = timer.finished(at, frames=12, generate_s=0.25, capture_s=0.6, prompt_changed=False)
+        assert sample["cycle_s"] == pytest.approx(1.0)
+        assert sample["emit_s"] == pytest.approx(0.5)
+        assert sample["draft_wait_s"] == pytest.approx(0.2)
+    summary = timer.summary()
+    assert summary["new_fps"] == pytest.approx(12.0) and summary["chunks"] == SUMMARY_EVERY
+    assert summary["generate_s"] == 0.25 and summary["capture_s"] == 0.6
+    assert timer.summary() is None
+    timer.restart()
+    assert (
+        timer.finished(9.0, frames=12, generate_s=0.2, capture_s=0.5, prompt_changed=False) is None
+    )
+
+
+async def test_chunk_timer_summary_covers_one_run():
+    from edenlive_timing import SUMMARY_EVERY, ChunkTimer
+
+    def run(timer, at, chunks, capture_s):
+        timer.finished(at, frames=12, generate_s=0.2, capture_s=capture_s, prompt_changed=False)
+        for _ in range(chunks):
+            timer.attempt(at + 0.1)
+            timer.drafted(at + 0.2)
+            at += 0.5
+            timer.finished(at, frames=12, generate_s=0.2, capture_s=capture_s, prompt_changed=False)
+        return at
+
+    timer = ChunkTimer()
+    at = run(timer, 0.0, SUMMARY_EVERY - 1, capture_s=0.6)
+    timer.restart()  # e.g. `set_source` to `client`
+    at = run(timer, at + 5.0, 1, capture_s=None)
+    assert timer.summary() is None
+    run(timer, at, SUMMARY_EVERY - 1, capture_s=None)
+    summary = timer.summary()
+    assert summary["chunks"] == SUMMARY_EVERY and summary["capture_s"] is None

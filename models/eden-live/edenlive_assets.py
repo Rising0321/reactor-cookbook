@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Resolve the authorized local source and checkpoint tree in the application."""
 
 import json
@@ -17,13 +18,20 @@ def resolve_assets(config_path: Path | None, root: Path):
         "attention_backend": config.get("attention_backend", "native"),
         "cuda_graph": config.get("cuda_graph", False),
         "compile_model": config.get("compile_model", False),
+        "warmup": config.get("warmup", False),
     }
     if execution["attention_backend"] not in ("native", "fa4"):
         raise ValueError("attention_backend must be 'native' or 'fa4'")
-    if type(execution["cuda_graph"]) is not bool:
-        raise ValueError("cuda_graph must be a boolean")
-    if type(execution["compile_model"]) is not bool:
-        raise ValueError("compile_model must be a boolean")
+    for key in ("cuda_graph", "compile_model", "warmup"):
+        if type(execution[key]) is not bool:
+            raise ValueError(f"{key} must be a boolean")
+    capture = config.get("game_capture", [1280, 704])
+    if (
+        not isinstance(capture, list)
+        or len(capture) != 2
+        or not all(type(side) is int and side >= 64 for side in capture)
+    ):
+        raise ValueError("game_capture must be [width, height] in pixels")
     source = (root / config["source"]).resolve()
     weights = (root / config["checkpoint"]).resolve()
     registry = source / "realtime/games/registry.json"
@@ -39,9 +47,7 @@ def resolve_assets(config_path: Path | None, root: Path):
     for path in required:
         if not path.is_file():
             raise FileNotFoundError(f"Required EdenLive asset is missing: {path}")
-    entries = {
-        entry["slug"]: entry for entry in json.loads(registry.read_text())["games"]
-    }
+    entries = {entry["slug"]: entry for entry in json.loads(registry.read_text())["games"]}
     for slug in GAMES:
         if (
             slug not in entries
@@ -50,4 +56,4 @@ def resolve_assets(config_path: Path | None, root: Path):
             raise FileNotFoundError(f"Missing official game or cover: {slug}")
     # Only the CPU game renderer is imported in the application process.
     sys.path.insert(0, str(source / "realtime/integrations_v2"))
-    return source, weights, entries, execution
+    return source, weights, entries, execution, tuple(capture)

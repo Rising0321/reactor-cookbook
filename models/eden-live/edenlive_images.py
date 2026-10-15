@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Bounded, off-loop image decoding; the backend retains the native float resize."""
 
 import io

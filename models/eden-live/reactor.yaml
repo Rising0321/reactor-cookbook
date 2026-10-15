@@ -1,8 +1,62 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 $schema: reactor/v2
 model:
-  name: edenlive
-  version: v0.2.1
-  description: EdenLive 5B native games with synchronized draft and generated video.
+  name: eden-live
+  # 1.1.0: MINOR. The draft and the generated frames are two tracks:
+  # `main_video` carries the generated frames at 1280x704 and a new
+  # `draft_video` the draft each was made from, with the same timestamps and
+  # metadata, instead of one 2560x704 side-by-side frame on `main_video`.
+  # The game renders on the GPU and is captured on demand.
+  # The image installs the GLVND EGL and GLES loaders (libegl1, libgles2), the
+  # container asks for the graphics driver capability, and EDEN_GAME_GPU is 1,
+  # so headless Chromium reaches the B200 instead of SwiftShader: a 12-frame
+  # capture takes about 0.2 s at the full 1280x704 (0.49-0.67 s on SwiftShader,
+  # slower under CPU contention), so `game_capture` is back to [1280, 704].
+  # Each chunk is captured when its step asks for it rather than while the
+  # previous chunk generates, so a key reaches the next chunk: key to received
+  # frame drops from 1.24-1.32 s to 0.69-0.86 s at 23.5-24 new fps. The new
+  # `draft_video` track is the only schema change; a client that drew the left
+  # half of `main_video` as the draft reads `draft_video` instead.
+  # 1.0.0: EdenLive renamed from `reactor/edenlive` to `reactor/eden-live`;
+  # it registers as a new model and starts again at 1.0.0. The client contract
+  # is edenlive 1.0.3's, unchanged: the same commands, messages, tracks, and
+  # codes. It ships everything edenlive 1.0.1-1.0.3 shipped (load-time warmup,
+  # chunk timing summaries, the game rendered at 832x458 so game mode holds
+  # 24 fps), plus a chunk timing summary that covers one measurement run: a
+  # pause, `start`, `set_source`, or a new session drops the samples not yet
+  # summarized. The entries below are the history of `reactor/edenlive`.
+  #
+  # edenlive 1.0.3: PATCH. The game renders at 832x458 (`game_capture` in
+  # edenlive.yaml) and the draft is scaled to 1280x704: the software-rendered
+  # capture drops from 0.62-0.65 s to 0.35-0.40 s per chunk, so game mode holds
+  # 24 new fps instead of 18-21 and playout no longer stalls at chunk
+  # boundaries. No schema change.
+  # edenlive 1.0.2: PATCH. Logs a chunk timing summary every 12 chunks: new
+  # frames per second and the median cycle split into emit, draft wait,
+  # generate() and the game's capture time. No schema change, no behaviour
+  # change.
+  # edenlive 1.0.1: PATCH. `warmup: true` compiles during load: the model
+  # generates throwaway worlds until every compiled shape and CUDA graph a
+  # session uses exists, so the first session runs at steady-state speed (cold
+  # load ~110 s on a B200; steady 0.21 s per chunk). No schema change.
+  # edenlive 1.0.0: MAJOR. The draft can come from the client: a
+  # `source_video` input track and a `set_source` command (`game` | `client`)
+  # that switches sources any time, keeping the world. Both sources reach the
+  # model through one path (model_behaviour.md, "The shared draft path").
+  # `start` fails with `image_required` in `client` mode without a reference;
+  # `set_image` no longer needs a game there. The snapshot message is renamed
+  # `eden_status` -> `state_update` (breaking) and gains `source`; every
+  # description is rewritten for clients. PORTING.md records the decisions.
+  # edenlive 0.1.0: initial port, imported from
+  # reactor-team/reactor-edenlive @ e11bca2.
+  version: 1.1.0
+  description: |
+    EdenLive 5B: reskins a draft video into a generated world, chunk by chunk,
+    from an appearance reference and a prompt. The draft comes from one of
+    seven official code games, steered with held keys, or from the client's own
+    video track; `set_source` switches between them without restarting the
+    world. Each chunk streams the generated frames on `main_video` and the draft
+    they were made from on `draft_video`.
   resources:
     gpu:
       type: NVIDIA_B200
@@ -23,10 +77,17 @@ build:
     - npm
     - libgl1
     - libglib2.0-0
+    # The GLVND loaders NVIDIA's EGL driver plugs into; without them headless
+    # Chromium cannot reach the GPU and renders the game on SwiftShader.
+    - libegl1
+    - libgles2
   run:
     - python -m playwright install --with-deps chromium
   runtime_env:
-    EDEN_GAME_GPU: "0"
+    # The game renders on the model's own GPU (the only one the container sees);
+    # without the graphics capability the driver's EGL library is not mounted.
+    EDEN_GAME_GPU: "1"
+    NVIDIA_DRIVER_CAPABILITIES: "compute,utility,graphics"
     HF_HUB_OFFLINE: "1"
     TOKENIZERS_PARALLELISM: "false"
     OMP_NUM_THREADS: "8"

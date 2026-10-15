@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Reuse the original 5B LightTAE pipeline, sampler, DINO and cache operations."""
 
 import math
@@ -93,6 +94,11 @@ class EdenBackend:
                     warmup_iters=decoder._warmup_iters,
                 )
             self.dino._call = torch.compile(self.dino.encoder, options=options)
+        transformer = self.pipeline.diffusion_model.transformer
+        # Chunks before this index fill the cache eagerly; graphs are captured
+        # from it on, after the wrapper's own warmup iterations.
+        self.capture_index = transformer._cuda_graph_capture_ar_idx
+        self.graph_warmup = transformer.config.cuda_graph_warmup_iters if cuda_graph else 0
         self.cache = None
         self.prompt = ""
 
@@ -116,9 +122,7 @@ class EdenBackend:
                 align_corners=False,
             )[0]
             top, left = (pixels.shape[1] - 704) // 2, (pixels.shape[2] - 1280) // 2
-            image = (
-                pixels[:, top : top + 704, left : left + 1280].contiguous() / 127.5 - 1
-            )
+            image = pixels[:, top : top + 704, left : left + 1280].contiguous() / 127.5 - 1
             image = image.unsqueeze(0).to(device="cuda", dtype=torch.float32)
             # A user-requested fresh world has its own native per-model RNG.
             diffusion = self.pipeline.diffusion_model

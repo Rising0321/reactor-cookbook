@@ -1,5 +1,13 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 source: source
 checkpoint: weights/EdenLive
 attention_backend: fa4
 cuda_graph: true
 compile_model: true
+# Generate throwaway worlds during load until every compiled shape and CUDA
+# graph exists, so the first session runs at steady-state speed.
+warmup: true
+# Size the game renders at, [width, height]; the draft is scaled to 1280x704.
+# On the GPU the full size captures a chunk in about 0.2 s. If the game falls
+# back to software rendering, [832, 458] keeps the capture faster than real time.
+game_capture: [1280, 704]

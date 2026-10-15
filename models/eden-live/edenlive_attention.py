@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Dense FA4 for the released single-GPU 5B inference path."""
 
 

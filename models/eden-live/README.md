@@ -1,11 +1,12 @@
 # EdenLive on Reactor
 
-Play EdenLive's code-driven games through [Reactor](https://reactor.inc). Choose a game,
-use its original reference or upload your own, and steer with keyboard or on-screen controls.
-Every completed chunk shows the matching native draft on the left and EdenLive's render on
-the right, in one synchronized video stream.
-
-![EdenLive running with synchronized draft and generated views](assets/demo.png)
+Reskin a draft video with EdenLive through [Reactor](https://reactor.inc). The draft comes
+from one of EdenLive's code-driven games, steered with keyboard or on-screen controls, or
+from your own video (a webcam, a screen, a canvas) sent on the `source_video` track. Choose
+a game's original reference or upload your own, and switch the draft source at any time
+with `set_source`. Every completed chunk streams EdenLive's render on `main_video` and the
+draft it came from on `draft_video`, frame for frame. [`model_behaviour.md`](model_behaviour.md)
+is the full contract.
 
 This recipe requires authorized access to EdenLive's source and weights. It does not
 download private source during startup, publish the model, or call an external generation API.
@@ -55,14 +56,19 @@ Use a CLI version that supports `--shm-size` (tested with v1.20261014.332): Dock
 **Check:** `curl http://localhost:8080/health` reports `"state":"available"` after loading.
 Leave the terminal running; `Ctrl+C` stops the service. Loading and the first chunk take
 longer than subsequent chunks. The default B200 profile enables dense FlashAttention 4,
-PyTorch compilation and the author's CUDA graph dispatch. Initial compilation can take
-several minutes; the steady-state numbers below exclude this startup cost.
+PyTorch compilation and the author's CUDA graph dispatch, and `warmup: true` pays the
+compilation during load: the model generates throwaway worlds until every compiled shape and
+CUDA graph exists, then forgets them. A cold load takes about 110 s on a B200 (30 s of weights,
+about 65 s of compilation); with the compile cache warm it is much shorter. The first session
+then runs at steady-state speed.
 
 To use the native eager profile, set `attention_backend: native`, `cuda_graph: false`
 and `compile_model: false` in `edenlive.yaml`, then rebuild and restart. Both profiles
 keep the same weights, four sampling steps, precision policy and history length.
 
 ## 3. Open the demo
+
+The demo frontend is in `demo/`. It shows `draft_video` and `main_video` side by side:
 
 ```sh
 cd demo
@@ -83,6 +89,7 @@ ports. Keep machine-specific relay credentials and network overrides outside thi
 
 | Control | Effect |
 | --- | --- |
+| Draft source (`set_source`) | `game` draws the draft from the selected game; `client` draws it from your `source_video` track, which should be sent at 24 fps. Switch any time; the world keeps its history. |
 | Official game | Stage one of seven original games with its matching cover and prompt. Pause before changing it. |
 | Appearance reference | Stage a PNG, JPEG or WebP, up to 25 MiB / 16 megapixels. The image is resized and center-cropped to 1280 × 704 at Start. |
 | Start / Start new world | Start the selected game and a fresh video with the chosen seed. |
@@ -92,14 +99,14 @@ ports. Keep machine-specific relay credentials and network overrides outside thi
 
 The first chunk contains 9 frames; later chunks contain 12. Each completed chunk is
 returned immediately. The native simulation advances at 60 Hz and is sampled at 24 FPS;
-the combined 2560 × 704 output plays at 24 FPS. Each left/right pair uses the same
-simulation frame, so neither view runs ahead of the other. When generation takes longer
+both 1280 × 704 output tracks play at 24 FPS. Each draft/generated pair uses the same
+simulation frame and timestamp, so neither track runs ahead of the other. When generation takes longer
 than playback, both views wait together.
 
 The demo polls held keys every 33 ms, with one command in flight and one replaceable
 latest state. It does not replay old key transitions. The native renderer samples
-the latest accepted state before each draft frame, preparing at most one chunk while
-the GPU generates the preceding chunk. Pause freezes capture at a frame boundary;
+the latest accepted state before each draft frame, and each chunk is captured when its
+step asks for it, so a key reaches the next chunk. Pause freezes capture at a frame boundary;
 Resume keeps any partially captured chunk and the same model history. Hold an action
 long enough to be sampled: a press and release between samples is intentionally
 coalesced. Already captured, generated or buffered frames retain their original input.
@@ -137,8 +144,11 @@ need broader evaluation; the integration does not invoke the optional coding age
 
 ## Development
 
-`edenlive_app.py` owns commands and simulation; `edenlive_types.py` defines the client
-contract. `edenlive_model.py` and `edenlive_backend.py` own the original model pipeline
+`edenlive_app.py` owns commands and the step; `edenlive_types.py` defines the client
+contract. `edenlive_draft.py` defines the draft-source protocol and the client source;
+`edenlive_game.py` is the game source. Both reach the model through one path, described in
+[`model_behaviour.md`](model_behaviour.md) with the invariants to keep, and
+[`PORTING.md`](PORTING.md) records the port's decisions. `edenlive_model.py` and `edenlive_backend.py` own the original model pipeline
 and its streaming state. The application entrypoint uses an `_app` suffix to avoid
 shadowing the upstream `edenlive` package.
 
