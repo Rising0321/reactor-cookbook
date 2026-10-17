@@ -815,7 +815,9 @@ function Workspace({ conn }) {
   }
   function startWorld() {
     perform("Starting…", async () => {
-      await request("set_prompt", { prompt });
+      // A changed prompt rebuilds the server's prompt bank before it replies; skip it when
+      // the server already holds this text.
+      if (prompt.trim() !== (world?.prompt || "").trim()) await request("set_prompt", { prompt });
       await request("start", { seed });
     });
   }
