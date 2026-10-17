@@ -9,6 +9,8 @@ const sdk = path.dirname(
   createRequire(import.meta.url).resolve("@reactor-team/js-sdk"),
 );
 export default defineConfig({
+  // Relative asset URLs: dist/ works from any static host, at the root or under a sub-path.
+  base: "./",
   optimizeDeps: {
     exclude: ["@reactor-team/js-sdk"],
     include: [

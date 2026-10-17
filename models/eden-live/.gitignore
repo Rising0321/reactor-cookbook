@@ -8,3 +8,5 @@ demo/dist/
 *.log
 source/
 weights/
+# The official games, copied from the staged bundle; kept out of git for now (see demo/DEPLOY.md).
+demo/public/local-games/

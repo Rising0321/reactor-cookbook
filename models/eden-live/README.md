@@ -76,7 +76,9 @@ npm ci
 VITE_REACTOR_URL=http://localhost:8080 npm run dev
 ```
 
-Open the URL printed by Vite. Click **Connect**, choose an **Official game**, optionally
+Open the URL printed by Vite. In the header, pick where to connect: **Local** (the model
+server URL, prefilled from `VITE_REACTOR_URL`), or **DEV** / **PROD** with your own Reactor
+API key for that platform. Click **Connect**, choose an **Official game**, optionally
 upload an **Appearance reference**, and press **Start**. Selecting or uploading alone
 does not generate video. Match a custom reference to the game's opening composition.
 
@@ -84,6 +86,9 @@ For a remote GPU server, the browser must reach both HTTP and WebRTC. SSH forwar
 of the HTTP port alone does not carry video; host networking alone does not solve this.
 Use a TURN-over-TCP relay and forward its TCP listener along with the frontend and HTTP
 ports. Keep machine-specific relay credentials and network overrides outside this recipe.
+
+`npm run build` writes a static site to `demo/dist/` that works from any static host;
+[demo/DEPLOY.md](demo/DEPLOY.md) covers deploying it to Vercel.
 
 ## Controls and playback
 

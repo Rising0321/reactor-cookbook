@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ReactorProvider,
@@ -9,10 +9,26 @@ import {
 import { Logo } from "@reactor-team/ui";
 import { createControls } from "./controls.js";
 import { MODEL_H, MODEL_W, checkFile, prepareReference } from "./reference.js";
+import { SEND_RATES, createLocalSource } from "./local-source.js";
+import { mountLocalGame } from "./local-game.js";
 import officialPrompts from "./official-prompts.json";
+import {
+  ConnectionError,
+  DEFAULT_MODEL,
+  TARGETS,
+  checkLocalUrl,
+  describeError,
+  loadKey,
+  loadSettings,
+  mintToken,
+  saveKey,
+  saveSettings,
+  tokenResolver,
+} from "./connection.js";
 import "./style.css";
 
-const coverUrl = (game) => `/covers/${game}.png`;
+// Relative to the page, so the build works from any static host or sub-path.
+const coverUrl = (game) => `${import.meta.env.BASE_URL}covers/${game}.png`;
 
 // Keep a handle on the peer connections the SDK opens, so the page can read the
 // browser's own receive/decode/drop counters for the video tracks.
@@ -205,7 +221,8 @@ const ARROW_ROWS = [
 ];
 
 /** Keyboard and mouse, laid out as on a desk; held inputs light up. */
-function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge }) {
+// noMouse: the game in this page reads keys only.
+function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge, noMouse }) {
   const used = new Set(gameKeys[game] || []);
   const actions = actionsFor(game);
   const cap = ([key, col, span]) => {
@@ -241,7 +258,7 @@ function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge }) {
       ))}
     </div>
   );
-  const hasMouse = game && game !== "arcadeduel";
+  const hasMouse = !noMouse && game && game !== "arcadeduel";
   const button = (key, side) => {
     const isUsed = used.has(key);
     const lit = mouseHeld.includes(key);
@@ -260,7 +277,7 @@ function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge }) {
         <div className="mouse-body">
           {button("f", "left")}
           {button("e", "right")}
-          <div className="mouse-palm">{lookOn ? "move = look" : "click video"}</div>
+          <div className="mouse-palm">{hasMouse ? (lookOn ? "move = look" : "click video") : ""}</div>
         </div>
       </div>
     </div>
@@ -295,13 +312,16 @@ function ReferencePreview({ source }) {
   return <canvas ref={input} className="ref-preview" aria-label="Reference image as used" />;
 }
 
-function Workspace() {
+function Workspace({ conn }) {
   const status = useReactor((s) => s.status),
     connect = useReactor((s) => s.connect),
     disconnect = useReactor((s) => s.disconnect);
   const send = useReactor((s) => s.sendCommand),
     upload = useReactor((s) => s.uploadFile),
     lastError = useReactor((s) => s.lastError);
+  const publish = useReactor((s) => s.publish),
+    unpublish = useReactor((s) => s.unpublish),
+    reactor = useReactor((s) => s.internal.reactor);
   const [world, setWorld] = useState(null),
     [prompt, setPrompt] = useState(""),
     [seed, setSeed] = useState(2026092901);
@@ -319,12 +339,52 @@ function Workspace() {
       (e) => setError(String(e)),
     );
   }
+  // The model and release the platform actually served, read once the session is ready.
+  const served =
+    status === "ready"
+      ? (() => {
+          const m = reactor?.getSessionInfo?.()?.model;
+          return m?.name ? `${m.name}${m.version ? ` ${m.version}` : ""}` : "";
+        })()
+      : "";
   const active = status === "ready" && world?.started && !world.paused;
+  // Where the draft comes from:
+  //   "server"  the server runs the game (source `game`), steered with set_keys;
+  //   "browser" the same game runs in this page, and its canvas is sent on source_video;
+  //   "video"   a video file or the webcam is sent on source_video.
+  // Both sending modes are source `client` on the server, which then plays its output
+  // at the rate the frames arrive.
+  const [mode, setMode] = useState("server"),
+    [sendFps, setSendFps] = useState(SEND_RATES[0]),
+    [clipName, setClipName] = useState(""),
+    [localGame, setLocalGame] = useState(null),
+    [localHud, setLocalHud] = useState(null),
+    [published, setPublished] = useState(false),
+    [sentFps, setSentFps] = useState(null);
+  const local = useRef(null),
+    gameFrame = useRef(null),
+    sourceSynced = useRef(false),
+    statusNow = useRef(status);
+  statusNow.current = status;
+  if (!local.current) local.current = createLocalSource();
+  const sends = mode !== "server";
+  const wantSource = sends ? "client" : "game";
+  const sending = mode === "browser" ? !!localGame : mode === "video" && !!clipName;
+  // Keys steer the server's game, or the game running in this page.
+  const playing = active && mode === "server";
+  const localPlaying = active && mode === "browser" && !!localGame;
   // The game reached an outcome: the server stops generating, so the last frame
   // stays on screen. An end screen says so until a new world starts.
   const over = !!(world?.started && world.ended);
   const won = world?.game_state === "WON";
-  const canStart = !!world?.game && !!prompt.trim() && !busy && !active;
+  // Start with source client needs a reference (a card's cover or an upload) and frames.
+  const canStart =
+    !!prompt.trim() &&
+    !busy &&
+    !active &&
+    (sends
+      ? world?.source === "client" && !!world?.image_name && published
+      : world?.source !== "client" && !!world?.game);
   // A game picked before connecting is held here and loaded once the session is ready.
   const [pendingGame, setPendingGame] = useState("");
   // The user's own reference image. Uploading needs a session, so one chosen
@@ -382,6 +442,7 @@ function Workspace() {
     if (status !== "ready") {
       setShownFps(null);
       setRates(null);
+      setSentFps(null);
       return;
     }
     let stopped = false,
@@ -422,8 +483,19 @@ function Workspace() {
       if (!pc) return;
       const report = await pc.getStats();
       const t = performance.now();
-      let worst = null;
+      let worst = null,
+        sent = null;
       report.forEach((s) => {
+        // What the page sends on source_video: frames encoded and sent per second.
+        if (s.type === "outbound-rtp" && s.kind === "video") {
+          const h = history.get(s.id) || [];
+          h.push({ t, sent: s.framesSent ?? 0 });
+          while (h.length > 5) h.shift();
+          history.set(s.id, h);
+          if (h.length > 1)
+            sent = Math.round((h[h.length - 1].sent - h[0].sent) / ((t - h[0].t) / 1000));
+          return;
+        }
         if (s.type !== "inbound-rtp" || s.kind !== "video") return;
         const h = history.get(s.id) || [];
         h.push({
@@ -450,6 +522,7 @@ function Workspace() {
         if (!worst || rates.decoded < worst.decoded) worst = rates;
       });
       if (worst) setRates(worst);
+      setSentFps(sent);
     };
     return () => {
       stopped = true;
@@ -470,9 +543,9 @@ function Workspace() {
     return () => document.removeEventListener("pointerlockchange", onChange);
   }, []);
   useEffect(() => {
-    if (!active && document.pointerLockElement === stageRef.current)
+    if (!playing && document.pointerLockElement === stageRef.current)
       document.exitPointerLock();
-  }, [active]);
+  }, [playing]);
   useEffect(() => {
     if (!lookOn) return;
     const state = look.current;
@@ -536,8 +609,20 @@ function Workspace() {
     };
   }, [lookOn]);
   useEffect(() => {
+    if (status !== "ready") sourceSynced.current = false;
+    if (status !== "ready" || busy) return;
+    // On connect, the server's source follows the page's, before any game is loaded
+    // (with source game, select_game would launch a browser the client source never uses).
+    if (sends && !world) return;
+    if (world && !sourceSynced.current) {
+      sourceSynced.current = true;
+      if (world.source !== wantSource) {
+        perform("Switching source…", () => request("set_source", { source: wantSource }));
+        return;
+      }
+    }
     // Waits for the Connect command to release the lock, or loadGame would be dropped.
-    if (status === "ready" && !busy && pendingGame && !world?.game)
+    if (pendingGame && !world?.game)
       perform("Loading game…", async () => {
         const data = await request("select_game", { game: pendingGame });
         // Keep a prompt edited before connecting; Start sends it.
@@ -556,7 +641,88 @@ function Workspace() {
           }
         }
       });
-  }, [status, busy, pendingGame, world?.game]);
+  }, [status, busy, pendingGame, world?.game, !!world, wantSource]);
+  // The page's frames go out on source_video while connected in a sending mode.
+  useEffect(() => {
+    if (status !== "ready" || !sending) return;
+    let live = true;
+    publish("source_video", local.current.track)
+      .then(() => {
+        if (!live) return;
+        setPublished(true);
+        // Without a ceiling, Chromium caps a sender above 960x540 at 2.5 Mbps.
+        return reactor.setTrackBitrate("source_video", { maxBps: 8_000_000 });
+      })
+      .catch((e) => live && setError(`Sending your video failed: ${e.message || e}`));
+    return () => {
+      live = false;
+      setPublished(false);
+      if (statusNow.current === "ready") void unpublish("source_video");
+    };
+  }, [status, sending]);
+  useEffect(() => local.current.setRate(sendFps), [sendFps]);
+  // "browser" mode: the selected game runs in the draft pane, and its canvas is sent.
+  useEffect(() => {
+    if (mode !== "browser" || !shownGame) return;
+    let live = true;
+    mountLocalGame(gameFrame.current, shownGame)
+      .then((game) => {
+        if (!live) return;
+        setLocalGame(game);
+        return local.current.use({ kind: "canvas", canvas: game.canvas });
+      })
+      .catch((e) => live && setError(String(e.message || e)));
+    return () => {
+      live = false;
+      local.current.stop();
+      setLocalGame(null);
+      setLocalHud(null);
+    };
+  }, [mode, shownGame]);
+  // The game in this page runs only while a world plays, and its own state stands in for
+  // the server's game status.
+  useEffect(() => {
+    if (!localGame) return;
+    localGame.setPaused(!active);
+    if (!active) localGame.release();
+    const read = () => setLocalHud(localGame.read());
+    read();
+    const timer = setInterval(read, 500);
+    return () => clearInterval(timer);
+  }, [localGame, active]);
+  // Each new world starts the game in this page from its opening, as the server's would.
+  useEffect(() => {
+    if (localGame && world?.started) localGame.reset();
+  }, [localGame, world?.world_id]);
+  // The keys drive the game in this page; nothing goes to the server.
+  useEffect(() => {
+    if (!localPlaying) return;
+    const usable = gameKeys[shownGame] || [];
+    const onKey = (down) => (e) => {
+      if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey)
+        return;
+      const key = e.key.toLowerCase();
+      if (!usable.includes(key)) return;
+      e.preventDefault();
+      if (!e.repeat) localEdge(key, down);
+    };
+    const onDown = onKey(true),
+      onUp = onKey(false);
+    const release = () => {
+      localGame.release();
+      held.current.clear();
+      setPressed([]);
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", release);
+      release();
+    };
+  }, [localPlaying, shownGame]);
   useEffect(() => {
     if (status !== "ready") {
       // Keep the last game picked, so reconnecting loads it again.
@@ -572,6 +738,30 @@ function Workspace() {
     if (!answer) throw Error("Command refused. See the server's reason below.");
     setWorld(answer.data);
     return answer.data;
+  }
+  // Switching source is valid at any time, in or out of a world; a world keeps its history.
+  function chooseMode(next) {
+    if (next === mode || busy) return;
+    setMode(next);
+    local.current.stop();
+    setClipName("");
+    if (status === "ready") {
+      const source = next === "server" ? "game" : "client";
+      if (world?.source !== source)
+        perform("Switching source…", () => request("set_source", { source }));
+    }
+  }
+  function chooseClip(input, name) {
+    local.current.use(input).then(
+      () => setClipName(name),
+      (e) => setError(String(e.message || e)),
+    );
+  }
+  function localEdge(key, down) {
+    if (!localPlaying || held.current.has(key) === down) return;
+    down ? held.current.add(key) : held.current.delete(key);
+    setPressed([...held.current]);
+    localGame.key(key, down);
   }
   async function sendReference(file) {
     const handle = await upload(file);
@@ -673,7 +863,7 @@ function Workspace() {
     try {
       await fn();
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof ConnectionError ? e.message : String(e));
     } finally {
       setBusy("");
       commandLock.current = false;
@@ -685,15 +875,17 @@ function Workspace() {
     controller.current.set(next);
   }
   function edge(key, down) {
-    if (!active || held.current.has(key) === down) return;
+    if (!playing || held.current.has(key) === down) return;
     const next = new Set(held.current);
     down ? next.add(key) : next.delete(key);
     controls(next);
   }
   useEffect(() => {
-    if (!active) {
-      held.current.clear();
-      setPressed([]);
+    if (!playing) {
+      if (mode === "server") {
+        held.current.clear();
+        setPressed([]);
+      }
       void controller.current.stop();
       return;
     }
@@ -736,14 +928,14 @@ function Workspace() {
       document.removeEventListener("visibilitychange", hidden);
       void controller.current.stop();
     };
-  }, [active, world?.game]);
+  }, [playing, world?.game]);
   // The selected game's setup: its reference as the model sees it, prompt and seed.
   const uploadLocked = active || !!busy;
   const fromCover = !localRef;
   function setup() {
     return (
       <div className="setup" key="setup" role="region" aria-label={`${selected[1]} setup`}>
-        <p className="setup-blurb">{selected[2]}</p>
+        {mode !== "video" && <p className="setup-blurb">{selected[2]}</p>}
         <div className="field-head">
           <span>Reference</span>
           <span className="ref-source">
@@ -817,10 +1009,13 @@ function Workspace() {
           <span>on Reactor</span>
         </div>
         <div className="connection">
-          <span className={status === "ready" ? "status live" : "status"}>
+          <ConnectionPanel conn={conn} locked={status !== "disconnected" || !!busy} />
+          <span className={status === "ready" ? "status live" : "status"} aria-live="polite">
             {status}
+            {status === "ready" && served ? ` · ${served}` : ""}
           </span>
           <button
+            className="connect"
             disabled={!!busy || !["ready", "disconnected"].includes(status)}
             onClick={() =>
               perform(
@@ -834,7 +1029,8 @@ function Workspace() {
                     // command here can accidentally reopen an already-closing session.
                     await disconnect();
                     setWorld(null);
-                  } else await connect();
+                    conn.onDisconnected();
+                  } else if (await conn.onConnect()) await connect();
                 },
               )
             }
@@ -845,6 +1041,76 @@ function Workspace() {
       </header>
       <main>
         <aside>
+          <div className="source-switch" role="radiogroup" aria-label="Draft source">
+            {[
+              ["server", "Game on server"],
+              ["browser", "Game in your browser"],
+              ["video", "Your video"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                role="radio"
+                aria-checked={mode === id}
+                className={mode === id ? "on" : ""}
+                disabled={!!busy}
+                onClick={() => chooseMode(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {sends && (
+            <div className="send-panel">
+              {mode === "video" && (
+                <>
+                  <label className={busy ? "file-button disabled" : "file-button"}>
+                    Video file…
+                    <input
+                      aria-label="Video file"
+                      type="file"
+                      accept="video/*"
+                      disabled={!!busy}
+                      onChange={(e) => {
+                        const file = e.target.files[0];
+                        if (file) chooseClip({ kind: "file", file }, file.name);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    className="small"
+                    disabled={!!busy}
+                    onClick={() => chooseClip({ kind: "webcam" }, "Webcam")}
+                  >
+                    Webcam
+                  </button>
+                </>
+              )}
+              <label className="send-rate">
+                Send
+                <select
+                  aria-label="Send rate"
+                  value={sendFps}
+                  onChange={(e) => setSendFps(Number(e.target.value))}
+                >
+                  {SEND_RATES.map((r) => (
+                    <option key={r} value={r}>
+                      {r} fps
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <span className="send-what">
+                {mode === "video"
+                  ? clipName || "No video chosen"
+                  : localGame
+                    ? `${selected?.[1] || ""} in this page`
+                    : shownGame
+                      ? "Loading the game…"
+                      : "Choose a game"}
+              </span>
+            </div>
+          )}
           <div className="actions">
             <button
               className="primary"
@@ -877,7 +1143,13 @@ function Workspace() {
           </div>
           <p className="progress" role="status">
             {busy ||
-              (world?.ended
+              (sends && !active && (!shownGame || !sending)
+                ? mode === "video"
+                  ? `Choose ${shownGame ? "" : "a look below and "}a video file or the webcam, connect, then Start world.`
+                  : "Choose a game below; it runs in this page and is sent as the draft."
+                : sends && status === "ready" && !active && !published
+                  ? "Publishing your frames…"
+                  : world?.ended
                 ? "Game ended. Start a new world or Reset."
                 : active
                   ? "Generating paired chunks…"
@@ -893,11 +1165,13 @@ function Workspace() {
           </p>
           {(error || lastError) && (
             <div className="error" role="alert">
-              {error || String(lastError)}
+              {error || describeError(lastError, conn.live || conn.settings)}
               <button onClick={() => setError("")}>Dismiss</button>
             </div>
           )}
-          <span className="eyebrow">01 / CHOOSE YOUR WORLD</span>
+          <span className="eyebrow">
+            {mode === "video" ? "01 / CHOOSE A LOOK" : "01 / CHOOSE YOUR WORLD"}
+          </span>
           <div className="games" role="list" aria-label="Official games">
             {games.flatMap((g, i) => {
               const isSelected = g[0] === shownGame;
@@ -931,6 +1205,7 @@ function Workspace() {
               <h2>Play the same moment.</h2>
             </div>
             <span className="tag" title="Generated track, frames per second over the last 2 s">
+              {sends ? `sending ${sentFps ?? "—"} fps (set ${sendFps}) · ` : ""}
               {rates
                 ? `received ${rates.received} · decoded ${rates.decoded} · dropped ${rates.dropped} · `
                 : ""}
@@ -939,7 +1214,9 @@ function Workspace() {
             </span>
           </div>
           <div className="view-labels">
-            <span>Native draft</span>
+            <span>
+              {mode === "video" ? "Your video" : mode === "browser" ? "Game in your browser" : "Native draft"}
+            </span>
             <span>EdenLive render</span>
           </div>
           <div
@@ -947,9 +1224,9 @@ function Workspace() {
               .filter(Boolean)
               .join(" ")}
             ref={stageRef}
-            title={active ? "Click for mouse look · Esc releases" : undefined}
+            title={playing ? "Click for mouse look · Esc releases" : undefined}
             onClick={() => {
-              if (active && document.pointerLockElement !== stageRef.current)
+              if (playing && document.pointerLockElement !== stageRef.current)
                 Promise.resolve(stageRef.current.requestPointerLock()).catch(
                   (e) => setError(`Mouse look unavailable: ${e}`),
                 );
@@ -959,12 +1236,24 @@ function Workspace() {
           >
             <div style={{ display: "flex", position: "absolute", inset: 0 }}>
               <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
-                <ReactorView
-                  track="draft_video"
-                  muted
-                  videoObjectFit="contain"
-                  className="video"
-                />
+                <div className="pane" hidden={sends}>
+                  <ReactorView
+                    track="draft_video"
+                    muted
+                    videoObjectFit="contain"
+                    className="video"
+                  />
+                </div>
+                {/* What this page sends: the game itself, or the frames as sent. */}
+                {mode === "browser" && (
+                  <iframe ref={gameFrame} className="pane local-game" title="Game in your browser" />
+                )}
+                {mode === "video" && (
+                  <div
+                    className="pane local-preview"
+                    ref={(el) => el && el.firstChild !== local.current.canvas && el.append(local.current.canvas)}
+                  />
+                )}
               </div>
               <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
                 <ReactorView
@@ -976,14 +1265,16 @@ function Workspace() {
               </div>
             </div>
             {!world?.chunks && (
-              <div className="placeholder">
+              <div className={sends ? "placeholder half" : "placeholder"}>
                 <span className="eyebrow">
                   {active ? "PREPARING FIRST FRAMES" : "READY WHEN YOU ARE"}
                 </span>
                 <h2>
                   {active
                     ? "Rendering your world…"
-                    : "Choose a world. Press Start."}
+                    : mode === "video"
+                      ? "Choose a look and a video. Press Start."
+                      : "Choose a world. Press Start."}
                 </h2>
                 <p>Each finished chunk reveals both views together.</p>
               </div>
@@ -1027,11 +1318,33 @@ function Workspace() {
               <span className="look-badge">Mouse look on · Esc releases</span>
             )}
           </div>
-          <GameStatus world={world} active={active} stalledFor={
+          {mode !== "video" && (
+          <GameStatus
+            world={
+              mode === "browser"
+                ? localHud && {
+                    started: true,
+                    game_state: localHud.state,
+                    outcome: localHud.outcome,
+                    health: localHud.health,
+                    health_max: localHud.healthMax,
+                    paused: !active,
+                    ended: localHud.state !== "RUNNING",
+                  }
+                : world
+            }
+            active={active}
+            stalledFor={
             active && lastVideoAt != null && now - lastVideoAt > STALL_AFTER_MS
               ? Math.floor((now - lastVideoAt) / 1000)
               : null
           } />
+          )}
+          {mode === "browser" && localHud && localHud.state !== "RUNNING" && (
+            <button className="small" onClick={() => localGame?.reset()}>
+              Restart the game in your browser
+            </button>
+          )}
           <div className="metrics">
             <span>
               World {world?.world_id || "—"} · {world?.chunks || 0} chunks
@@ -1042,6 +1355,8 @@ function Workspace() {
                 : `${world.seconds.toFixed(2)} s / model chunk`}
             </span>
           </div>
+          {mode !== "video" && (
+          <>
           <div className="control-heading">
             <span className="eyebrow">03 / TAKE CONTROL</span>
             <span>
@@ -1052,21 +1367,33 @@ function Workspace() {
           </div>
           <ControlMap
             game={shownGame}
-            active={active}
+            active={mode === "browser" ? localPlaying : playing}
             pressed={pressed}
             mouseHeld={mouseHeld}
             lookOn={lookOn}
-            onEdge={edge}
+            onEdge={mode === "browser" ? localEdge : edge}
+            noMouse={mode === "browser"}
           />
           <p className="hint controls-hint">
-            {shownGame && shownGame !== "arcadeduel"
+            {mode === "browser"
+              ? "Keys play the game in this page (no mouse); the server never sees them. "
+              : "Hold an action until it is sampled (every 33 ms); taps are not replayed. "}
+            {mode === "server" && shownGame && shownGame !== "arcadeduel"
               ? lookOn
                 ? "Mouse look on · Esc releases. "
                 : "Click the video for mouse look. "
               : ""}
-            Hold an action until it is sampled (every 33 ms); taps are not replayed.
             Pause to change the game or image.
           </p>
+          </>
+          )}
+          {mode === "video" && (
+            <p className="hint controls-hint">
+              Your video is sent at the chosen rate, and the generated video plays at that rate.
+              Keep this tab visible: browsers slow timers in background tabs.
+            </p>
+          )}
+          {mode === "server" && (
           <div className="event-feed" aria-label="Game events">
             <span className="eyebrow">GAME EVENTS</span>
             <ol ref={feedEnd}>
@@ -1078,8 +1405,9 @@ function Workspace() {
               {!feed.length && (
                 <li className="empty">Events from the game appear here as chunks arrive.</li>
               )}
-                          </ol>
+            </ol>
           </div>
+          )}
           <footer>
             <span>Original code games + EdenLive 5B</span>
             <span>Local research preview</span>
@@ -1090,18 +1418,156 @@ function Workspace() {
   );
 }
 
-createRoot(document.querySelector("#root")).render(
-  <ReactorProvider
-    modelName="eden-live"
-    local
-    apiUrl={import.meta.env.VITE_REACTOR_URL || "http://localhost:8080"}
-    modelTracks={[
-      { name: "source_video", kind: "video", direction: "sendonly" },
-      { name: "main_video", kind: "video", direction: "recvonly" },
-      { name: "draft_video", kind: "video", direction: "recvonly" },
-    ]}
-    connectOptions={{ autoConnect: false }}
-  >
-    <Workspace />
-  </ReactorProvider>,
-);
+/** Where to connect: DEV / PROD with the visitor's API key, or a model server URL. */
+function ConnectionPanel({ conn, locked }) {
+  const { settings, update, apiKey, setApiKey, remember, setRemember } = conn;
+  const platform = settings.target !== "local";
+  return (
+    <fieldset className="endpoint" disabled={locked} aria-label="Connection">
+      <div className="target-switch" role="radiogroup" aria-label="Platform">
+        {Object.entries(TARGETS).map(([id, t]) => (
+          <button
+            key={id}
+            role="radio"
+            aria-checked={settings.target === id}
+            className={settings.target === id ? "on" : ""}
+            onClick={() => update({ target: id })}
+            title={t.url ? `Reactor ${t.label} (${t.url.replace("https://", "")})` : "A model server you run (direct, no API key)"}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {platform ? (
+        <>
+          <input
+            className="api-key"
+            type="password"
+            aria-label={`${TARGETS[settings.target].label} API key`}
+            placeholder={`${TARGETS[settings.target].label} API key (rk_…)`}
+            autoComplete="off"
+            spellCheck={false}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <label className="remember" title="Off: the key is forgotten when this tab closes.">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            Remember on this device
+          </label>
+        </>
+      ) : (
+        <input
+          className="server-url"
+          type="url"
+          aria-label="Model server URL"
+          placeholder="http://localhost:8080"
+          spellCheck={false}
+          value={settings.localUrl}
+          onChange={(e) => update({ localUrl: e.target.value })}
+        />
+      )}
+      <input
+        className="model-name"
+        aria-label="Model"
+        title="Model name. The platform serves its deployed release of it."
+        list="model-names"
+        spellCheck={false}
+        value={settings.model}
+        onChange={(e) => update({ model: e.target.value })}
+      />
+      <datalist id="model-names">
+        <option value={DEFAULT_MODEL} />
+      </datalist>
+    </fieldset>
+  );
+}
+
+const MODEL_TRACKS = [
+  { name: "source_video", kind: "video", direction: "sendonly" },
+  { name: "main_video", kind: "video", direction: "recvonly" },
+  { name: "draft_video", kind: "video", direction: "recvonly" },
+];
+const LOCAL_DEFAULT = import.meta.env.VITE_REACTOR_URL || "http://localhost:8080";
+const IDLE_CONNECT = { autoConnect: false },
+  AUTO_CONNECT = { autoConnect: true };
+
+function App() {
+  const [settings, setSettings] = useState(() =>
+    loadSettings({ target: import.meta.env.VITE_REACTOR_URL ? "local" : "dev", localUrl: LOCAL_DEFAULT }),
+  );
+  const [{ key: apiKey, remember }, setStored] = useState(() => loadKey(settings.target));
+  // The connection in use: set on Connect, cleared on Disconnect. The provider is rebuilt from
+  // it and connects on its own, so endpoint, auth and model always change together.
+  const [live, setLive] = useState(null);
+  const sessionId = useRef(() => undefined);
+
+  const update = useCallback((patch) => {
+    if (patch.target) setStored(loadKey(patch.target));
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
+  const conn = {
+    settings,
+    live,
+    update,
+    apiKey,
+    remember,
+    setApiKey: (key) => {
+      saveKey(settings.target, key, remember);
+      setStored({ key, remember });
+    },
+    setRemember: (on) => {
+      saveKey(settings.target, apiKey, on);
+      setStored({ key: apiKey, remember: on });
+    },
+    onDisconnected: () => setLive(null),
+    /** Resolves true when the provider already holds this connection and must be told to connect. */
+    async onConnect() {
+      const model = settings.model.trim() || DEFAULT_MODEL;
+      const target = settings.target;
+      if (target === "local") {
+        const apiUrl = checkLocalUrl(settings.localUrl);
+        if (live?.local && live.apiUrl === apiUrl && live.model === model) return true;
+        setLive({ target, model, apiUrl, local: true, jwt: undefined });
+        return false;
+      }
+      const key = apiKey.trim();
+      const first = await mintToken({ target, apiKey: key, model });
+      const jwt = tokenResolver(first, {
+        target,
+        apiKey: key,
+        model,
+        sessionId: () => sessionId.current(),
+      });
+      setLive({ target, model, apiUrl: TARGETS[target].url, local: false, jwt });
+      return false;
+    },
+  };
+  return (
+    <ReactorProvider
+      modelName={live?.model || DEFAULT_MODEL}
+      local={live ? live.local : true}
+      apiUrl={live ? live.apiUrl : LOCAL_DEFAULT}
+      jwtToken={live?.jwt}
+      modelTracks={MODEL_TRACKS}
+      connectOptions={live ? AUTO_CONNECT : IDLE_CONNECT}
+    >
+      <SessionIdBridge target={sessionId} />
+      <Workspace conn={conn} />
+    </ReactorProvider>
+  );
+}
+
+/** Lets the token refresher read the running session's id without re-rendering App. */
+function SessionIdBridge({ target }) {
+  const id = useReactor((s) => s.sessionId);
+  const now = useRef(id);
+  now.current = id;
+  target.current = () => now.current;
+  return null;
+}
+
+createRoot(document.querySelector("#root")).render(<App />);
