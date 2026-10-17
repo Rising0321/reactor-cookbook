@@ -835,20 +835,6 @@ label.seed input {
   margin: 0 0 4px;
   color: var(--muted);
 }
-.end-actions {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin: 14px 0 8px;
-}
-.end-actions .primary {
-  width: auto;
-  margin: 0;
-}
-.end-card small {
-  font-size: 10px;
-  color: var(--muted);
-}
 /* Draft source: the server's game, the same game in this page, or the player's video. */
 .source-switch {
   display: flex;

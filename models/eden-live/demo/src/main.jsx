@@ -892,20 +892,9 @@ function Workspace({ conn }) {
       await request("start", { seed });
     });
   }
-  // The end screen: pointer lock off, Enter starts a new world.
-  const startRef = useRef(startWorld);
-  startRef.current = canStart ? startWorld : null;
+  // The end screen releases pointer lock; a new world starts from the action bar.
   useEffect(() => {
-    if (!over) return;
-    if (document.pointerLockElement) document.exitPointerLock();
-    const onKey = (e) => {
-      if (e.key !== "Enter" || e.repeat || /INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName))
-        return;
-      e.preventDefault();
-      startRef.current?.();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    if (over && document.pointerLockElement) document.exitPointerLock();
   }, [over]);
   // Reset: the selected game's original cover and prompt, and no world.
   function reset() {
@@ -1328,28 +1317,6 @@ function Workspace({ conn }) {
                       {line}
                     </p>
                   ))}
-                  <div className="end-actions">
-                    <button
-                      className="primary"
-                      disabled={!canStart}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startWorld();
-                      }}
-                    >
-                      Start new world
-                    </button>
-                    <button
-                      disabled={!!busy}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        reset();
-                      }}
-                    >
-                      Reset
-                    </button>
-                  </div>
-                  <small>Enter · Start new world (seed {seed})</small>
                 </div>
               </div>
             )}
