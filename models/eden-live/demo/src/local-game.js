@@ -6,9 +6,9 @@
 // same-origin iframe because its modules import "three" and "/host/..." by bare or root
 // path, which only an import map in the game's own document can resolve. The page reads
 // the game's canvas (rendered with preserveDrawingBuffer, so it can be copied at any time)
-// and forwards the player's keys into the game's window. Every key that window receives,
-// typed into the game or forwarded by the page, is reported back, so the page's control
-// panel shows exactly what the game sees.
+// and forwards the player's keys and mouse-look rate into the game's window. Every key that
+// window receives, typed into the game or forwarded by the page, is reported back, so the
+// page's control panel shows exactly what the game sees.
 
 // Resolved against the page, so the build works from any static host or sub-path; absolute,
 // because the game's own document is an about:srcdoc iframe.
@@ -48,10 +48,32 @@ window.press = (code, down) => {
 window.releaseAll = () => {
   for (const code of [...held]) dispatchEvent(new KeyboardEvent("keyup", {code}));
 };
+// Mouse look: a held [yaw, pitch] rate, each -1..1, applied on every game step on top of
+// the arrow keys, as the server applies set_look. A rate of 1 is LOOK_MAX radians per step,
+// the largest per-step turn the games accept; each game clamps again to its own limit.
+const LOOK_MAX = 0.2;
+let lookRate = [0, 0];
+const aim = (keys, rate) =>
+  rate ? Math.max(-LOOK_MAX, Math.min(LOOK_MAX, (keys || 0) + rate * LOOK_MAX)) : keys;
 window.ready = (async () => {
   const {createInput} = await import("${LOCAL_GAMES}/host/input.js");
   const input = createInput();
   input.attach();
+  window.setLook = (yaw, pitch) => {
+    lookRate = [Number(yaw) || 0, Number(pitch) || 0];
+    input.setLook?.(...lookRate);
+  };
+  // A host whose input holds a look rate applies it itself. Otherwise the rate is added to
+  // the controls each step hands the game (the module main.js imports, so the same class).
+  if (!input.setLook) {
+    const {Game} = await import("${LOCAL_GAMES}/${slug}/adapter.js");
+    const step = Game.prototype.step;
+    Game.prototype.step = function (controls = {}) {
+      const [yaw, pitch] = lookRate;
+      if (!yaw && !pitch) return step.call(this, controls);
+      return step.call(this, {...controls, lookX: aim(controls.lookX, yaw), lookY: aim(controls.lookY, pitch)});
+    };
+  }
   addEventListener("blur", () => {
     releaseAll();
     input.clear();
@@ -59,6 +81,8 @@ window.ready = (async () => {
   const {createRuntime} = await import("${LOCAL_GAMES}/${slug}/main.js");
   const runtime = await createRuntime({input, mode: "play", restart: () => runtime.reset()});
   runtime.reset();
+  // A fresh game waits at its opening frame until the page starts it.
+  runtime.handleUiAction("pause");
   // The model's own frame size, whatever the size of the pane showing it.
   runtime.layout(1280, 704);
   let last = performance.now();
@@ -118,16 +142,27 @@ export function mountLocalGame(iframe, slug, onKeys = () => {}) {
           canvas: runtime.canvas,
           /** Press or release one of the demo's keys (w, a, " ", shift, arrowup, ...). */
           key: (name, down) => win.press(codeOf(name), down),
+          /** Hold a mouse-look rate, [yaw, pitch] each -1..1; [0, 0] is none. */
+          look: (yaw, pitch) => win.setLook(yaw, pitch),
+          /** Release held keys and the look rate. */
           release() {
             win.releaseAll();
             input.clear();
+            win.setLook(0, 0);
           },
           /** Game state as the game's HUD sees it: state, health, outcome, paused. */
           read: () => runtime.read(),
           setPaused(paused) {
             if (runtime.read().paused !== paused) runtime.handleUiAction("pause");
           },
-          reset: () => runtime.reset(),
+          /** Back to the opening frame, as freshly loaded; the pause state is kept. */
+          reset() {
+            const paused = runtime.read().paused;
+            win.releaseAll();
+            win.setLook(0, 0);
+            runtime.reset();
+            if (paused) runtime.handleUiAction("pause");
+          },
           destroy() {
             runtime.destroy?.();
             iframe.srcdoc = "";

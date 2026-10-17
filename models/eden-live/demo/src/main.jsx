@@ -221,8 +221,7 @@ const ARROW_ROWS = [
 ];
 
 /** Keyboard and mouse, laid out as on a desk; held inputs light up. */
-// noMouse: the game in this page reads keys only.
-function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge, noMouse }) {
+function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge }) {
   const used = new Set(gameKeys[game] || []);
   const actions = actionsFor(game);
   const cap = ([key, col, span]) => {
@@ -258,9 +257,10 @@ function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge, noMouse 
       ))}
     </div>
   );
-  const hasMouse = !noMouse && game && game !== "arcadeduel";
+  // Arcade Duel's view does not move, so its mouse only clicks.
+  const hasMouse = game && game !== "arcadeduel";
   const button = (key, side) => {
-    const isUsed = !noMouse && used.has(key);
+    const isUsed = used.has(key);
     const lit = mouseHeld.includes(key);
     return (
       <div className={`mouse-btn ${side}${isUsed ? "" : " unused"}${lit ? " pressed" : ""}`}>
@@ -273,12 +273,12 @@ function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge, noMouse 
     <div className="control-map">
       {cluster(LEFT_ROWS, 12, "left-hand")}
       {cluster(ARROW_ROWS, 6, "arrows")}
-      <div className={hasMouse ? (lookOn ? "mouse look" : "mouse") : noMouse ? "mouse off" : "mouse unused"}>
+      <div className={hasMouse ? (lookOn ? "mouse look" : "mouse") : "mouse unused"}>
         <div className="mouse-body">
           {button("f", "left")}
           {button("e", "right")}
           <div className="mouse-palm">
-            {hasMouse ? (lookOn ? "move = look" : "click video") : noMouse ? "mouse look: game on server only" : ""}
+            {hasMouse ? (lookOn ? "move = look" : "click video") : ""}
           </div>
         </div>
       </div>
@@ -376,6 +376,7 @@ function Workspace({ conn }) {
   // Keys steer the server's game, or the game running in this page.
   const playing = active && mode === "server";
   const localPlaying = active && mode === "browser" && !!localGame;
+  const steering = playing || localPlaying;
   // The game reached an outcome: the server stops generating, so the last frame
   // stays on screen. An end screen says so until a new world starts.
   const over = !!(world?.started && world.ended);
@@ -576,9 +577,16 @@ function Workspace({ conn }) {
     return () => document.removeEventListener("pointerlockchange", onChange);
   }, []);
   useEffect(() => {
-    if (!playing && document.pointerLockElement === stageRef.current)
+    if (!steering && document.pointerLockElement === stageRef.current)
       document.exitPointerLock();
-  }, [playing]);
+  }, [steering]);
+  // Where the mouse goes: the server's game (set_look, set_keys) or the game in this page,
+  // whose F and E arrive as keys like the keyboard's, so the panel lights them the same way.
+  const lookTo = useRef(null);
+  lookTo.current =
+    mode === "browser"
+      ? { look: (yaw, pitch) => localGame?.look(yaw, pitch), edge: localEdge }
+      : { look: (yaw, pitch) => request("set_look", { yaw, pitch }), edge };
   useEffect(() => {
     if (!lookOn) return;
     const state = look.current;
@@ -588,7 +596,8 @@ function Workspace({ conn }) {
       if (signature === state.sent || state.pending) return;
       state.sent = signature;
       state.pending = true;
-      request("set_look", { yaw, pitch })
+      Promise.resolve()
+        .then(() => lookTo.current.look(yaw, pitch))
         .catch((e) => setError(String(e)))
         .finally(() => {
           state.pending = false;
@@ -619,7 +628,7 @@ function Workspace({ conn }) {
       const key = BUTTON_KEYS[e.button];
       if (!key) return;
       e.preventDefault();
-      edge(key, down);
+      lookTo.current.edge(key, down);
       setMouseHeld((m) => (down ? [...new Set([...m, key])] : m.filter((k) => k !== key)));
     };
     const onMouseDown = onButton(true),
@@ -635,7 +644,7 @@ function Workspace({ conn }) {
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("mouseup", onMouseUp);
       document.removeEventListener("contextmenu", noMenu);
-      Object.values(BUTTON_KEYS).forEach((key) => edge(key, false));
+      Object.values(BUTTON_KEYS).forEach((key) => lookTo.current.edge(key, false));
       setMouseHeld([]);
       state.pending = false;
       sendLook(0, 0);
@@ -704,16 +713,19 @@ function Workspace({ conn }) {
   // "browser" mode: the selected game runs in the draft pane, and its canvas is sent.
   useEffect(() => {
     if (mode !== "browser" || !shownGame) return;
-    let live = true;
+    let live = true,
+      mounted = null;
     mountLocalGame(gameFrame.current, shownGame, (keys) => live && setLocalKeys(keys))
       .then((game) => {
-        if (!live) return;
+        mounted = game;
+        if (!live) return game.destroy();
         setLocalGame(game);
         local.current.use(game.canvas);
       })
       .catch((e) => live && setError(String(e.message || e)));
     return () => {
       live = false;
+      mounted?.destroy();
       local.current.stop();
       setLocalGame(null);
       setLocalHud(null);
@@ -731,10 +743,13 @@ function Workspace({ conn }) {
     const timer = setInterval(read, 500);
     return () => clearInterval(timer);
   }, [localGame, active]);
-  // Each new world starts the game in this page from its opening, as the server's would.
+  // The game in this page goes back to its opening, with its status cleared, whenever the
+  // server's world starts or ends (Start, Reset, a new game or reference), as the server's would.
   useEffect(() => {
-    if (localGame && world?.started) localGame.reset();
-  }, [localGame, world?.world_id]);
+    if (!localGame) return;
+    localGame.reset();
+    setLocalHud(localGame.read());
+  }, [localGame, world?.world_id, !!world?.started]);
   // The keys drive the game in this page; nothing goes to the server.
   useEffect(() => {
     if (!localPlaying) return;
@@ -1258,9 +1273,9 @@ function Workspace({ conn }) {
               .filter(Boolean)
               .join(" ")}
             ref={stageRef}
-            title={playing ? "Click for mouse look · Esc releases" : undefined}
+            title={steering ? "Click for mouse look · Esc releases" : undefined}
             onClick={() => {
-              if (playing && document.pointerLockElement !== stageRef.current)
+              if (steering && document.pointerLockElement !== stageRef.current)
                 Promise.resolve(stageRef.current.requestPointerLock()).catch(
                   (e) => setError(`Mouse look unavailable: ${e}`),
                 );
@@ -1363,7 +1378,13 @@ function Workspace({ conn }) {
               : null
           } />
           {mode === "browser" && localHud && localHud.state !== "RUNNING" && (
-            <button className="small" onClick={() => localGame?.reset()}>
+            <button
+              className="small"
+              onClick={() => {
+                localGame?.reset();
+                if (localGame) setLocalHud(localGame.read());
+              }}
+            >
               Restart the game in your browser
             </button>
           )}
@@ -1392,13 +1413,12 @@ function Workspace({ conn }) {
             mouseHeld={mouseHeld}
             lookOn={lookOn}
             onEdge={mode === "browser" ? localEdge : edge}
-            noMouse={mode === "browser"}
           />
           <p className="hint controls-hint">
             {mode === "browser"
-              ? "Keys play the game in this page (no mouse); the server never sees them. "
+              ? "Keys and mouse play the game in this page; the server never sees them. "
               : "Hold an action until it is sampled (every 33 ms); taps are not replayed. "}
-            {mode === "server" && shownGame && shownGame !== "arcadeduel"
+            {shownGame && shownGame !== "arcadeduel"
               ? lookOn
                 ? "Mouse look on · Esc releases. "
                 : "Click the video for mouse look. "

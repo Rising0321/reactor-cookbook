@@ -693,14 +693,8 @@ label.seed input {
 }
 .cap.unused,
 .mouse-btn.unused,
-.mouse.unused,
-.mouse.off .mouse-btn {
+.mouse.unused {
   opacity: 0.32;
-}
-.mouse.off .mouse-palm {
-  padding: 0 14px;
-  text-align: center;
-  line-height: 1.3;
 }
 .cap.pressed,
 .mouse-btn.pressed {
@@ -901,9 +895,11 @@ label.seed input {
 .pane[hidden] {
   display: none;
 }
+/* A display surface: clicks reach the stage (pointer lock), keys go through the page. */
 iframe.local-game {
   border: 0;
   background: #11120f;
+  pointer-events: none;
 }
 .placeholder.half {
   left: 50%;
