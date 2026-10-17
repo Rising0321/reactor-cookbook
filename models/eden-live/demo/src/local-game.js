@@ -21,7 +21,9 @@ const gamePage = (slug) => `<!doctype html>
   },
 })}</script>
 <style>html,body,#app{margin:0;width:100%;height:100%;overflow:hidden;background:#11120f}
-canvas{display:block;width:100%;height:100%;object-fit:contain}</style>
+/* The games size their renderer with an inline 1280x704 px style; the pane shows the whole
+   frame scaled to fit, letterboxed like the generated video beside it. */
+canvas{display:block;width:100%!important;height:100%!important;object-fit:contain}</style>
 </head><body><div id="app"><canvas id="film" width="1280" height="704"></canvas></div>
 <script type="module">
 window.ready = (async () => {
