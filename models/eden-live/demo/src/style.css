@@ -879,12 +879,6 @@ iframe.local-game {
   border: 0;
   background: #11120f;
 }
-.local-preview canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
 .placeholder.half {
   left: 50%;
 }

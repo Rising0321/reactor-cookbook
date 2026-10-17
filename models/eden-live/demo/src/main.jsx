@@ -350,13 +350,12 @@ function Workspace({ conn }) {
   const active = status === "ready" && world?.started && !world.paused;
   // Where the draft comes from:
   //   "server"  the server runs the game (source `game`), steered with set_keys;
-  //   "browser" the same game runs in this page, and its canvas is sent on source_video;
-  //   "video"   a video file or the webcam is sent on source_video.
-  // Both sending modes are source `client` on the server, which then plays its output
-  // at the rate the frames arrive.
+  //   "browser" the same game runs in this page, and its canvas is sent on source_video
+  //             (the server also accepts any client video there; this page sends only the game).
+  // "browser" is source `client` on the server, which then plays its output at the rate
+  // the frames arrive.
   const [mode, setMode] = useState("server"),
     [sendFps, setSendFps] = useState(SEND_RATES[0]),
-    [clipName, setClipName] = useState(""),
     [localGame, setLocalGame] = useState(null),
     [localHud, setLocalHud] = useState(null),
     [published, setPublished] = useState(false),
@@ -369,7 +368,7 @@ function Workspace({ conn }) {
   if (!local.current) local.current = createLocalSource();
   const sends = mode !== "server";
   const wantSource = sends ? "client" : "game";
-  const sending = mode === "browser" ? !!localGame : mode === "video" && !!clipName;
+  const sending = sends && !!localGame;
   // Keys steer the server's game, or the game running in this page.
   const playing = active && mode === "server";
   const localPlaying = active && mode === "browser" && !!localGame;
@@ -397,9 +396,8 @@ function Workspace({ conn }) {
     !!world &&
     staged === `${wantSource}|${shownGame}` &&
     staged === `${world.source}|${world.game}`;
-  // The page's own frames: the game in this page loaded at its opening, or the video playing,
-  // and the track published.
-  const draftReady = !sends || (published && (mode === "browser" ? !!localGame : !!clipName));
+  // The page's own frames: the game in this page loaded at its opening, and the track published.
+  const draftReady = !sends || (published && !!localGame);
   // Start with source client needs a reference (a card's cover or an upload) and frames.
   const canStart =
     !!prompt.trim() &&
@@ -413,7 +411,7 @@ function Workspace({ conn }) {
     status === "ready" &&
     !busy &&
     !active &&
-    (sends ? (mode === "browser" ? !!shownGame : !!clipName) : !!shownGame) &&
+    !!shownGame &&
     !(serverReady && draftReady);
   const availableKeys = gameKeys[world?.game] || [];
   const [feed, setFeed] = useState([]),
@@ -680,7 +678,7 @@ function Workspace({ conn }) {
         // Without a ceiling, Chromium caps a sender above 960x540 at 2.5 Mbps.
         return reactor.setTrackBitrate("source_video", { maxBps: 8_000_000 });
       })
-      .catch((e) => live && setError(`Sending your video failed: ${e.message || e}`));
+      .catch((e) => live && setError(`Sending the game's frames failed: ${e.message || e}`));
     return () => {
       live = false;
       setPublished(false);
@@ -696,7 +694,7 @@ function Workspace({ conn }) {
       .then((game) => {
         if (!live) return;
         setLocalGame(game);
-        return local.current.use({ kind: "canvas", canvas: game.canvas });
+        local.current.use(game.canvas);
       })
       .catch((e) => live && setError(String(e.message || e)));
     return () => {
@@ -775,7 +773,6 @@ function Workspace({ conn }) {
     if (next === mode || busy) return;
     setMode(next);
     local.current.stop();
-    setClipName("");
     setFeed([]);
     setLastVideoAt(null);
     setLocalHud(null);
@@ -801,12 +798,6 @@ function Workspace({ conn }) {
         if (localRef) await sendReference(localRef);
       }
     });
-  }
-  function chooseClip(input, name) {
-    local.current.use(input).then(
-      () => setClipName(name),
-      (e) => setError(String(e.message || e)),
-    );
   }
   function localEdge(key, down) {
     if (!localPlaying || held.current.has(key) === down) return;
@@ -989,7 +980,7 @@ function Workspace({ conn }) {
   function setup() {
     return (
       <div className="setup" key="setup" role="region" aria-label={`${selected[1]} setup`}>
-        {mode !== "video" && <p className="setup-blurb">{selected[2]}</p>}
+        <p className="setup-blurb">{selected[2]}</p>
         <div className="field-head">
           <span>Reference</span>
           <span className="ref-source">
@@ -1099,7 +1090,6 @@ function Workspace({ conn }) {
             {[
               ["server", "Game on server"],
               ["browser", "Game in your browser"],
-              ["video", "Your video"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -1115,31 +1105,6 @@ function Workspace({ conn }) {
           </div>
           {sends && (
             <div className="send-panel">
-              {mode === "video" && (
-                <>
-                  <label className={busy ? "file-button disabled" : "file-button"}>
-                    Video file…
-                    <input
-                      aria-label="Video file"
-                      type="file"
-                      accept="video/*"
-                      disabled={!!busy}
-                      onChange={(e) => {
-                        const file = e.target.files[0];
-                        if (file) chooseClip({ kind: "file", file }, file.name);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <button
-                    className="small"
-                    disabled={!!busy}
-                    onClick={() => chooseClip({ kind: "webcam" }, "Webcam")}
-                  >
-                    Webcam
-                  </button>
-                </>
-              )}
               <label className="send-rate">
                 Send
                 <select
@@ -1155,13 +1120,11 @@ function Workspace({ conn }) {
                 </select>
               </label>
               <span className="send-what">
-                {mode === "video"
-                  ? clipName || "No video chosen"
-                  : localGame
-                    ? `${selected?.[1] || ""} in this page`
-                    : shownGame
-                      ? "Loading the game…"
-                      : "Choose a game"}
+                {localGame
+                  ? `${selected?.[1] || ""} in this page`
+                  : shownGame
+                    ? "Loading the game…"
+                    : "Choose a game"}
               </span>
             </div>
           )}
@@ -1198,9 +1161,7 @@ function Workspace({ conn }) {
           <p className="progress" role="status">
             {busy ||
               (sends && !active && (!shownGame || !sending)
-                ? mode === "video"
-                  ? `Choose ${shownGame ? "" : "a look below and "}a video file or the webcam, connect, then Start world.`
-                  : "Choose a game below; it runs in this page and is sent as the draft."
+                ? "Choose a game below; it runs in this page and is sent as the draft."
                 : preparing
                   ? "Preparing…"
                   : world?.ended
@@ -1223,9 +1184,7 @@ function Workspace({ conn }) {
               <button onClick={() => setError("")}>Dismiss</button>
             </div>
           )}
-          <span className="eyebrow">
-            {mode === "video" ? "01 / CHOOSE A LOOK" : "01 / CHOOSE YOUR WORLD"}
-          </span>
+          <span className="eyebrow">01 / CHOOSE YOUR WORLD</span>
           <div className="games" role="list" aria-label="Official games">
             {games.flatMap((g, i) => {
               const isSelected = g[0] === shownGame;
@@ -1269,7 +1228,7 @@ function Workspace({ conn }) {
           </div>
           <div className="view-labels">
             <span>
-              {mode === "video" ? "Your video" : mode === "browser" ? "Game in your browser" : "Native draft"}
+              {mode === "browser" ? "Game in your browser" : "Native draft"}
             </span>
             <span>EdenLive render</span>
           </div>
@@ -1298,15 +1257,9 @@ function Workspace({ conn }) {
                     className="video"
                   />
                 </div>
-                {/* What this page sends: the game itself, or the frames as sent. */}
+                {/* What this page sends: the game itself. */}
                 {mode === "browser" && (
                   <iframe ref={gameFrame} className="pane local-game" title="Game in your browser" />
-                )}
-                {mode === "video" && (
-                  <div
-                    className="pane local-preview"
-                    ref={(el) => el && el.firstChild !== local.current.canvas && el.append(local.current.canvas)}
-                  />
                 )}
               </div>
               <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
@@ -1324,11 +1277,7 @@ function Workspace({ conn }) {
                   {active ? "PREPARING FIRST FRAMES" : "READY WHEN YOU ARE"}
                 </span>
                 <h2>
-                  {active
-                    ? "Rendering your world…"
-                    : mode === "video"
-                      ? "Choose a look and a video. Press Start."
-                      : "Choose a world. Press Start."}
+                  {active ? "Rendering your world…" : "Choose a world. Press Start."}
                 </h2>
                 <p>Each finished chunk reveals both views together.</p>
               </div>
@@ -1372,7 +1321,6 @@ function Workspace({ conn }) {
               <span className="look-badge">Mouse look on · Esc releases</span>
             )}
           </div>
-          {mode !== "video" && (
           <GameStatus
             world={
               mode === "browser"
@@ -1393,7 +1341,6 @@ function Workspace({ conn }) {
               ? Math.floor((now - lastVideoAt) / 1000)
               : null
           } />
-          )}
           {mode === "browser" && localHud && localHud.state !== "RUNNING" && (
             <button className="small" onClick={() => localGame?.reset()}>
               Restart the game in your browser
@@ -1409,8 +1356,6 @@ function Workspace({ conn }) {
                 : `${world.seconds.toFixed(2)} s / model chunk`}
             </span>
           </div>
-          {mode !== "video" && (
-          <>
           <div className="control-heading">
             <span className="eyebrow">03 / TAKE CONTROL</span>
             <span>
@@ -1438,15 +1383,8 @@ function Workspace({ conn }) {
                 : "Click the video for mouse look. "
               : ""}
             Pause to change the game or image.
+            {mode === "browser" ? " Keep this tab visible: browsers slow timers in background tabs." : ""}
           </p>
-          </>
-          )}
-          {mode === "video" && (
-            <p className="hint controls-hint">
-              Your video is sent at the chosen rate, and the generated video plays at that rate.
-              Keep this tab visible: browsers slow timers in background tabs.
-            </p>
-          )}
           {mode === "server" && (
           <div className="event-feed" aria-label="Game events">
             <span className="eyebrow">GAME EVENTS</span>

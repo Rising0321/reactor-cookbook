@@ -26,7 +26,7 @@ Import the repository and set **Root Directory** to `demo`. `vercel.json` sets t
 
 `public/local-games/` is gitignored, so a git deploy has no games for the **Game in your
 browser** source; that source then reports that the game did not load, while **Game on
-server** and **Your video** still work. To include the games, delete the
+server** still works. To include the games, delete the
 `demo/public/local-games/` line from the repository's `.gitignore` and commit the directory
 (about 18 MB).
 
