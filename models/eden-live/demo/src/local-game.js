@@ -6,7 +6,9 @@
 // same-origin iframe because its modules import "three" and "/host/..." by bare or root
 // path, which only an import map in the game's own document can resolve. The page reads
 // the game's canvas (rendered with preserveDrawingBuffer, so it can be copied at any time)
-// and forwards the player's keys into the game's own input object.
+// and forwards the player's keys into the game's window. Every key that window receives,
+// typed into the game or forwarded by the page, is reported back, so the page's control
+// panel shows exactly what the game sees.
 
 // Resolved against the page, so the build works from any static host or sub-path; absolute,
 // because the game's own document is an about:srcdoc iframe.
@@ -26,11 +28,34 @@ const gamePage = (slug) => `<!doctype html>
 canvas{display:block;width:100%!important;height:100%!important;object-fit:contain}</style>
 </head><body><div id="app"><canvas id="film" width="1280" height="704"></canvas></div>
 <script type="module">
+// Codes held in this window, from real keys or the page's forwarded ones.
+const held = new Set();
+let report = () => {};
+window.onGameKey = (fn) => {
+  report = fn;
+  for (const code of held) fn(code, true);
+};
+const track = (down) => (e) => {
+  if (held.has(e.code) === down) return;
+  down ? held.add(e.code) : held.delete(e.code);
+  report(e.code, down);
+};
+addEventListener("keydown", track(true), true);
+addEventListener("keyup", track(false), true);
+window.press = (code, down) => {
+  if (held.has(code) !== down) dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", {code}));
+};
+window.releaseAll = () => {
+  for (const code of [...held]) dispatchEvent(new KeyboardEvent("keyup", {code}));
+};
 window.ready = (async () => {
   const {createInput} = await import("${LOCAL_GAMES}/host/input.js");
   const input = createInput();
   input.attach();
-  addEventListener("blur", () => input.clear());
+  addEventListener("blur", () => {
+    releaseAll();
+    input.clear();
+  });
   const {createRuntime} = await import("${LOCAL_GAMES}/${slug}/main.js");
   const runtime = await createRuntime({input, mode: "play", restart: () => runtime.reset()});
   runtime.reset();
@@ -59,9 +84,23 @@ const CODES = {
   arrowright: "ArrowRight",
 };
 const codeOf = (key) => CODES[key] || `Key${key.toUpperCase()}`;
+// KeyboardEvent.code -> the demo's key name, or "" for a key the demo does not show.
+const nameOf = (code) =>
+  code === "Space"
+    ? " "
+    : /^Shift/.test(code)
+      ? "shift"
+      : /^Arrow/.test(code)
+        ? code.toLowerCase()
+        : /^Key[A-Z]$/.test(code)
+          ? code.slice(3).toLowerCase()
+          : "";
 
-/** Load game `slug` into `iframe`; resolves once it renders. */
-export function mountLocalGame(iframe, slug) {
+/**
+ * Load game `slug` into `iframe`; resolves once it renders. `onKeys` receives the demo key
+ * names the game's window holds, after every change.
+ */
+export function mountLocalGame(iframe, slug, onKeys = () => {}) {
   return new Promise((resolve, reject) => {
     iframe.onload = async () => {
       const win = iframe.contentWindow;
@@ -70,20 +109,17 @@ export function mountLocalGame(iframe, slug) {
       iframe.onload = null;
       try {
         const { runtime, input } = await win.ready;
-        const held = new Set();
-        const key = (name, down) => {
-          if (held.has(name) === down) return;
-          down ? held.add(name) : held.delete(name);
-          win.dispatchEvent(
-            new win.KeyboardEvent(down ? "keydown" : "keyup", { code: codeOf(name), key: name }),
-          );
-        };
+        const codes = new Set();
+        win.onGameKey((code, down) => {
+          down ? codes.add(code) : codes.delete(code);
+          onKeys([...new Set([...codes].map(nameOf).filter(Boolean))]);
+        });
         resolve({
           canvas: runtime.canvas,
           /** Press or release one of the demo's keys (w, a, " ", shift, arrowup, ...). */
-          key,
+          key: (name, down) => win.press(codeOf(name), down),
           release() {
-            for (const name of [...held]) key(name, false);
+            win.releaseAll();
             input.clear();
           },
           /** Game state as the game's HUD sees it: state, health, outcome, paused. */
@@ -91,10 +127,7 @@ export function mountLocalGame(iframe, slug) {
           setPaused(paused) {
             if (runtime.read().paused !== paused) runtime.handleUiAction("pause");
           },
-          reset() {
-            runtime.reset();
-            held.clear();
-          },
+          reset: () => runtime.reset(),
           destroy() {
             runtime.destroy?.();
             iframe.srcdoc = "";

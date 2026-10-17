@@ -260,7 +260,7 @@ function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge, noMouse 
   );
   const hasMouse = !noMouse && game && game !== "arcadeduel";
   const button = (key, side) => {
-    const isUsed = used.has(key);
+    const isUsed = !noMouse && used.has(key);
     const lit = mouseHeld.includes(key);
     return (
       <div className={`mouse-btn ${side}${isUsed ? "" : " unused"}${lit ? " pressed" : ""}`}>
@@ -273,11 +273,13 @@ function ControlMap({ game, active, pressed, mouseHeld, lookOn, onEdge, noMouse 
     <div className="control-map">
       {cluster(LEFT_ROWS, 12, "left-hand")}
       {cluster(ARROW_ROWS, 6, "arrows")}
-      <div className={hasMouse ? (lookOn ? "mouse look" : "mouse") : "mouse unused"}>
+      <div className={hasMouse ? (lookOn ? "mouse look" : "mouse") : noMouse ? "mouse off" : "mouse unused"}>
         <div className="mouse-body">
           {button("f", "left")}
           {button("e", "right")}
-          <div className="mouse-palm">{hasMouse ? (lookOn ? "move = look" : "click video") : ""}</div>
+          <div className="mouse-palm">
+            {hasMouse ? (lookOn ? "move = look" : "click video") : noMouse ? "mouse look: game on server only" : ""}
+          </div>
         </div>
       </div>
     </div>
@@ -358,6 +360,8 @@ function Workspace({ conn }) {
     [sendFps, setSendFps] = useState(SEND_RATES[0]),
     [localGame, setLocalGame] = useState(null),
     [localHud, setLocalHud] = useState(null),
+    // Demo key names the game in this page holds, as its own window reports them.
+    [localKeys, setLocalKeys] = useState([]),
     [published, setPublished] = useState(false),
     [sentFps, setSentFps] = useState(null);
   const local = useRef(null),
@@ -414,6 +418,13 @@ function Workspace({ conn }) {
     !!shownGame &&
     !(serverReady && draftReady);
   const availableKeys = gameKeys[world?.game] || [];
+  // The panel's held keys: the server's set_keys state, or what the game in this page holds.
+  const shownPressed =
+    mode === "browser"
+      ? localPlaying
+        ? localKeys.filter((k) => (gameKeys[shownGame] || []).includes(k))
+        : []
+      : pressed;
   const [feed, setFeed] = useState([]),
     [lastVideoAt, setLastVideoAt] = useState(null),
     [now, setNow] = useState(Date.now()),
@@ -690,7 +701,7 @@ function Workspace({ conn }) {
   useEffect(() => {
     if (mode !== "browser" || !shownGame) return;
     let live = true;
-    mountLocalGame(gameFrame.current, shownGame)
+    mountLocalGame(gameFrame.current, shownGame, (keys) => live && setLocalKeys(keys))
       .then((game) => {
         if (!live) return;
         setLocalGame(game);
@@ -702,6 +713,7 @@ function Workspace({ conn }) {
       local.current.stop();
       setLocalGame(null);
       setLocalHud(null);
+      setLocalKeys([]);
     };
   }, [mode, shownGame]);
   // The game in this page runs only while a world plays, and its own state stands in for
@@ -733,10 +745,9 @@ function Workspace({ conn }) {
     };
     const onDown = onKey(true),
       onUp = onKey(false);
+    // Focus moving into the game's own frame blurs this window; the game keeps its keys.
     const release = () => {
-      localGame.release();
-      held.current.clear();
-      setPressed([]);
+      if (document.activeElement !== gameFrame.current) localGame.release();
     };
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
@@ -745,7 +756,7 @@ function Workspace({ conn }) {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
       window.removeEventListener("blur", release);
-      release();
+      localGame.release();
     };
   }, [localPlaying, shownGame]);
   useEffect(() => {
@@ -799,11 +810,9 @@ function Workspace({ conn }) {
       }
     });
   }
+  // The panel lights from what the game reports (localKeys), not from here.
   function localEdge(key, down) {
-    if (!localPlaying || held.current.has(key) === down) return;
-    down ? held.current.add(key) : held.current.delete(key);
-    setPressed([...held.current]);
-    localGame.key(key, down);
+    if (localPlaying) localGame.key(key, down);
   }
   async function sendReference(file) {
     const handle = await upload(file);
@@ -1359,15 +1368,15 @@ function Workspace({ conn }) {
           <div className="control-heading">
             <span className="eyebrow">03 / TAKE CONTROL</span>
             <span>
-              {pressed.length
-                ? pressed.map((k) => labels[k] || k.toUpperCase()).join(" + ")
+              {shownPressed.length
+                ? shownPressed.map((k) => labels[k] || k.toUpperCase()).join(" + ")
                 : "Controls released"}
             </span>
           </div>
           <ControlMap
             game={shownGame}
             active={mode === "browser" ? localPlaying : playing}
-            pressed={pressed}
+            pressed={shownPressed}
             mouseHeld={mouseHeld}
             lookOn={lookOn}
             onEdge={mode === "browser" ? localEdge : edge}
