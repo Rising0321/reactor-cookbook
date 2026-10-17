@@ -769,17 +769,38 @@ function Workspace({ conn }) {
       setStaged(`${answer.data.source}|${answer.data.game}`);
     return answer.data;
   }
-  // Switching source is valid at any time, in or out of a world; a world keeps its history.
+  // Switching source starts clean: the current world is paused and ended, the old mode's
+  // capture stops, and the page waits for Start in the new mode.
   function chooseMode(next) {
     if (next === mode || busy) return;
     setMode(next);
     local.current.stop();
     setClipName("");
-    if (status === "ready") {
-      const source = next === "server" ? "game" : "client";
-      if (world?.source !== source)
-        perform("Switching source…", () => request("set_source", { source }));
-    }
+    setFeed([]);
+    setLastVideoAt(null);
+    setLocalHud(null);
+    if (status !== "ready") return;
+    const source = next === "server" ? "game" : "client";
+    perform("Switching source…", async () => {
+      let w = world;
+      if (w?.started && !w.paused) {
+        if (mode === "server") {
+          controls([]);
+          await controller.current.stop();
+        }
+        w = await request("set_paused", { paused: true });
+      }
+      // select_game ends the world; with no game (a client world on an upload) it stays paused.
+      const restage = w?.started && w.game;
+      // A started world cannot switch to the game source before a game is chosen;
+      // picking one switches it.
+      if (w?.source !== source && !(source === "game" && w?.started && !w.game))
+        w = await request("set_source", { source });
+      if (restage) {
+        await request("select_game", { game: w.game });
+        if (localRef) await sendReference(localRef);
+      }
+    });
   }
   function chooseClip(input, name) {
     local.current.use(input).then(
