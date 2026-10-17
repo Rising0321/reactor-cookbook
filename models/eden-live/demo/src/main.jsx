@@ -377,14 +377,6 @@ function Workspace({ conn }) {
   // stays on screen. An end screen says so until a new world starts.
   const over = !!(world?.started && world.ended);
   const won = world?.game_state === "WON";
-  // Start with source client needs a reference (a card's cover or an upload) and frames.
-  const canStart =
-    !!prompt.trim() &&
-    !busy &&
-    !active &&
-    (sends
-      ? world?.source === "client" && !!world?.image_name && published
-      : world?.source !== "client" && !!world?.game);
   // A game picked before connecting is held here and loaded once the session is ready.
   const [pendingGame, setPendingGame] = useState("");
   // The user's own reference image. Uploading needs a session, so one chosen
@@ -395,6 +387,34 @@ function Workspace({ conn }) {
   const [open, setOpen] = useState(true);
   const shownGame = world?.game || pendingGame;
   const selected = games.find((g) => g[0] === shownGame);
+  // "source|game" as last confirmed by a select_game, set_source or set_image reply. The server
+  // replies to those only once the game page is loaded and its prompt bank built, so a match
+  // with what this page wants means the server is ready to start.
+  const [staged, setStaged] = useState("");
+  const autoStaged = useRef(false);
+  const serverReady =
+    status === "ready" &&
+    !!world &&
+    staged === `${wantSource}|${shownGame}` &&
+    staged === `${world.source}|${world.game}`;
+  // The page's own frames: the game in this page loaded at its opening, or the video playing,
+  // and the track published.
+  const draftReady = !sends || (published && (mode === "browser" ? !!localGame : !!clipName));
+  // Start with source client needs a reference (a card's cover or an upload) and frames.
+  const canStart =
+    !!prompt.trim() &&
+    !busy &&
+    !active &&
+    serverReady &&
+    draftReady &&
+    (sends ? !!world?.image_name : !!world?.game);
+  // Everything is chosen, and the server or the page's frames are still getting ready.
+  const preparing =
+    status === "ready" &&
+    !busy &&
+    !active &&
+    (sends ? (mode === "browser" ? !!shownGame : !!clipName) : !!shownGame) &&
+    !(serverReady && draftReady);
   const availableKeys = gameKeys[world?.game] || [];
   const [feed, setFeed] = useState([]),
     [lastVideoAt, setLastVideoAt] = useState(null),
@@ -609,25 +629,31 @@ function Workspace({ conn }) {
     };
   }, [lookOn]);
   useEffect(() => {
-    if (status !== "ready") sourceSynced.current = false;
-    if (status !== "ready" || busy) return;
+    if (status !== "ready") {
+      sourceSynced.current = false;
+      autoStaged.current = false;
+    }
+    // Waits for the Connect command to release the lock, or the command would be dropped,
+    // and for the first state_update.
+    if (status !== "ready" || busy || !world) return;
     // On connect, the server's source follows the page's, before any game is loaded
     // (with source game, select_game would launch a browser the client source never uses).
-    if (sends && !world) return;
-    if (world && !sourceSynced.current) {
+    if (!sourceSynced.current) {
       sourceSynced.current = true;
       if (world.source !== wantSource) {
         perform("Switching source…", () => request("set_source", { source: wantSource }));
         return;
       }
     }
-    // Waits for the Connect command to release the lock, or loadGame would be dropped.
-    if (pendingGame && !world?.game)
+    // Once per connection, stage the chosen game unless a reply already confirmed it.
+    const game = pendingGame || world.game;
+    if (game && !autoStaged.current && staged !== `${wantSource}|${game}`) {
+      autoStaged.current = true;
       perform("Loading game…", async () => {
-        const data = await request("select_game", { game: pendingGame });
+        const data = await request("select_game", { game });
         // Keep a prompt edited before connecting; Start sends it.
         setPrompt((p) =>
-          p.trim() && p !== officialPrompts[pendingGame]?.prompt ? p : data.prompt,
+          p.trim() && p !== officialPrompts[game]?.prompt ? p : data.prompt,
         );
         const queued = refQueued.current && localRef;
         refQueued.current = false;
@@ -641,7 +667,8 @@ function Workspace({ conn }) {
           }
         }
       });
-  }, [status, busy, pendingGame, world?.game, !!world, wantSource]);
+    }
+  }, [status, busy, pendingGame, world?.game, !!world, wantSource, staged]);
   // The page's frames go out on source_video while connected in a sending mode.
   useEffect(() => {
     if (status !== "ready" || !sending) return;
@@ -729,6 +756,7 @@ function Workspace({ conn }) {
       if (world?.game) setPendingGame(world.game);
       if (localRef) refQueued.current = true;
       setWorld(null);
+      setStaged("");
       held.current.clear();
       setPressed([]);
     }
@@ -737,6 +765,8 @@ function Workspace({ conn }) {
     const answer = await send(name, args);
     if (!answer) throw Error("Command refused. See the server's reason below.");
     setWorld(answer.data);
+    if (name === "select_game" || name === "set_source" || name === "set_image")
+      setStaged(`${answer.data.source}|${answer.data.game}`);
     return answer.data;
   }
   // Switching source is valid at any time, in or out of a world; a world keeps its history.
@@ -776,6 +806,7 @@ function Workspace({ conn }) {
     refQueued.current = false;
     if (status === "ready")
       perform("Loading game…", async () => {
+        if (world?.source !== wantSource) await request("set_source", { source: wantSource });
         const data = await request("select_game", { game });
         setPrompt(data.prompt);
       });
@@ -1119,7 +1150,7 @@ function Workspace({ conn }) {
               disabled={!canStart}
               onClick={startWorld}
             >
-              {world?.started ? "Start new world" : "Start world"}
+              {preparing ? "Preparing…" : world?.started ? "Start new world" : "Start world"}
             </button>
             {world?.started && !world.ended && (
               <button
@@ -1149,8 +1180,8 @@ function Workspace({ conn }) {
                 ? mode === "video"
                   ? `Choose ${shownGame ? "" : "a look below and "}a video file or the webcam, connect, then Start world.`
                   : "Choose a game below; it runs in this page and is sent as the draft."
-                : sends && status === "ready" && !active && !published
-                  ? "Publishing your frames…"
+                : preparing
+                  ? "Preparing…"
                   : world?.ended
                 ? "Game ended. Start a new world or Reset."
                 : active
