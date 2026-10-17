@@ -47,7 +47,9 @@ textarea:focus-visible {
   outline-offset: 3px;
 }
 header {
-  height: 76px;
+  min-height: 76px;
+  flex-wrap: wrap;
+  gap: 10px 24px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -424,15 +426,47 @@ footer {
 /* Left panel: actions on top, game cards, the selected game's setup inline. */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .actions button {
   padding: 10px 12px;
 }
+/* Start and its send rate take the first row; Pause and Reset share the next. */
+.start-group {
+  flex: 1 0 100%;
+  display: flex;
+  min-width: 0;
+}
+.actions > button {
+  flex: 1;
+}
 .actions .primary {
   flex: 1;
   width: auto;
   margin: 0;
+}
+.start-group .primary:not(:last-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.start-rate {
+  flex: none;
+  width: auto;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid var(--gold);
+  border-left-color: #1b1b14;
+  border-radius: 0 9px 9px 0;
+  background: #ccb07c;
+  color: #1b1b14;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.start-rate:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 aside .progress {
   margin: 10px 0 14px;
@@ -801,17 +835,131 @@ label.seed input {
   margin: 0 0 4px;
   color: var(--muted);
 }
-.end-actions {
+/* Draft source: the server's game, the same game in this page, or the player's video. */
+.source-switch {
   display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin: 14px 0 8px;
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
-.end-actions .primary {
+.source-switch button {
+  flex: 1;
+  border: 0;
+  background: none;
+  padding: 7px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 7px;
+}
+.source-switch button.on {
+  background: #35362c;
+  color: var(--gold);
+}
+.send-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+.send-what {
+  flex-basis: 100%;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.pane[hidden] {
+  display: none;
+}
+/* A display surface: clicks reach the stage (pointer lock), keys go through the page. */
+iframe.local-game {
+  border: 0;
+  background: #11120f;
+  pointer-events: none;
+}
+.placeholder.half {
+  left: 50%;
+}
+
+/* Connection panel: platform switch, API key or server URL, model. */
+.connection {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  padding: 10px 0;
+}
+.endpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.endpoint input:not([type="checkbox"]) {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.endpoint .api-key,
+.endpoint .server-url {
+  width: 250px;
+}
+.endpoint .model-name {
+  width: 110px;
+}
+.target-switch {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.target-switch button {
+  border: 0;
+  border-radius: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--muted);
+}
+.target-switch button.on {
+  background: #35362c;
+  color: #eae8df;
+}
+.remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.remember input {
   width: auto;
   margin: 0;
 }
-.end-card small {
-  font-size: 10px;
-  color: var(--muted);
+@media (max-width: 900px) {
+  header {
+    padding: 0 16px;
+  }
+  .endpoint {
+    flex-wrap: wrap;
+  }
+  .endpoint .api-key,
+  .endpoint .server-url {
+    width: min(250px, 100%);
+  }
 }
