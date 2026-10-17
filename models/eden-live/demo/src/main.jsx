@@ -418,6 +418,10 @@ function Workspace({ conn }) {
     !!shownGame &&
     !(serverReady && draftReady);
   const availableKeys = gameKeys[world?.game] || [];
+  // The send rate is chosen before Start and held for the whole world: the server's measured
+  // rate needs a few chunks to settle after a change. Reset, the world's end, or a source
+  // switch (which ends the world) frees it.
+  const rateLocked = !!world?.started && !world.ended;
   // The panel's held keys: the server's set_keys state, or what the game in this page holds.
   const shownPressed =
     mode === "browser"
@@ -1114,20 +1118,6 @@ function Workspace({ conn }) {
           </div>
           {sends && (
             <div className="send-panel">
-              <label className="send-rate">
-                Send
-                <select
-                  aria-label="Send rate"
-                  value={sendFps}
-                  onChange={(e) => setSendFps(Number(e.target.value))}
-                >
-                  {SEND_RATES.map((r) => (
-                    <option key={r} value={r}>
-                      {r} fps
-                    </option>
-                  ))}
-                </select>
-              </label>
               <span className="send-what">
                 {localGame
                   ? `${selected?.[1] || ""} in this page`
@@ -1138,13 +1128,35 @@ function Workspace({ conn }) {
             </div>
           )}
           <div className="actions">
-            <button
-              className="primary"
-              disabled={!canStart}
-              onClick={startWorld}
-            >
-              {preparing ? "Preparing…" : world?.started ? "Start new world" : "Start world"}
-            </button>
+            <div className="start-group">
+              <button
+                className="primary"
+                disabled={!canStart}
+                onClick={startWorld}
+              >
+                {preparing ? "Preparing…" : world?.started ? "Start new world" : "Start world"}
+              </button>
+              {sends && (
+                <select
+                  className="start-rate"
+                  aria-label="Send rate"
+                  title={
+                    rateLocked
+                      ? "Send rate is fixed for this world; Reset to change it"
+                      : "Frames per second this page sends; the generated video plays at this rate"
+                  }
+                  value={sendFps}
+                  disabled={rateLocked || !!busy}
+                  onChange={(e) => setSendFps(Number(e.target.value))}
+                >
+                  {SEND_RATES.map((r) => (
+                    <option key={r} value={r}>
+                      {r} fps
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             {world?.started && !world.ended && (
               <button
                 disabled={!!busy}

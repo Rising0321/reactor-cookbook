@@ -426,15 +426,47 @@ footer {
 /* Left panel: actions on top, game cards, the selected game's setup inline. */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .actions button {
   padding: 10px 12px;
 }
+/* Start and its send rate take the first row; Pause and Reset share the next. */
+.start-group {
+  flex: 1 0 100%;
+  display: flex;
+  min-width: 0;
+}
+.actions > button {
+  flex: 1;
+}
 .actions .primary {
   flex: 1;
   width: auto;
   margin: 0;
+}
+.start-group .primary:not(:last-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.start-rate {
+  flex: none;
+  width: auto;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid var(--gold);
+  border-left-color: #1b1b14;
+  border-radius: 0 9px 9px 0;
+  background: #ccb07c;
+  color: #1b1b14;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.start-rate:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 aside .progress {
   margin: 10px 0 14px;
@@ -852,18 +884,6 @@ label.seed input {
   gap: 8px;
   margin-bottom: 12px;
   font-size: 11px;
-}
-.send-panel .send-rate {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: 11px;
-}
-.send-panel .send-rate select {
-  width: auto;
-  margin: 0;
-  padding: 4px 8px;
 }
 .send-what {
   flex-basis: 100%;
