@@ -5,26 +5,14 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-
-
-def continuous_time_settings(settings: dict) -> dict:
-    """Keep H3's normalized diffusion clock continuous after JSON loading.
-
-    The upstream timestep class treats an integer T as a discrete schedule.
-    With T=1 that rounds both denoising stages to 1. Float horizons preserve
-    the released two-step shifts (video: 6, audio: 1.5).
-    """
-    for specification in settings["inference"]["diffusion"].values():
-        args = specification["args"]
-        if "T" in args:
-            args["T"] = float(args["T"])
-    return settings
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 
 class StreamRenderBackend:
     def __init__(self):
         self.pipe = None
+        self._reference_directory = None
+        self._reference_path = None
 
     def load(self, source_root: Path, assets_path: Path) -> None:
         root = Path(source_root).resolve() / "models/streamrender_h3"
@@ -36,7 +24,6 @@ class StreamRenderBackend:
         settings, _ = config_module.load_config(
             root / "configs/runtime.json", assets_path
         )
-        continuous_time_settings(settings)
         sys.path.insert(0, str(root))
         config_module.mount_vendor()
 
@@ -73,9 +60,27 @@ class StreamRenderBackend:
         # Every rank enters the same native topology and execution-phase scopes.
         self.pipe = StreamingPipeline(config, models, settings)
         self.world_size = world
-        self.reference_cache = (
-            Path(assets_path).resolve().parent / "reactor_reference_cache"
-        )
+
+    def _save_reference(self, reference) -> Path:
+        """Rank zero owns a private temporary upload directory for this worker."""
+        from PIL import Image
+
+        if self._reference_directory is None:
+            self._reference_directory = TemporaryDirectory(prefix="streamrender-")
+        directory = Path(self._reference_directory.name)
+        digest = hashlib.sha256(
+            str(reference.shape).encode() + reference.tobytes()
+        ).hexdigest()
+        picture = directory / f"{digest}.png"
+        self._reference_path = picture
+        with NamedTemporaryFile(dir=directory, suffix=".png", delete=False) as file:
+            temporary = Path(file.name)
+        try:
+            Image.fromarray(reference).save(temporary)
+            os.replace(temporary, picture)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return picture
 
     def start(self, reference, prompt: str, seed: int) -> None:
         import torch.distributed as dist
@@ -83,27 +88,13 @@ class StreamRenderBackend:
             use_unified_parallel,
         )
         from dev.yanzuolu.common.phase import ExecutionPhase, execution_phase
-        from PIL import Image
 
         # Upstream mixes the absolute picture path into its RNG seed. All ranks
-        # must use one stable content-addressed path, including after a restart.
-        digest = hashlib.sha256(
-            str(reference.shape).encode() + reference.tobytes()
-        ).hexdigest()
-        picture = self.reference_cache / f"{digest}.png"
-        status = [None]
+        # share rank zero's path, stable across resets within this worker lifetime.
+        status = [None, None]
         if dist.get_rank() == 0:
             try:
-                self.reference_cache.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with NamedTemporaryFile(
-                    dir=self.reference_cache, suffix=".png", delete=False
-                ) as file:
-                    temporary = Path(file.name)
-                try:
-                    Image.fromarray(reference).save(temporary)
-                    os.replace(temporary, picture)
-                finally:
-                    temporary.unlink(missing_ok=True)
+                status[1] = str(self._save_reference(reference))
             except OSError as error:
                 status[0] = str(error)
         dist.broadcast_object_list(status, src=0)
@@ -113,7 +104,7 @@ class StreamRenderBackend:
             execution_phase(ExecutionPhase.VALIDATION),
             use_unified_parallel(self.world_size),
         ):
-            self.pipe.start(prompt=prompt, picture=str(picture), seed=seed)
+            self.pipe.start(prompt=prompt, picture=status[1], seed=seed)
 
     def frames_wanted(self) -> int:
         return self.pipe.next_counts()[1]
@@ -147,6 +138,11 @@ class StreamRenderBackend:
         return rgb[0].permute(1, 2, 3, 0).clamp(0, 1).mul(255).byte().cpu().numpy()
 
     def reset(self) -> None:
+        # Only rank zero owns a file. Keep the empty private directory so the
+        # same reference has the same RNG path on the next run in this worker.
+        if self._reference_path is not None:
+            self._reference_path.unlink(missing_ok=True)
+            self._reference_path = None
         if self.pipe is not None:
             from render.optimizations import STATE
 
