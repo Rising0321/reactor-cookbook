@@ -1,8 +1,8 @@
 # Deploying the demo
 
 `npm run build` turns the demo into a static site in `dist/`: one `index.html`, hashed
-assets with relative paths, the SDK's WebAssembly, the game covers and, when present, the
-games under `local-games/`. It works from any static host, at the domain root or under a
+assets with relative paths, the SDK's WebAssembly, the game covers and the seven games
+under `local-games/`. It works from any static host, at the domain root or under a
 sub-path. No server code runs and the build carries no credentials.
 
 ## Vercel CLI (recommended)
@@ -16,19 +16,13 @@ npx vercel deploy dist          # preview URL
 npx vercel deploy dist --prod   # production URL
 ```
 
-Deploying `dist/` uploads exactly what was built, including `public/local-games/` if it is
-present locally. The first run asks you to log in and to name the project.
+Deploying `dist/` uploads exactly what was built. The first run asks you to log in and to
+name the project.
 
 ## Vercel dashboard (deploy from git)
 
 Import the repository and set **Root Directory** to `demo`. `vercel.json` sets the rest
 (Vite, `npm ci`, `npm run build`, output `dist`). No environment variables are needed.
-
-`public/local-games/` is gitignored, so a git deploy has no games for the **Game in your
-browser** source; that source then reports that the game did not load, while **Game on
-server** still works. To include the games, delete the
-`demo/public/local-games/` line from the repository's `.gitignore` and commit the directory
-(about 18 MB).
 
 Do not set `VITE_REACTOR_URL` for a public deploy: it only prefills the Local server URL and
 makes Local the default.

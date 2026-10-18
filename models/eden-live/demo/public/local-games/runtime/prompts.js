@@ -1,0 +1,1 @@
+export function combinePrompt(global,dynamic){const value=[global.trim(),dynamic.trim()].filter(Boolean).join('\n\n');if(!global.trim())throw Error('Video Global Prompt is required.');if(value.length>4096)throw Error('Combined video prompt exceeds 4096 characters.');return value;}
