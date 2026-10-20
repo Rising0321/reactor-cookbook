@@ -8,14 +8,18 @@ with `set_source`. Every completed chunk streams EdenLive's render on `main_vide
 draft it came from on `draft_video`, frame for frame. [`model_behaviour.md`](model_behaviour.md)
 is the full contract.
 
-This recipe requires authorized access to EdenLive's source and weights. It does not
-download private source during startup, publish the model, or call an external generation API.
+![EdenLive draft and generated video side by side](assets/demo.png)
+
+*A recorded run of the earlier 24 FPS demo; the current playback controls are described below.*
+
+This recipe uses [EdenLive's source](https://github.com/VAST-AI-Research/EdenLive) and
+the 5B weights. Prepare them before startup; inference runs locally.
 
 ## What you need
 
 - Linux, one NVIDIA B200, Docker and the NVIDIA Container Toolkit.
 - About 37 GB for the 5B weights, plus space for the image and source.
-- The authorized EdenLive source bundle and access to `VAST-AI/EdenLive`.
+- The compatible seven-game source snapshot below and access to `VAST-AI/EdenLive`.
 - Node.js 20+ for the demo and the original games' JavaScript dependencies.
 
 ## 1. Prepare the source and weights
@@ -26,13 +30,19 @@ Prepare a directory on a disk with sufficient space:
 ```sh
 export EDEN_BUNDLE=/path/to/edenlive-bundle
 mkdir -p "$EDEN_BUNDLE"
-cp -a /path/to/EdenLive-Official-master "$EDEN_BUNDLE/source"
+git clone https://github.com/VAST-AI-Research/EdenLive.git "$EDEN_BUNDLE/source"
+git -C "$EDEN_BUNDLE/source" checkout --detach 7499680ce87ee8b3b8ac4de1f3b360b0d78f1e12
 npm --prefix "$EDEN_BUNDLE/source/realtime/games" install --ignore-scripts --no-package-lock
 hf auth login
 hf download VAST-AI/EdenLive --revision fc9ad921b7fab8fa6a82fe66071fe6d3bd55b429 \
   --include 'dit-5b/*' 'vae-5b/*' 'decoder-5b/*' 'umt5/*' 'vision-encoder/*' 'scheduler-5b/*' \
   --local-dir "$EDEN_BUNDLE/weights/EdenLive"
 ```
+
+The source is pinned to the original seven-game layout used by this integration.
+Newer upstream revisions rename or replace game registry entries, so the current
+upstream checkout is not a drop-in replacement for this bundle. An existing compatible
+source bundle can be reused instead.
 
 The source bundle must contain `realtime/flashdreams`, `realtime/integrations_v2`,
 and `realtime/games`. Its model implementations and game assets are used directly; the
@@ -50,7 +60,8 @@ reactor run --gpus device=0 --shm-size 2g --weights "$EDEN_BUNDLE" --port 8080
 
 Choose a free GPU on a shared machine. The image is built from `reactor.yaml` and runs
 Reactor Runtime 3.8.3. There is no separate Dockerfile. The model stays on one GPU;
-the original game engine runs in headless Chromium on the CPU.
+the original game engine runs in headless Chromium, with GPU rendering enabled
+on the same card.
 Use a CLI version that supports `--shm-size` (tested with v1.20261014.332): Docker's
 64 MiB default is too small for the full-resolution chunk exchange.
 
@@ -91,7 +102,10 @@ VITE_REACTOR_URL=http://localhost:8080 npm run dev
 
 Open the URL printed by Vite. In the header, pick where to connect: **Local** (the model
 server URL, prefilled from `VITE_REACTOR_URL`), or **DEV** / **PROD** with your own Reactor
-API key for that platform. Click **Connect**, choose an **Official game**, optionally
+API key for that platform. This is a bring-your-own-key demo: never embed a team key in
+the frontend or its build settings. A public service using an operator-owned key should
+exchange it for short-lived session tokens on a backend.
+Click **Connect**, choose a game, optionally
 upload an **Appearance reference**, and press **Start**. Selecting or uploading alone
 does not generate video. Match a custom reference to the game's opening composition.
 
@@ -177,7 +191,7 @@ single-GPU dense FA4 implementation; compilation preserves explicit precision ca
 and graph capture follows the author's cache-aware dispatch. Multi-GPU serving is not
 implemented.
 
-CPU tests require Runtime, Pillow, pytest and pytest-asyncio; no weights, upstream checkout
+CPU tests require Runtime, Pillow, psutil, loguru, pytest and pytest-asyncio; no weights, upstream checkout
 or GPU are needed:
 
 ```sh
@@ -189,6 +203,8 @@ reactor validate
 ## Credits
 
 EdenLive's model, game engine and assets are provided by its authors. Thanks to
-[Rising0321](https://github.com/Rising0321) for porting EdenLive to Reactor and building
-the synchronized interactive demo. Source and checkpoint access remain subject to
-the authors' permissions.
+[Rising0321](https://github.com/Rising0321), Zian (Andy) Zheng, and
+[Davide Locatelli](https://github.com/Dere-Wah) for the Reactor port, synchronized demo,
+and inference infrastructure. The integration is maintained in
+[reactor-team/reactor-edenlive](https://github.com/reactor-team/reactor-edenlive).
+Source and checkpoints remain subject to their respective licenses and access terms.

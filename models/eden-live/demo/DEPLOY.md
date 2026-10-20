@@ -21,7 +21,7 @@ name the project.
 
 ## Vercel dashboard (deploy from git)
 
-Import the repository and set **Root Directory** to `demo`. `vercel.json` sets the rest
+Import the repository and set **Root Directory** to `models/eden-live/demo`. `vercel.json` sets the rest
 (Vite, `npm ci`, `npm run build`, output `dist`). No environment variables are needed.
 
 Do not set `VITE_REACTOR_URL` for a public deploy: it only prefills the Local server URL and
