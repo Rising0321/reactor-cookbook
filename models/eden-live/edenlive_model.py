@@ -62,6 +62,30 @@ class EdenResult:
     chunk_index: int
     frames: np.ndarray  # RGB uint8 [T,704,1280,3]; T=9, then 12.
     frames_wanted: int
+    # Whether this step ran the text encoder for its prompt.
+    text_encoded: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class EdenBank:
+    """Replace the prompt bank: chunk prompts to encode ahead of play.
+
+    With ``wait`` the reply comes once every prompt is encoded; otherwise the
+    prompts are encoded in the background while steps continue, and a step
+    whose prompt is not banked yet encodes it itself. Empty ``prompts`` drops
+    the bank.
+    """
+
+    prompts: tuple[str, ...]
+    wait: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class EdenBankResult:
+    """How many prompts the bank was given, and the encode seconds when waited."""
+
+    prompts: int
+    seconds: float
 
 
 class MissingAnchor(ValueError):
@@ -107,18 +131,24 @@ class EdenModel:
     def _warm_up(self) -> None:
         """Run every path a session takes once, then forget the throwaway worlds.
 
-        A world's first chunks grow the cache, so each has its own shape; graphs
-        are captured once the cache is full, captured again after a prompt
-        change, and again in every new world. The first world runs past its
-        capture and through a prompt change, and the second checks that a fresh
-        world reuses what the first compiled.
+        A world's first chunks grow the cache, so each has its own shape and its
+        own CUDA graph; from the capture index on, every chunk shares one graph.
+        The first world compiles every shape and captures every graph, then runs
+        a prompt change, which loads the text encoder and rewrites the text in
+        place. A world's first chunk commits its cache once, so that call's
+        graph needs one first chunk per wrapper warmup before it is captured:
+        as many one-chunk worlds follow. Graphs are captured once per process
+        and replayed in every later world, so the last world checks that a
+        fresh world replays them from its first chunk on, without compiling or
+        capturing again.
         """
         backend = self._backend
         steady = backend.capture_index + backend.graph_warmup + 2
-        recapture = backend.graph_warmup + 2
+        changed = backend.graph_warmup + 2
+        worlds = (steady + changed, *(1,) * backend.graph_warmup, steady)
         rng = np.random.default_rng(0)
         started = time.perf_counter()
-        for world, chunks in enumerate((steady + recapture, steady)):
+        for world, chunks in enumerate(worlds):
             image = rng.integers(0, 256, (704, 1280, 3), np.uint8)
             backend.reset()
             backend.start(EdenAnchor(image=image, prompt=_WARMUP_PROMPT, seed=world))
@@ -130,22 +160,35 @@ class EdenModel:
                 backend.step(index, condition, prompt)
                 seconds.append(round(time.perf_counter() - begun, 3))
             logger.info("EdenLive warmup world %d chunk seconds: %s", world, seconds)
+        # A background bank build runs on its own thread and CUDA stream; one
+        # here sets those up, so a session's first build does not.
+        backend.set_bank((f"{_WARMUP_PROMPT} It snows.",), wait=False)
+        backend.join_bank()
+        backend.clear_bank()
         backend.reset()
         logger.info("EdenLive warmup done in %.1f s", time.perf_counter() - started)
 
     def reset(self) -> None:
-        """Drop the current rollout and caches while retaining loaded weights."""
+        """Drop the current rollout, its caches and the prompt bank; keep the weights."""
         if self._backend is not None:
             self._backend.reset()
+            self._backend.clear_bank()
         self._world_id = None
         self._chunk_index = 0
 
-    def generate(self, input: EdenInput) -> EdenResult:
+    def generate(self, input: EdenInput | EdenBank) -> EdenResult | EdenBankResult:
         """Return one chunk; raise MissingAnchor for an unknown world without one.
+
+        An ``EdenBank`` replaces the prompt bank instead and generates nothing;
+        it is the one other request the worker takes, because the runner
+        carries only ``generate`` and ``reset``.
 
         Malformed geometry raises ValueError. Native compute failures propagate;
         they must end the serving session rather than claim a completed chunk.
         """
+        if isinstance(input, EdenBank):
+            prompts, seconds = self._backend.set_bank(input.prompts, wait=input.wait)
+            return EdenBankResult(prompts=prompts, seconds=seconds)
         if input.condition.shape != (3, 704, 1280, 3) or input.condition.dtype != np.uint8:
             raise ValueError("Expected three native 1280x704 RGB condition frames")
         if not input.prompt.strip():
@@ -167,4 +210,5 @@ class EdenModel:
             chunk_index=self._chunk_index,
             frames=frames,
             frames_wanted=12,
+            text_encoded=self._backend.text_encoded,
         )

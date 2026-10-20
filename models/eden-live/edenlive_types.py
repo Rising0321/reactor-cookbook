@@ -77,7 +77,14 @@ class EdenState(InputState):
     _draft: Draft | None = None
     _ended: bool = False
     _keys_holder: object | None = None
+    # The look rate (yaw, pitch) held now, each -1..1, set with `set_look`.
+    _look: tuple[float, float] = (0.0, 0.0)
+    _look_holder: object | None = None
     _prompt_changed: bool = False
+    # The game's HUD after the latest generated chunk (`edenlive_game.hud_status`).
+    _hud: dict | None = None
+    # The event sentences the source added to the latest generated chunk.
+    _events: tuple[str, ...] = ()
 
 
 class EdenMedia(MediaInput):
@@ -112,10 +119,41 @@ class StateUpdate(ModelMessage):
     keys: list[str] = MessageField(
         description="Keys held now. Frames already captured keep the keys they were captured with."
     )
+    look: list[float] = MessageField(
+        description="Look rate held now, as `[yaw, pitch]`, each -1..1; `[0, 0]` when none."
+    )
     paused: bool = MessageField(description="Whether the world is on hold.")
     started: bool = MessageField(description="Whether `start` has created the current world.")
     ended: bool = MessageField(
         description="Whether the game reached an outcome. Only `start` or `set_source` continues."
+    )
+    game_state: str = MessageField(
+        description=(
+            "The game's own state after the latest chunk, such as `RUNNING`, `WON`, or "
+            "`LOST`; empty before the first chunk, with source `client`, and after "
+            "`start`, `select_game`, `set_image`, or `set_source`."
+        )
+    )
+    outcome: list[str] = MessageField(
+        description=(
+            "The game's result card once it reaches an outcome: the result, its reason, "
+            "and replay advice, one line each. Empty during play."
+        )
+    )
+    health: float | None = MessageField(
+        description="Player health after the latest chunk, or null when the game reports none."
+    )
+    health_max: float | None = MessageField(
+        description="Maximum player health, or null when the game reports none."
+    )
+    events: list[str] = MessageField(
+        description=(
+            "What happened in the game during the chunk counted by `chunks`, as the "
+            "sentences added to that chunk's prompt (for example a hit or a bite). "
+            "Every `state_update` until the next chunk repeats them; empty when the "
+            "chunk had none, with source `client`, and after the resets that clear "
+            "`game_state`."
+        )
     )
     world_id: int = MessageField(
         description="Identity of the current world; `start` increments it."

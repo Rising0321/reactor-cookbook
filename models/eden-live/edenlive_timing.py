@@ -7,7 +7,9 @@ end of its own, and splits into:
 - ``emit_s``: the previous chunk's ``emit()``, which blocks while the playout
   queue (one chunk deep) is full, plus the loop's own turn;
 - ``draft_wait_s``: refused steps while the source had no draft ready;
-- ``generate_s``: ``generate()``, as the runtime measures it;
+- ``generate_s``: ``generate()``, as the runtime measures it, including a
+  text encode when the chunk's prompt was neither banked nor seen earlier in
+  the world (``text_encoded``);
 - the remainder: building the step input and ``process_output()``.
 
 ``capture_s`` is the source's own time to produce the draft once asked.
@@ -54,6 +56,7 @@ class ChunkTimer:
         generate_s: float | None,
         capture_s: float | None,
         prompt_changed: bool,
+        text_encoded: bool = False,
     ) -> dict | None:
         """Close the chunk; return its sample when its whole cycle was observed."""
         sample = None
@@ -66,6 +69,7 @@ class ChunkTimer:
                 "generate_s": generate_s,
                 "capture_s": capture_s,
                 "prompt_changed": prompt_changed,
+                "text_encoded": text_encoded,
             }
             self._samples.append(sample)
         self._output_at = now
@@ -92,4 +96,5 @@ class ChunkTimer:
             "generate_s": median("generate_s"),
             "capture_s": median("capture_s"),
             "prompt_changes": sum(s["prompt_changed"] for s in samples),
+            "text_encodes": sum(s["text_encoded"] for s in samples),
         }

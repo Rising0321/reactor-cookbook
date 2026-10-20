@@ -2,7 +2,6 @@
 """Resolve the authorized local source and checkpoint tree in the application."""
 
 import json
-import sys
 from pathlib import Path
 
 import yaml
@@ -32,6 +31,18 @@ def resolve_assets(config_path: Path | None, root: Path):
         or not all(type(side) is int and side >= 64 for side in capture)
     ):
         raise ValueError("game_capture must be [width, height] in pixels")
+    capture_format = config.get("capture_format", "raw")
+    if capture_format not in ("jpeg", "raw"):
+        raise ValueError("capture_format must be 'jpeg' or 'raw'")
+    draft_video = config.get("draft_video", "sparse")
+    if draft_video not in ("full", "sparse"):
+        raise ValueError("draft_video must be 'full' or 'sparse'")
+    play_fps = config.get("play_fps", 24)
+    if type(play_fps) is not int or not 1 <= play_fps <= 120:
+        raise ValueError("play_fps must be an integer from 1 to 120")
+    preroll_s = config.get("preroll_s", 0)
+    if type(preroll_s) not in (int, float) or not 0 <= preroll_s <= 120:
+        raise ValueError("preroll_s must be a number of seconds from 0 to 120")
     source = (root / config["source"]).resolve()
     weights = (root / config["checkpoint"]).resolve()
     registry = source / "realtime/games/registry.json"
@@ -54,6 +65,14 @@ def resolve_assets(config_path: Path | None, root: Path):
             or not (source / "realtime/games" / slug / entries[slug]["cover"]).is_file()
         ):
             raise FileNotFoundError(f"Missing official game or cover: {slug}")
-    # Only the CPU game renderer is imported in the application process.
-    sys.path.insert(0, str(source / "realtime/integrations_v2"))
-    return source, weights, entries, execution, tuple(capture)
+    return (
+        source,
+        weights,
+        entries,
+        execution,
+        tuple(capture),
+        capture_format,
+        draft_video,
+        play_fps,
+        float(preroll_s),
+    )

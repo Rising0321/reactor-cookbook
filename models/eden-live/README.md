@@ -35,7 +35,8 @@ hf download VAST-AI/EdenLive --revision fc9ad921b7fab8fa6a82fe66071fe6d3bd55b429
 ```
 
 The source bundle must contain `realtime/flashdreams`, `realtime/integrations_v2`,
-and `realtime/games`. Its model implementations and game assets are used directly.
+and `realtime/games`. Its model implementations and game assets are used directly; the
+game capture (renderer, timeline and page host scripts) is vendored in `capture/`.
 Keep credentials out of source files and Docker build arguments.
 
 ## 2. Start the model
@@ -58,13 +59,25 @@ Leave the terminal running; `Ctrl+C` stops the service. Loading and the first ch
 longer than subsequent chunks. The default B200 profile enables dense FlashAttention 4,
 PyTorch compilation and the author's CUDA graph dispatch, and `warmup: true` pays the
 compilation during load: the model generates throwaway worlds until every compiled shape and
-CUDA graph exists, then forgets them. A cold load takes about 110 s on a B200 (30 s of weights,
+CUDA graph exists, then forgets them; the application then plays a short session of every
+game with no client (about 11 s), so a fresh process's first-time costs (browser launch,
+each game's first captures) fall before the server reports available. A cold load takes about 110 s on a B200 (30 s of weights,
 about 65 s of compilation); with the compile cache warm it is much shorter. The first session
 then runs at steady-state speed.
 
 To use the native eager profile, set `attention_backend: native`, `cuda_graph: false`
 and `compile_model: false` in `edenlive.yaml`, then rebuild and restart. Both profiles
 keep the same weights, four sampling steps, precision policy and history length.
+
+The game capture has two switches in `edenlive.yaml`. `capture_format: raw` (default) reads
+the canvas pixels exactly; `jpeg` restores the earlier JPEG-quality-0.8 drafts.
+`draft_video: sparse` (default) renders and reads back only the frames the model conditions
+on (every fourth), steps the game logic alone for the others, and repeats each read-back frame
+in `draft_video` until the next, so the draft track updates at 6 Hz; `full` renders and reads
+back every game frame. The conditioning is the same either way as long as a game's logic does
+not read back from its render, which holds for all seven shipped games; use `full` for a game
+that does, or when the client shows the draft at 24 fps
+([`model_behaviour.md`](model_behaviour.md)).
 
 ## 3. Open the demo
 
@@ -94,17 +107,18 @@ ports. Keep machine-specific relay credentials and network overrides outside thi
 
 | Control | Effect |
 | --- | --- |
-| Draft source (`set_source`) | `game` draws the draft from the selected game; `client` draws it from your `source_video` track, which should be sent at 24 fps. Switch any time; the world keeps its history. |
+| Draft source (`set_source`) | `game` draws the draft from the selected game; `client` draws it from your `source_video` track, sent at any steady rate from 10 to 60 fps (24 is typical); the output then plays at that rate. Switch any time; the world keeps its history. |
 | Official game | Stage one of seven original games with its matching cover and prompt. Pause before changing it. |
 | Appearance reference | Stage a PNG, JPEG or WebP, up to 25 MiB / 16 megapixels. The image is resized and center-cropped to 1280 × 704 at Start. |
 | Start / Start new world | Start the selected game and a fresh video with the chosen seed. |
 | Keyboard / on-screen keys | Hold to move or act; release to stop that control. Available actions vary by game and are listed in the demo. |
+| Mouse look (`set_look`) | A held turn and tilt rate, each -1..1, applied on every game frame until replaced; send (0, 0) when the mouse stops. It adds to the arrow keys and is limited to the game's own turn speed. Pause, a source switch, an outcome and the session's end reset it. |
 | Update prompt | Change upcoming appearance text while keeping the same world. Native game-event descriptions are added automatically. |
 | Pause / Resume | Hold both simulation and generation, then continue the same world. A prompt change while paused stays paused. |
 
 The first chunk contains 9 frames; later chunks contain 12. Each completed chunk is
 returned immediately. The native simulation advances at 60 Hz and is sampled at 24 FPS;
-both 1280 × 704 output tracks play at 24 FPS. Each draft/generated pair uses the same
+both 1280 × 704 output tracks play at `play_fps` (40 FPS by default, so the game runs 1.7× real speed; 24 plays it at real speed). Each draft/generated pair uses the same
 simulation frame and timestamp, so neither track runs ahead of the other. When generation takes longer
 than playback, both views wait together.
 
@@ -134,7 +148,7 @@ In a separate two-round, 32-chunk-per-round model benchmark, the default B200 pr
 measured about **57.6 FPS** (0.208 s per 12-frame steady-state chunk), versus **25.8 FPS**
 for the native eager profile. These timings include DINO conditioning, generation,
 cache finalization, decoding and RGB transfer; they exclude game capture, transport,
-warmup and prompt re-encoding. Playback remains **24 FPS**.
+warmup and prompt re-encoding. Playback is `play_fps`, **40 FPS** by default.
 FA4 and compiler fusions change floating-point reduction order; this profile is not claimed to
 produce bit-identical video. The raw-frame parity check above applies to the native
 fixed-kernel profile.
