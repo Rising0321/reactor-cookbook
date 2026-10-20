@@ -46,6 +46,9 @@ current seed. Selecting a scene replaces the current world and clears controls.
 These commands require a selected scene. A viewer disconnect releases
 controls while preserving the shared scene.
 
+Movement and view controls use YUME's first-person text conditioning. This
+model has no camera-pose input or geometric third-person orbit control.
+
 ## Output and completion
 
 Each successful step delivers 29 new RGB frames on `main_video`. Playback

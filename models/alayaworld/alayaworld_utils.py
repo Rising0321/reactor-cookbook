@@ -12,54 +12,11 @@ import numpy as np
 from PIL import Image, ImageOps
 
 
-def compact_rollout_cache(
-    cache: Any,
-    *,
-    max_spatial_frames: int,
-    recent_spatial_frames: int,
-) -> None:
-    """Bound generated latents and spatial memory while retaining old keyframes."""
+def compact_rollout_cache(cache: Any) -> None:
+    """Release already streamed decode outputs; preserve native spatial memory."""
     preds = getattr(cache, "preds", None)
     if isinstance(preds, list) and len(preds) > 1:
         preds[:] = preds[-1:]
-
-    bank = getattr(cache, "spatial_bank", None)
-    if bank is None:
-        return
-    pixels = bank.pixels
-    frame_indices = bank.frame_indices
-    depths = bank.depths
-    total = len(frame_indices)
-    if len(pixels) != total or len(depths) != total:
-        raise RuntimeError("AlayaWorld spatial bank members have different lengths")
-    if total <= max_spatial_frames:
-        return
-
-    recent_count = min(recent_spatial_frames, max_spatial_frames)
-    historical_count = total - recent_count
-    historical_budget = max_spatial_frames - recent_count
-    if historical_budget == 1:
-        historical = [0]
-    elif historical_budget > 1:
-        historical = [
-            index * (historical_count - 1) // (historical_budget - 1)
-            for index in range(historical_budget)
-        ]
-    else:
-        historical = []
-    keep = historical + list(range(historical_count, total))
-
-    bank.pixels = [pixels[index] for index in keep]
-    bank.frame_indices = [frame_indices[index] for index in keep]
-    bank.depths = [depths[index] for index in keep]
-    world_points = getattr(bank, "world_points", None)
-    if isinstance(world_points, dict):
-        bank.world_points = {
-            new_index: world_points[old_index]
-            for new_index, old_index in enumerate(keep)
-            if old_index in world_points
-        }
-
 
 def uploaded_image_video(
     image: bytes,

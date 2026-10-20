@@ -14,8 +14,8 @@ from reactor_runtime import ApplicationError, CommandError, StepOutcome, Uploade
 
 import lyra2
 from lyra2 import Lyra2
-from lyra2_images import prepare_image
 from lyra2_camera import Lyra2CameraPlanner
+from lyra2_images import prepare_image
 from lyra2_model import Lyra2Input, Lyra2Model, NoAnchor
 from lyra2_types import ChunkCompleted, Lyra2State
 

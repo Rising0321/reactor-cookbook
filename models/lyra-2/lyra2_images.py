@@ -1,6 +1,7 @@
 """Prepare Lyra's native 768x448 seed pixels on the CPU."""
 
 import io
+
 import numpy as np
 from PIL import Image
 from reactor_runtime import CommandError, UploadedFile

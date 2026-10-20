@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
@@ -14,6 +15,47 @@ class CameraChunk:
 
     w2c: np.ndarray
     intrinsics: np.ndarray
+
+
+def load_camera_path(data: bytes) -> np.ndarray:
+    """Validate anchor plus a whole number of native 80-frame C2W chunks."""
+    if len(data) > 2 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 2 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Expected JSON containing only poses")
+    poses = np.asarray(payload["poses"], dtype=np.float64)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N,4,4]")
+    if len(poses) < 81 or (len(poses) - 1) % 80:
+        raise ValueError("Pose count must be 80*chunks+1")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Poses must be finite homogeneous transforms")
+    rotations = poses[:, :3, :3]
+    if not np.allclose(
+        rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
+        raise ValueError("Pose rotations must be proper orthonormal matrices")
+    return np.ascontiguousarray(poses)
+
+
+def camera_path_chunk(
+    poses: np.ndarray, calibration: np.ndarray, index: int, intrinsics: np.ndarray
+) -> CameraChunk:
+    """Slice the fixed authored trajectory after one-time native seed calibration."""
+    selected = poses[1 + 80 * index : 81 + 80 * index]
+    if len(selected) != 80:
+        raise ValueError("Camera path exhausted")
+    return CameraChunk(
+        w2c=np.ascontiguousarray(
+            np.linalg.inv(calibration @ selected), dtype=np.float32
+        ),
+        intrinsics=np.repeat(
+            np.asarray(intrinsics, dtype=np.float32)[None], 80, axis=0
+        ),
+    )
 
 
 def _rotation(axis: str, angle: float) -> np.ndarray:

@@ -6,11 +6,9 @@ import sys
 
 import numpy as np
 import torch
-
 from yume_assets import YumeConfig
-from yume_model import Movement, View
-
 from yume_controls import conditioned_prompt
+from yume_model import Movement, View
 
 
 class YumeBackend:
@@ -37,8 +35,6 @@ class YumeBackend:
             .requires_grad_(False)
         )
         self.wan.vae.model.to(self.device)
-        for parameter in self.wan.vae.model.parameters():
-            parameter.data = parameter.data.to(self.dtype)
         self.model_input_latent: torch.Tensor | None = None
         self.model_input_pixels: torch.Tensor | None = None
         self.mode: str | None = None
@@ -67,23 +63,20 @@ class YumeBackend:
             return
         if video is not None:
             visible = (
-                torch.from_numpy(video.copy())
-                .permute(3, 0, 1, 2)
-                .float()
-                .div(127.5)
-                .sub(1)
+                _resize_conditioning(
+                    video,
+                    video=True,
+                    height=self.config.height,
+                    width=self.config.width,
+                )
+                .permute(1, 0, 2, 3)
                 .to(self.device)
             )
         else:
             assert image is not None
-            pixels = (
-                torch.from_numpy(image.copy())
-                .permute(2, 0, 1)
-                .float()
-                .div(127.5)
-                .sub(1)
-                .to(self.device)
-            )
+            pixels = _resize_conditioning(
+                image, video=False, height=self.config.height, width=self.config.width
+            )[0].to(self.device)
             visible = torch.zeros(
                 (3, 33, self.config.height, self.config.width), device=self.device
             )
@@ -105,7 +98,7 @@ class YumeBackend:
     def generate_chunk(
         self, *, prompt: str, movement: Movement, view: View
     ) -> np.ndarray:
-        """Denoise only the newest eight latents, decode one 32-frame chunk, and retain clean context."""
+        """Denoise eight new latents, decode 29 RGB frames, and retain clean context."""
         from wan23.utils.utils import masks_like
 
         text = conditioned_prompt(prompt, movement, view)
@@ -121,7 +114,7 @@ class YumeBackend:
                 seed=self.generator.initial_seed(),
                 offload_model=False,
             )
-            latent = noise.to(self.dtype)
+            latent = noise
             mask2 = None
         else:
             if self.model_input_latent is None:
@@ -160,7 +153,7 @@ class YumeBackend:
                     ),
                     generator=self.generator,
                     device=self.device,
-                    dtype=self.dtype,
+                    dtype=self.model_input_latent.dtype,
                 )
                 latent = torch.cat(
                     [self.model_input_latent, fresh[:, -latent_frames:]], dim=1
@@ -175,7 +168,7 @@ class YumeBackend:
                         noise[:, -latent_frames:],
                     ],
                     dim=1,
-                ).to(self.dtype)
+                )
 
         sigmas = _sampling_sigmas(self.config.sample_steps, self.config.shift)
         for index, sigma in enumerate(sigmas):
@@ -204,7 +197,7 @@ class YumeBackend:
             latent = torch.cat([latent[:, :-latent_frames], tail], dim=1)
 
         with torch.autocast("cuda", dtype=self.dtype):
-            video = self.wan.vae.decode([latent[:, -latent_frames:]])[0][
+            video = self.wan.vae.decode([latent[:, -latent_frames:].float()])[0][
                 :, -self.config.frames_per_chunk :
             ]
         if self.model_input_latent is None:
@@ -241,6 +234,23 @@ class YumeBackend:
         self.mode = None
         self.chunk_index = 0
         torch.cuda.empty_cache()
+
+
+def _resize_conditioning(
+    pixels: np.ndarray, *, video: bool, height: int, width: int
+) -> torch.Tensor:
+    """Match sample_5b's floating-point image/video interpolation and ordering."""
+    batch = pixels if video else pixels[None]
+    tensor = torch.from_numpy(batch.copy()).permute(0, 3, 1, 2).float().div(255.0)
+    if video:
+        tensor = tensor.sub(0.5).div(0.5)
+        return torch.nn.functional.interpolate(
+            tensor, size=(height, width), mode="bicubic", align_corners=False
+        ).clamp(-1, 1)
+    tensor = torch.nn.functional.interpolate(
+        tensor, size=(height, width), mode="bilinear", align_corners=False
+    )
+    return tensor.sub(0.5).mul(2)
 
 
 def _sampling_sigmas(steps: int, shift: float) -> np.ndarray:

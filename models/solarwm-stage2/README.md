@@ -4,6 +4,16 @@ Generate an interactive video world from an uploaded image, a prompt and
 six-axis camera motion with [SolarWM](https://github.com/Junchao-cs/SolarWM).
 This recipe serves the Wan2.2 TI2V-5B Stage2 checkpoint on one B200.
 
+## Finite camera paths
+
+After `set_image`, upload JSON with `poses`, an array of OpenCV camera-to-world
+matrices, and pass the uploaded file to `set_camera_path(trajectory=...)`.
+Provide exactly `12K-3` RGB-frame poses for `K` chunks (up to 320 chunks).
+The first pose anchors the relative path; output contains 9 frames in the
+first chunk and 12 in each later chunk. Generation stops at the path end.
+`reset` replays the selected path and `set_image` clears it. Held camera-axis
+commands are unavailable while a path is selected.
+
 ## Run
 
 Requires the Reactor CLI, Docker, NVIDIA Container Toolkit, sufficient model

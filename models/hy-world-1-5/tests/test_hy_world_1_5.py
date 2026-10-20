@@ -92,6 +92,7 @@ def test_contract_is_atomic_and_documents_command_results() -> None:
         "reset",
         "set_image",
         "random_image",
+        "set_camera_path",
     }
     assert all("Emits" in command.description for command in contract.commands.values())
     assert all(

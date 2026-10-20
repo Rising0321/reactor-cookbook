@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import numpy as np
-
 from lyra2_backend import Lyra2Backend
 
 

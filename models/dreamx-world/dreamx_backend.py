@@ -276,11 +276,19 @@ class DreamXBackend:
         )
         if has_reference:
             relative_camera_to_world = relative_camera_to_world[1:]
-        viewmats = torch.as_tensor(
-            np.linalg.inv(relative_camera_to_world),
+        relative = torch.as_tensor(
+            relative_camera_to_world.astype(np.float32),
             device=self._device,
             dtype=self._dtype,
         )
+        # Native PRoPE rounds c2w to inference precision before SE(3) inversion.
+        rotation = relative[..., :3, :3].transpose(-1, -2)
+        viewmats = torch.zeros_like(relative)
+        viewmats[..., :3, :3] = rotation
+        viewmats[..., :3, 3] = -torch.einsum(
+            "...ij,...j->...i", rotation, relative[..., :3, 3]
+        )
+        viewmats[..., 3, 3] = 1.0
         viewmats = (
             viewmats.unsqueeze(1)
             .expand(-1, _TOKENS_PER_LATENT_FRAME, -1, -1)
@@ -388,6 +396,6 @@ class DreamXBackend:
 
 def _pose_world_to_camera(pose: np.ndarray) -> np.ndarray:
     """Return a homogeneous world-to-camera matrix from one 19-value pose row."""
-    matrix = np.eye(4, dtype=np.float32)
-    matrix[:3] = np.asarray(pose[7:], dtype=np.float32).reshape(3, 4)
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3] = np.asarray(pose[7:], dtype=np.float64).reshape(3, 4)
     return matrix

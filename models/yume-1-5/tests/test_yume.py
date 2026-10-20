@@ -15,7 +15,6 @@ import pytest
 from PIL import Image
 from reactor_runtime import ApplicationError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
-
 from yume import Yume15
 from yume_assets import read_config
 from yume_controls import conditioned_prompt
@@ -329,7 +328,6 @@ def test_model_error_reaches_output_without_counting_step() -> None:
 
 def test_bad_video_is_command_error():
     from reactor_runtime import CommandError
-
     from yume_images import prepare_video
 
     with pytest.raises(CommandError, match="decoded"):
@@ -416,14 +414,13 @@ def test_image_anchor_is_prepared_once():
     app._config = read_config(Path(__file__).parents[1] / "yume.yaml")
     asyncio.run(app.set_image(uploaded_image(), "forest", 42))
     anchor = asyncio.run(app.process_input()).anchor
-    assert anchor.media.shape == (704, 1280, 3)
+    assert anchor.media.shape == (32, 32, 3)
     assert anchor.media.dtype == np.uint8
     assert anchor.media is asyncio.run(app.process_input()).anchor.media
 
 
 def test_video_preparation_is_bounded(monkeypatch):
     import av
-
     from yume_images import prepare_video
 
     class Container:
@@ -442,7 +439,7 @@ def test_video_preparation_is_bounded(monkeypatch):
 
     monkeypatch.setattr(av, "open", lambda _: Container())
     result = prepare_video(UploadedFile("video.mp4", "video/mp4", b"fixture"))
-    assert result.shape == (33, 704, 1280, 3)
+    assert result.shape == (33, 16, 16, 3)
 
 
 def test_model_imports_without_runtime():
@@ -522,3 +519,12 @@ def test_video_scene_passes_prepared_cpu_anchor(monkeypatch):
     step = asyncio.run(app.process_input())
     assert step.anchor.media is frames and step.anchor.mode == "video_to_video"
     decode.assert_called_once_with(media)
+
+
+def test_uploaded_rgba_uses_native_black_background():
+    image = Image.new("RGBA", (2, 2), (255, 128, 64, 0))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    actual = prepare_image(UploadedFile("alpha.png", "image/png", buffer.getvalue()))
+    assert actual.shape == (2, 2, 3)
+    assert not actual.any()

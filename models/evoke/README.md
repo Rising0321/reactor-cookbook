@@ -1,5 +1,15 @@
 # Run EVOKE through Reactor Runtime
 
+## Finite camera paths
+
+After image or video selection, `set_camera_path(trajectory)` accepts a JSON
+upload containing `poses` with shape `[36 * chunks, 4, 4]` at 24 FPS.
+Camera-to-world matrices are anchored to the first supplied pose and continue
+from the selected conditioning. Each chunk emits 36 frames; generation stops
+at the path end. `reset` replays it. Selecting new conditioning restores held
+camera controls. Uploads are limited to 16 MiB; text-only worlds do not accept
+camera paths.
+
 The adapter uses Reactor Runtime 3.5's native step loop. `evoke.py` owns commands
 and camera planning; `evoke_model.py` owns the persistent inference worker and
 rollout state. Frozen inputs and results carry one native chunk per step and
@@ -171,9 +181,8 @@ mode and filenames, prompt, seed, completed and next chunk, and all six
 camera axes. A newly connected viewer and every completed chunk receive the
 same snapshot.
 
-After 2,048 chunks, the adapter starts a fresh rollout from the active condition
-and emits `rollout_restarted`. This bounds the preallocated pose timeline while
-keeping checkpoints and the worker resident.
+Generation stops after 2,048 chunks and preserves the final state. Use `reset`
+or select new conditioning to start another rollout with the loaded checkpoints.
 
 ## Public source and model assets
 

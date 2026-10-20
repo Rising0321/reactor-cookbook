@@ -7,6 +7,14 @@ from typing import Any
 
 import numpy as np
 import torch
+from echo_wm_assets import EchoWMConfig
+from echo_wm_attention import (
+    AttentionBenchmark,
+    benchmark_attention_backends,
+    resolve_attention_backend,
+    set_attention_backend,
+)
+from echo_wm_camera import CameraChunk
 from helpers.action_camera import default_k_pix
 from helpers.action_condition import (
     _INTERNAL_TRANSLATION_CALIBRATION,
@@ -37,15 +45,6 @@ from ltx_pipelines.utils import ModelLedger, combined_image_conditionings
 from ltx_pipelines.utils.args import ImageConditioningInput
 from ltx_pipelines.utils.helpers import create_noised_state, noise_video_state
 from ltx_pipelines.utils.types import PipelineComponents
-
-from echo_wm_assets import EchoWMConfig
-from echo_wm_attention import (
-    AttentionBenchmark,
-    benchmark_attention_backends,
-    resolve_attention_backend,
-    set_attention_backend,
-)
-from echo_wm_camera import CameraChunk
 
 
 class EchoWMBackend:
@@ -149,10 +148,38 @@ class EchoWMBackend:
         return dict(self._last_profile)
 
     @torch.inference_mode()
-    def reset(self, *, image: Path, prompt: str, seed: int, fov_degrees: float) -> None:
+    def reset(
+        self,
+        *,
+        image: Path,
+        prompt: str,
+        seed: int,
+        fov_degrees: float,
+        chunks: int | None = None,
+    ) -> None:
         """Initialize upstream conditioning, buffers, and bounded caches."""
-        self.end_session(release_cuda_cache=False)
         config = self._config
+        horizon = config.max_chunks if chunks is None else chunks
+        if (
+            not isinstance(horizon, int)
+            or isinstance(horizon, bool)
+            or not 1 <= horizon <= config.max_chunks
+        ):
+            raise ValueError(
+                "Rollout chunks must be an integer within the configured capacity"
+            )
+        self.end_session(release_cuda_cache=False)
+        self._total_video_latents = 1 + config.video_chunk_size * horizon
+        self._total_pixel_frames = 1 + config.frames_per_chunk * horizon
+        self._video_blocks = causal_video_blocks(
+            self._total_video_latents, config.video_chunk_size
+        )
+        self._audio_blocks = causal_audio_blocks(
+            self._total_video_latents, config.video_chunk_size
+        )
+        self._audio_latents = causal_audio_frames(
+            self._total_video_latents, config.video_chunk_size
+        )
         encoded_prompt = self._encode_prompt(prompt)
         output_shape = VideoPixelShape(
             1,
@@ -194,6 +221,8 @@ class EchoWMBackend:
             self._device,
         )
         action_cond = self._empty_action_condition(fov_degrees)
+        # Native causal_rollout starts a fresh RNG after conditioning/noise setup.
+        generator = torch.Generator(device=self._device).manual_seed(seed)
         buffers = _RolloutBuffers.create(
             video_state.clean_latent,
             audio_state.clean_latent,

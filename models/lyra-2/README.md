@@ -1,5 +1,16 @@
 # Play Lyra 2.0 through Reactor
 
+`set_camera_path(trajectory)` accepts a finite JSON `poses[N,4,4]` camera-to-world
+path after image selection. Include the image anchor and 80 new poses per chunk
+(`N = 80 × chunks + 1`), up to 2 MiB. Lyra first calibrates the selected image
+without emitting video; the path then aligns once to that calibrated camera
+and uses its predicted intrinsics. Future poses retain the authored trajectory
+while native spatial-memory and pose correction continue inside the model.
+Generation stops after the final chunk. `reset` recalibrates and rewinds;
+image selection restores held controls. `camera_path_selected` reports path
+length and `state_update` includes `camera_path_chunks` and
+`camera_path_complete`.
+
 Explore an image-conditioned video world with
 [Lyra 2.0](https://github.com/nv-tlabs/lyra/tree/main/Lyra-2).
 Change the scene description and control six-axis camera motion while the
