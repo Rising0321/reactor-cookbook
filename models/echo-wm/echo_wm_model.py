@@ -54,6 +54,7 @@ class EchoInput:
     prompt: str
     poses: np.ndarray
     fov_degrees: float
+    rollout_chunks: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,7 @@ class EchoModel:
         self._config: EchoWMConfig | None = None
         self._world_id: int | None = None
         self._chunk_index = 0
+        self._rollout_limit = 0
         self._prompt = ""
 
     def load(self, config: EchoWMConfig) -> None:
@@ -121,11 +123,17 @@ class EchoModel:
                     prompt=input.prompt,
                     seed=input.anchor.seed,
                     fov_degrees=input.fov_degrees,
+                    chunks=input.rollout_chunks,
                 )
             self._world_id = input.world_id
             self._chunk_index = 0
+            self._rollout_limit = (
+                config.max_chunks
+                if input.rollout_chunks is None
+                else input.rollout_chunks
+            )
             self._prompt = input.prompt
-        if self._chunk_index >= config.max_chunks:
+        if self._chunk_index >= self._rollout_limit:
             raise RolloutExhausted(input.world_id)
         video, audio = backend.generate_chunk(
             CameraChunk(latent_poses=input.poses), fov_degrees=input.fov_degrees
@@ -137,7 +145,7 @@ class EchoModel:
             world_id=input.world_id,
             chunk_index=self._chunk_index,
             prompt=self._prompt,
-            complete=self._chunk_index >= config.max_chunks,
+            complete=self._chunk_index >= self._rollout_limit,
             profile=dict(backend.last_profile),
         )
 

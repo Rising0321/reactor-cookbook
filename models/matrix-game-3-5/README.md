@@ -1,5 +1,15 @@
 # Matrix-Game-3.5 example
 
+`set_camera_path(trajectory)` accepts a finite JSON `poses[N,4,4]` camera-to-world
+path after image selection. Include one initial anchor plus 12 new RGB camera
+poses per chunk (`N = 12 × chunks + 1`), up to 2 MiB and the configured rollout
+limit. The first pose is rigidly aligned to the native image camera, preserving
+the relative trajectory and native intrinsics. The path stops at its final
+chunk; `reset` rewinds it and `set_image` restores held-axis control. The
+`camera_path_selected` response reports output length, and `state_update`
+includes `camera_path_chunks`. This deployment uses the distilled first-person
+checkpoint; upstream third-person generation uses a separate checkpoint.
+
 The adapter uses Reactor Runtime 3.5's native step loop. `process_input()` plans
 camera poses, `generate()` forwards one chunk to `MatrixGame35Model`, and
 `process_output()` publishes video and state updates. The model owns the

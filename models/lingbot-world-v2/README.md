@@ -14,6 +14,29 @@ six-axis camera motion.
 The adapter loads an exact tested source revision from Reactor's weights cache
 and calls the upstream causal-fast inference components directly.
 
+## Uploaded camera paths
+
+For reproducible first- or third-person camera motion, upload an anchor with
+`set_image`, then upload JSON and call `set_camera_path(trajectory=upload)`.
+The JSON contains `poses` (an array of 4×4 OpenCV camera-to-world transforms,
+one per RGB frame at 16 FPS) and `intrinsics` (`[fx, fy, cx, cy]`, calibrated
+for 832×480). Coordinates are X right, Y down, Z forward. Uploads are limited
+to 2 MiB and the configured rollout length. Rotation blocks must be rigid.
+
+The command starts a fresh rollout from the selected image, retaining its
+prompt and seed. Its `camera_path_selected` response reports the accepted
+`chunks`, output `frames`, and uploaded `source_frames`. The first output is
+13 frames; each subsequent output is 16 frames. Path resampling rounds down
+to complete chunks, so 49 input poses produce 3 chunks / 45 output frames.
+Generation stops at path end without padding, looping, or resetting history.
+
+`reset` replays the selected path. `set_image` or `random_image` clears it and
+restores interactive camera controls. While a path is selected, `set_camera`
+and `release_camera` return `command_error`; prompt updates remain available.
+`state_update.camera_path_chunks` is zero for interactive camera control and
+reports the finite path length otherwise. No benchmark-specific orbit or
+prompt policy is embedded in this interface: the client supplies its poses.
+
 ## Prerequisites
 
 - The [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation) and

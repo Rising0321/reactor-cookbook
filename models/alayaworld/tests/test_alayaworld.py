@@ -208,17 +208,20 @@ def test_upload_resolves_to_bytes_and_prompt_preserves_world(app):
     asyncio.run(run())
 
 
-def test_cap_requests_new_world_and_session_cleanup(app, monkeypatch):
+def test_cap_preserves_world_until_explicit_reset_and_session_cleanup(app, monkeypatch):
     app._selected_input = Path("anchor")
     app._config.max_chunks_per_rollout = 1
     app.state._world_id = 1
     asyncio.run(app.process_output(StepOutcome(result=setup_result())))
     result = AlayaResult(1, np.zeros((32, 8, 8, 3), np.uint8), 1, "Scene", 32)
     asyncio.run(app.process_output(StepOutcome(result=result)))
-    assert app.state._world_id == 2 and app.state._applied_world_id == 1
-    assert any(
-        getattr(m, "trigger", "") == "automatic_chunk_limit" for m in app.messages
-    )
+    assert app.state._world_id == 1 and app.state._applied_world_id == 1
+    assert app._state_update().next_chunk is None
+    with pytest.raises(ApplicationError, match="complete"):
+        asyncio.run(app.process_input())
+    asyncio.run(app.reset(seed=42))
+    assert app.state._world_id == 2
+    assert asyncio.run(app.process_input()).image is not None
     reset = []
     monkeypatch.setattr(app.engine, "reset", lambda: reset.append(True))
     app.on_session_ended()
@@ -229,9 +232,7 @@ def test_cap_requests_new_world_and_session_cleanup(app, monkeypatch):
 @pytest.fixture
 def native_model(monkeypatch):
     model = AlayaWorldModel()
-    model._config = SimpleNamespace(
-        max_spatial_frames=320, recent_spatial_frames=160, max_chunks_per_rollout=512
-    )
+    model._config = SimpleNamespace(max_chunks_per_rollout=512)
     model._engine = SimpleNamespace(encode_caption=lambda prompt: prompt)
     model._alaya_pipeline = SimpleNamespace(
         cfg=SimpleNamespace(sample=SimpleNamespace(temporal_stride=8)),

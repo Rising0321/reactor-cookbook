@@ -72,6 +72,7 @@ def test_session_waits_for_an_image_selection() -> None:
     assert state.completed_chunks == 0
     assert state.next_chunk is None
     assert set(ModelContract.of(MatrixGame35).commands) == {
+        "set_camera_path",
         "reset",
         "set_forward",
         "set_image",

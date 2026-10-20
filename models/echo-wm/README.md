@@ -6,6 +6,16 @@ Reactor.
 
 ## Runtime boundary
 
+### Finite camera paths
+
+After `set_image`, upload a JSON file through `set_camera_path(trajectory)`.
+The `poses` array contains camera-to-world matrices at 24 FPS with shape
+`[24 * chunks + 1, 4, 4]`. The first pose anchors the selected image.
+The reply reports the chunk count and total frames: 25 frames in the first
+chunk, then 24 per chunk. Generation stops at the path end; `reset` replays it.
+Selecting another image restores held camera controls. Field of view remains
+controlled by `set_fov`.
+
 The adapter keeps one Echo-WM rollout alive across interactive turns. An image
 anchors the first frame, a prompt conditions the world, and four pure-camera
 axes control motion. Each inference turn advances the released causal model by
@@ -137,9 +147,8 @@ retain or replace the seed.
 Every successful mutation emits a specific model message and a full
 `state_update`. `chunk_completed` reports the sampled prompt and camera state,
 media counts, wall latency, and CUDA timings for denoising, cache commit, video
-decode, and audio decode. The rollout automatically starts fresh from the same
-image after 512 chunks while retaining the prompt, seed, field of view, camera
-state, and continuous playback.
+decode, and audio decode. The rollout stops after 512 chunks and preserves its
+final state. Use `reset` or select another image to start another rollout.
 
 ## Inference performance
 

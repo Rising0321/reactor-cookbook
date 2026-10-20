@@ -347,11 +347,7 @@ class AlayaWorldModel:
             raise RuntimeError("AlayaWorld interactive decode requires history latents")
         pred = pipeline.generate(self._ar_index, cache)
         pipeline.finalize(self._ar_index, cache, pred)
-        compact_rollout_cache(
-            cache,
-            max_spatial_frames=config.max_spatial_frames,
-            recent_spatial_frames=config.recent_spatial_frames,
-        )
+        compact_rollout_cache(cache)
         frames = self._decode_new_frames(history, pred)
         if (
             frames.ndim != 4

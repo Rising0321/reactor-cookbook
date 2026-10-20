@@ -184,6 +184,16 @@ verifies the declared media type, actual JPEG/PNG/WebP/BMP codec, dimensions,
 and decodability before starting a fresh rollout. EXIF orientation is applied
 before the upstream image-conditioning path prepares its 832x480 input.
 
+## Finite camera paths
+
+After selecting an image, `set_camera_path` accepts a JSON upload containing
+`viewmats` (N × 4 × 4 world-to-camera matrices), `intrinsics` (N × 3 × 3 normalized
+camera matrices), and `actions` (N native integer labels in 0–80). Each row is
+one latent time step; N must be divisible by four. The path queues a fresh world
+and produces N / 4 chunks: 13 frames initially, then 16 per chunk.
+`reset` replays the path; selecting an image restores live camera controls.
+The `camera_path_selected` response reports the exact chunk and frame budget.
+
 ## Autoregressive memory and long sessions
 
 After the initial image-conditioned chunk, the backend selects the official

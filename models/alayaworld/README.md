@@ -135,6 +135,14 @@ non-commercial use. Gemma and Depth-Anything-3 retain their own terms.
 
 ## Controls
 
+`set_camera_path(trajectory)` accepts a JSON upload after image selection.
+Its `poses` array contains `[32 * chunks + 8, 4, 4]` camera-to-world matrices
+at 24 FPS: the first pose anchors the image, the next poses describe the generated
+frames, and seven final poses provide look-ahead. The reply reports the chunk
+and output frame counts. Each chunk emits 32 new frames; generation stops at
+the path end. `reset` replays the path. Selecting another image restores
+held camera controls. Uploads are limited to 8 MiB.
+
 - `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes plus an optional
   prompt, then resets from that image.
 - `random_image` selects a different built-in example when possible and applies
@@ -194,11 +202,8 @@ cases shipped with the pinned AlayaWorld source.
 
 ## Long-running sessions
 
-`stream.max_chunks_per_rollout` defaults to 512. After chunk 512, the adapter
-broadcasts `RolloutResetQueued`, releases camera motion, and rebuilds the
-autoregressive state from the selected image, active prompt, and seed without
-reloading model weights. Chunk numbering then starts again at 1. This bounds the
-dense camera trajectory while allowing the Reactor session to continue.
+Generation stops after 512 chunks and preserves the final world state. Use
+`reset` or select another image to start a fresh rollout without reloading weights.
 
 The recipe uses PyTorch attention and the full VAE for both display frames
 and spatial-memory pixels. It does not install FlashAttention 4 or download
@@ -209,13 +214,10 @@ Load-time warmup is disabled, so the first generation can include compilation
 latency. Chunk sizes, autoregressive history and spatial-memory limits are
 unchanged.
 
-Autoregressive history remains a 16-latent sliding window. The adapter keeps
-only the latest generated latent outside that window and bounds the spatial
-bank at 320 frames: 160 dense recent frames plus 160 keyframes sampled across
-the older trajectory. This keeps GPU memory and retrieval work bounded while
-preserving sparse long-range viewpoints within the active rollout. Very old
-revisits therefore have less spatial detail than recent ones, and the automatic
-rollout reset deliberately trades unbounded history for predictable resources.
+Autoregressive history remains a 16-latent sliding window. The native spatial
+bank retains all accumulated frames for retrieval until an explicit reset.
+Memory use grows with the rollout length. Already streamed output latents are
+released independently of the spatial bank and autoregressive history.
 
 ## Streaming decode
 
