@@ -21,8 +21,14 @@ name the project.
 
 ## Vercel dashboard (deploy from git)
 
-Import the repository and set **Root Directory** to `models/eden-live/demo`. `vercel.json` sets the rest
-(Vite, `npm ci`, `npm run build`, output `dist`). No environment variables are needed.
+Set **Root Directory** to `models/eden-live/demo`. The build needs the original
+game sources: prepare the source-only checkout from the model README in the build
+environment and set `EDEN_GAMES_ROOT` to its `realtime/games/` directory.
+Weights and a GPU are not needed to build the demo. `vercel.json` supplies
+`npm ci`, `npm run build` and output `dist`.
+
+For a deployment without a custom source-checkout step, build locally with
+`EDEN_BUNDLE` set and upload `dist/` using the Vercel CLI above.
 
 Do not set `VITE_REACTOR_URL` for a public deploy: it only prefills the Local server URL and
 makes Local the default.

@@ -28,7 +28,7 @@ import {
 import "./style.css";
 
 // Relative to the page, so the build works from any static host or sub-path.
-const coverUrl = (game) => `${import.meta.env.BASE_URL}covers/${game}.png`;
+const coverUrl = (game) => `${import.meta.env.BASE_URL}local-games/${game}/cover.png`;
 
 // Keep a handle on the peer connections the SDK opens, so the page can read the
 // browser's own receive/decode/drop counters for the video tracks.

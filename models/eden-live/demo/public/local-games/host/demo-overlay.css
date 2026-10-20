@@ -1,9 +1,0 @@
-:host, .demo-hud {font:14px system-ui,sans-serif;color:#fff;pointer-events:none;text-shadow:0 1px 4px #000}
-[hidden] {display:none!important}
-.objective {position:absolute;top:18px;left:20px;display:grid;gap:6px;max-width:75%}
-.objective strong {font-size:18px;letter-spacing:.05em}
-.objective small {font-size:13px}
-.crosshair {position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:24px}
-.stats {position:absolute;bottom:18px;left:20px;right:20px;padding:10px;background:#111b;border-radius:8px}
-.result {position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(360px,80%);padding:28px;background:#101722ed;border:1px solid #ffffff30;border-radius:16px;text-align:center;pointer-events:auto}
-.result h2 {margin:0 0 12px}.result p {line-height:1.5}.result button {border:0;border-radius:8px;background:#a8e8d0;padding:12px 24px;font:inherit;cursor:pointer}.error {display:block;margin-top:8px}

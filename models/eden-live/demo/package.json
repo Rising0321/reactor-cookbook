@@ -13,7 +13,8 @@
     "@reactor-team/ui": "1.4.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "hls.js": "^1.6.15"
+    "hls.js": "^1.6.15",
+    "three": "0.186.1"
   },
   "devDependencies": {
     "vite": "6.4.3"

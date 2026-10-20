@@ -3,6 +3,7 @@
 
 import asyncio
 import contextlib
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -124,8 +125,11 @@ class EdenGame:
         capture_format: str = "jpeg",
         draft_video: str = "full",
     ) -> None:
+        integrations = str(source / "realtime/integrations_v2")
+        if integrations not in sys.path:
+            sys.path.insert(0, integrations)
+        from eden.apps.game2v.game_timeline import GameTimeline
         from capture.game_renderer import GameCaptureWorker
-        from capture.game_timeline import GameTimeline
 
         self.slug = slug
         self.timeline = GameTimeline(slug)

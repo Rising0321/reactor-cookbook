@@ -268,6 +268,12 @@ Dockerfile). The game runs in headless Chromium (Playwright) in the
 application process, rendering on the model's GPU; the model runs in its own process behind the runtime's
 `DistributedRunner` with `world_size=1`.
 
+The game timeline and unchanged page assets are loaded from the prepared
+upstream source. `capture/` contains only the renderer and host scripts with
+Reactor-specific capture or input changes. The demo also reads upstream game
+files and covers, packaging them into `dist/` at build time; they are not
+duplicated in the integration's source tree.
+
 **Load compiles and warms up** (`warmup: true` in `edenlive.yaml`). After the
 weights load, `EdenModel.load()` generates throwaway worlds with random input:
 one past the steady-state graph (from chunk 6, after 2 wrapper warmups) and

@@ -24,14 +24,15 @@ from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlsplit
 
 import numpy as np
 from loguru import logger
 from PIL import Image
 
-from .game_timeline import GameChunkPacket, GameFramePacket
+if TYPE_CHECKING:
+    from eden.apps.game2v.game_timeline import GameChunkPacket, GameFramePacket
 
 # Frames are encoded at the model's own frame size so no resampling happens
 # between the game, the condition encoder and the game video sent to the client.

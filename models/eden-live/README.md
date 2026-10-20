@@ -46,7 +46,8 @@ source bundle can be reused instead.
 
 The source bundle must contain `realtime/flashdreams`, `realtime/integrations_v2`,
 and `realtime/games`. Its model implementations and game assets are used directly; the
-game capture (renderer, timeline and page host scripts) is vendored in `capture/`.
+timeline and unchanged host resources are imported from the same source. `capture/`
+contains the renderer and host scripts that implement Reactor-specific capture and input handling.
 Keep credentials out of source files and Docker build arguments.
 
 ## 2. Start the model
@@ -116,6 +117,11 @@ ports. Keep machine-specific relay credentials and network overrides outside thi
 
 `npm run build` writes a static site to `demo/dist/` that works from any static host;
 [demo/DEPLOY.md](demo/DEPLOY.md) covers deploying it to Vercel.
+The demo reads the original `realtime/games/` from the surrounding EdenLive repository,
+or from `$EDEN_BUNDLE/source/` in Cookbook. `EDEN_GAMES_ROOT` can select a different
+compatible games directory. Vite serves those files in development and includes them
+in `dist/` for deployment. Game code and covers stay upstream; Three.js is installed
+by `npm ci`.
 
 ## Controls and playback
 

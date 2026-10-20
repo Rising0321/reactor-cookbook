@@ -1,8 +1,7 @@
 // One official game run inside this page, for the "Game in your browser" source.
 //
-// The game's files are served from /local-games/ (the model bundle's games/ directory:
-// host/, runtime/, one directory per game, and three's build), copied into public/local-games/;
-// without them mounting fails with a message saying so. The game runs in a
+// Vite serves /local-games/ from upstream's realtime/games and emits those assets into
+// dist/ for static deployment. Three.js comes from npm. The game runs in a
 // same-origin iframe because its modules import "three" and "/host/..." by bare or root
 // path, which only an import map in the game's own document can resolve. The page reads
 // the game's canvas (rendered with preserveDrawingBuffer, so it can be copied at any time)

@@ -198,13 +198,12 @@ need a session against the deployment.
 
 ## The vendored game capture
 
-The game capture runs from `capture/`, not from the source bundle.
-It used to be imported from the bundle's `realtime/integrations_v2`, which
-meant every change to it had to be a change to the bundle. Vendored, it can
-be changed and reviewed here. The games themselves (the seven game folders,
-`registry.json`, `runtime/` and `node_modules/`) still come from the bundle's
-`realtime/games/`; the application no longer puts `realtime/integrations_v2`
-on its `sys.path` (the model half still does, for the model code). One
+The adapted renderer and modified host scripts run from `capture/`.
+The unchanged `GameTimeline` is imported from the bundle's
+`realtime/integrations_v2/eden/apps/game2v/game_timeline.py`, and unchanged
+page resources, including `host/html-to-image.js`, come from the bundle's
+`realtime/games/`. The application adds `realtime/integrations_v2` to its
+import path when opening a game; the model worker resolves its own imports. One
 capture serves every game; what is particular to a game stays with that game
 in the bundle: its JS and assets, its registry entry (title, base prompt,
 cover, controls) and the event sentences its `dynamicPrompt` writes.
@@ -212,27 +211,32 @@ cover, controls) and the event sentences its `dynamicPrompt` writes.
 Origin: the EdenLive source ("EdenLive-Official"), `realtime/` tree, as
 shipped in the eden-live 1.1.0 bundle under `source/realtime/`. That tree is
 NVIDIA FlashDreams' EdenLive integration, Apache-2.0 (its `LICENSE`,
-`NOTICE` and `REUSE.toml`); `html-to-image.js` is MIT (declared in the same
-`REUSE.toml`). `capture/LICENSE` is the Apache-2.0 text,
-`capture/NOTICE` is upstream's NOTICE unchanged, and
-`capture/LICENSE.html-to-image` carries the MIT notice.
+`NOTICE` and `REUSE.toml`). `capture/LICENSE` is the Apache-2.0 text and
+`capture/NOTICE` is upstream's NOTICE unchanged. The MIT `html-to-image.js`
+library is served from upstream, with its upstream attribution.
 
 | Vendored file | Upstream path under `realtime/` | Upstream SHA-256 | Changed |
 |---|---|---|---|
 | `capture/game_renderer.py` | `integrations_v2/eden/apps/game2v/game_renderer.py` | `9d8328c447c0ee2bfbb0f491a3f0e985075f97949a6b4eba1cefcaedb1ab93fb` | yes, below |
-| `capture/game_timeline.py` | `integrations_v2/eden/apps/game2v/game_timeline.py` | `f45be058954519c93525f694da26cb59fa845401ea70b72baf0099c946f36b6e` | no |
 | `capture/host/backend.js` | `games/host/backend.js` | `96133c3601c3319af1e1068e945911f0e15ddc3a0955a7a9ca177b28d72945cb` | yes, below |
 | `capture/host/input.js` | `games/host/input.js` | `447d5c41496c00d45887a0cdf553f938e1643e2df75221c331082833af185457` | yes, below |
 | `capture/host/demo-runtime.js` | `games/host/demo-runtime.js` | `78c82174af1f8d0c342b204e7bda5ebb26c013dd7e55019a68bcc729965b1acc` | yes, below |
 | `capture/host/standalone.js` | `games/host/standalone.js` | `9116342aef4af2dc6181b47cd64e2628aca43f6b16dc76076745f40e80f4a309` | yes, below |
-| `capture/host/html-to-image.js` | `games/host/html-to-image.js` | `a90b42909d80964269ef6d5f3d1e4a5a7e2a4c263a5d2a76a9e7151901343262` | no |
 
 `host/` holds the page scripts the capture path loads: `backend.js` (with
 `input.js`) drives a game built on `createRuntime`, as all seven official
 games are, and every one of them imports `demo-runtime.js`;
-`standalone.js` and `html-to-image.js` drive an imported standalone game.
+`standalone.js` and upstream's `html-to-image.js` drive an imported standalone game.
 The other files in upstream's `games/host/` belong to its live-preview page
 and are still served from the bundle if a page asks for them.
+
+The browser demo uses the original seven game directories and covers directly:
+Vite maps them to `local-games/` in development and emits them into `dist/`.
+The mapping accepts both the original slugs and the renamed upstream
+`deepwater-shock`, `kaiju-rampage` and `desert-crossfire` directories.
+Only the input and demo-runtime hosts are needed by this frontend's iframe.
+Three.js comes from npm, with its license included in the build. None of these
+unchanged assets are checked into the adapter.
 
 Changes to `game_renderer.py`:
 

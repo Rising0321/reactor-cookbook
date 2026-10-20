@@ -2,6 +2,9 @@
 $schema: reactor/v2
 model:
   name: eden-live
+  # 2.1.4: PATCH. Reuse upstream games, covers and capture timeline. The demo
+  # packages source assets during build; Three.js is an npm dependency.
+  # No command, sampling, cache or playback change.
   # 2.1.3: PATCH. Every Node.js process in the container (only the Playwright
   # drivers that relay the game browser) starts with `--disable-sigusr1`. An
   # OpenTelemetry eBPF agent on the nodes opened a driver's debugger with
@@ -178,7 +181,7 @@ model:
   # description is rewritten for clients. PORTING.md records the decisions.
   # edenlive 0.1.0: initial port, imported from
   # reactor-team/reactor-edenlive @ e11bca2.
-  version: 2.1.3
+  version: 2.1.4
   description: |
     EdenLive 5B: reskins a draft video into a generated world, chunk by chunk,
     from an appearance reference and a prompt. The draft comes from one of
