@@ -92,6 +92,13 @@ npm ci
 npm run dev -- --host 127.0.0.1
 ```
 
+Vite reuses `examples/sem-highway_synthwave/` from a sibling `SolarRenderer` or
+`source` checkout when available. Otherwise, it automatically downloads the three
+official sample files from upstream revision `a2371eaecff9a8ab378b5ec36199c5863d138074`
+into `demo/node_modules/.cache/solarrenderer/` on the first run and verifies their
+SHA-256 checksums. No sample path configuration is needed. Production builds include
+the samples and can be served independently.
+
 Open http://localhost:5173. The default Runtime address is http://localhost:8080;
 set `VITE_RUNTIME_URL` before starting the demo to use another local endpoint.
 Click **Connect**, choose **Synthwave Highway** to fill the official video, image
