@@ -136,10 +136,10 @@ class StateUpdate(ModelMessage):
 
 class GameFinished(ModelMessage):
     world_id: int = MessageField(description="The game that finished.")
-    reason: Literal["native_game_ended", "rollout_limit", "native_game_error"] = (
-        MessageField(
-            description="`native_game_ended`, `rollout_limit`, or `native_game_error`. Start a new game to continue."
-        )
+    reason: Literal[
+        "native_game_ended", "rollout_limit", "native_game_error", "model_error"
+    ] = MessageField(
+        description="`native_game_ended`, `rollout_limit`, `native_game_error`, or `model_error`. Start a new game to continue."
     )
 
 

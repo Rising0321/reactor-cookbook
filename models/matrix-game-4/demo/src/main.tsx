@@ -49,6 +49,9 @@ async function waitForSessionCleanup() {
   );
 }
 
+// The SDK reports a refusal's code and reason on its `error` event.
+class Refused extends Error {}
+
 type World = {
   scene: string | null;
   running: boolean;
@@ -109,12 +112,19 @@ function Workspace() {
   const selected = scenes.find((item) => item.id === scene)!;
   useReactorMessage((message) => {
     if (message.type === "state_update") setWorld(message.data as World);
-    if (
-      message.type === "game_finished" &&
-      (message.data as { reason: string }).reason === "native_game_error"
-    )
-      setError("Game capture stopped. Press Start game to try again.");
+    if (message.type === "game_finished") {
+      const { reason } = message.data as { reason: string };
+      if (reason === "native_game_error")
+        setError("Game capture stopped. Press Start game to try again.");
+      if (reason === "model_error")
+        setError("Generation failed. Press Start game to try again.");
+    }
   });
+  // `lastError` is never cleared, so show each new error once and let the
+  // next action clear it.
+  useEffect(() => {
+    if (lastError) setError(lastError.message);
+  }, [lastError]);
   useEffect(() => {
     if (status !== "ready") {
       setWorld(null);
@@ -133,7 +143,8 @@ function Workspace() {
     try {
       await action();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!(e instanceof Refused))
+        setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
       commandLock.current = false;
@@ -141,8 +152,7 @@ function Workspace() {
   }
   async function command(name: string, values: Record<string, unknown> = {}) {
     const response = await send(name, values);
-    if (response === undefined)
-      throw new Error(`${name} was refused. See the command error below.`);
+    if (response === undefined) throw new Refused(name);
     if (response.type === "state_update") setWorld(response.data as World);
     return response;
   }
@@ -327,9 +337,7 @@ function Workspace() {
               ? "Input captured · Esc to release"
               : "Keyboard and mouse released"}
           </p>
-          {(error || lastError) && (
-            <p role="alert">{error || String(lastError)}</p>
-          )}
+          {error && <p role="alert">{error}</p>}
         </aside>
         <section className="stage">
           <div className="stage-heading">

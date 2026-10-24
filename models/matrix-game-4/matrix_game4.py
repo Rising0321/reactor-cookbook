@@ -105,16 +105,7 @@ class MatrixGame4(ReactorApp):
                         raise NativeGameError("Native racing caption is missing")
         except NativeGameError as error:
             logger.warning("Ending game after an input failure", exc_info=True)
-            await self._close_game()
-            self._engine.reset()
-            state._running = False
-            state._reference = None
-            self._release_controls()
-            self.output.flush()
-            await self.send(self._status())
-            await self.send(
-                GameFinished(world_id=state._world_id, reason="native_game_error")
-            )
+            await self._end_game("native_game_error")
             raise ApplicationError("Game input failed; start a new game") from error
         state._reference = reference
         return MatrixGame4Input(
@@ -132,11 +123,16 @@ class MatrixGame4(ReactorApp):
 
     async def process_output(self, outcome: StepOutcome) -> MatrixGame4Output | None:
         if outcome.error is not None:
-            await self._close_game()
-            self._engine.shutdown()
-            # A failed native inference call may have mutated KV/decoder state.
-            # It must not be retried as a successful or silently reset chunk.
-            raise outcome.error
+            if not self._engine.healthy:
+                await self._close_game()
+                self._engine.shutdown()
+                raise outcome.error
+            # A failed native inference call may have mutated KV/decoder state,
+            # so the world ends and only a fresh start, which replaces that
+            # state, continues on the loaded weights.
+            logger.warning("Ending game after a model error", exc_info=outcome.error)
+            await self._end_game("model_error")
+            return None
         result: MatrixGame4Result = outcome.result
         state = self.state
         if result.world_id != state._world_id or result.scene != state._active_scene:
@@ -251,21 +247,21 @@ class MatrixGame4(ReactorApp):
 
     @event(
         name="set_paused",
-        description="Hold or resume the current game and video without starting a new world. Fails with `not_running` when no game is active.",
+        description="Hold or resume the current game and video without starting a new world. Fails with `not_running` when no game is active, or `game_unavailable` when the native game stops responding.",
     )
     async def set_paused(self, paused: bool) -> StateUpdate:
         self._require_game()
         self.state.paused = paused
         if paused:
             self._release_controls()
-            self._send_controls()
+            self._send_command_controls()
         update = self._status()
         await self.send(update)
         return update
 
     @event(
         name="set_controls",
-        description="Atomically update held movement and buttons. Fails with `not_running` before start or after stop.",
+        description="Atomically update held movement and buttons. Fails with `not_running` before start or after stop, or `game_unavailable` when the native game stops responding.",
     )
     async def set_controls(
         self,
@@ -303,14 +299,14 @@ class MatrixGame4(ReactorApp):
             brake,
             handbrake,
         )
-        self._send_controls()
+        self._send_command_controls()
         update = self._status()
         await self.send(update)
         return update
 
     @event(
         name="look",
-        description="Apply a shooter mouse impulse at the next native physics tick. Fails with `not_running` without a game, or `wrong_scene` in racing.",
+        description="Apply a shooter mouse impulse at the next native physics tick. Fails with `not_running` without a game, `wrong_scene` in racing, or `game_unavailable` when the native game stops responding.",
     )
     def look(
         self,
@@ -322,11 +318,11 @@ class MatrixGame4(ReactorApp):
             raise CommandError(
                 "wrong_scene", "Mouse look is available in the shooter scenes"
             )
-        self._send_controls(look_x=dx, look_y=dy)
+        self._send_command_controls(look_x=dx, look_y=dy)
 
     @event(
         name="action",
-        description="Send one native action. Fails with `not_running` without a game, `wrong_scene` for an action unavailable in the loaded scene, or `wrong_mode` for race actions in free drive and recovery in pursuit.",
+        description="Send one native action. Fails with `not_running` without a game, `wrong_scene` for an action unavailable in the loaded scene, `wrong_mode` for race actions in free drive and recovery in pursuit, or `game_unavailable` when the native game stops responding.",
     )
     def action(
         self,
@@ -359,11 +355,11 @@ class MatrixGame4(ReactorApp):
                 raise CommandError(
                     "wrong_mode", "Recovery is disabled in native pursuit mode"
                 )
-            self._send_controls(action=action)
+            self._send_command_controls(action=action)
         elif action == "look_reset":
-            self._send_controls(look_reset=True)
+            self._send_command_controls(look_reset=True)
         else:
-            self._send_controls(actions=[action])
+            self._send_command_controls(actions=[action])
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
@@ -374,7 +370,11 @@ class MatrixGame4(ReactorApp):
         if not self.connected.is_set() and self.state is not None:
             self._release_controls()
             if self._game is not None:
-                self._send_controls()
+                try:
+                    self._send_controls()
+                except NativeGameError:
+                    # The next step's process_input() ends the game.
+                    logger.warning("Could not release native controls", exc_info=True)
             await self.send(self._status())
 
     @session_ended
@@ -391,6 +391,17 @@ class MatrixGame4(ReactorApp):
             game, self._game = self._game, None
             await asyncio.to_thread(game.close)
 
+    async def _end_game(self, reason: str) -> None:
+        state = self.state
+        await self._close_game()
+        self._engine.reset()
+        state._running = False
+        state._reference = None
+        self._release_controls()
+        self.output.flush()
+        await self.send(self._status())
+        await self.send(GameFinished(world_id=state._world_id, reason=reason))
+
     def _require_game(self) -> None:
         if not self.state._running:
             raise CommandError("not_running", "Start a game first")
@@ -402,6 +413,14 @@ class MatrixGame4(ReactorApp):
                 self.state, self.state._active_scene, self.state._sequence, **impulses
             )
         )
+
+    def _send_command_controls(self, **impulses) -> None:
+        try:
+            self._send_controls(**impulses)
+        except NativeGameError as error:
+            raise CommandError(
+                "game_unavailable", "The game stopped responding. Start a new game."
+            ) from error
 
     def _release_controls(self) -> None:
         state = self.state

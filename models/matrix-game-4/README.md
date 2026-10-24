@@ -141,9 +141,12 @@ another connection.
 SDK clients send held inputs through `set_controls`, including the optional
 `weapon` selection; omitting `weapon` keeps the current weapon. `state_update`
 reports typed top-level fields for controls, active scene and next-start settings.
-A failed native game launch returns `game_unavailable`. A game capture failure
-ends that game with `game_finished.reason = native_game_error`; **Start game**
-can begin another world without reloading the model weights.
+A failed native game launch returns `game_unavailable`, as does a control
+command sent after the game stops responding. A game capture failure ends that
+game with `game_finished.reason = native_game_error`, and a failed inference
+call ends it with `model_error`. In both cases **Start game** can begin another
+world without reloading the model weights. If the inference worker itself
+crashes or stops answering, the session ends with an error.
 
 ## Validation and limits
 
@@ -172,7 +175,7 @@ Castle, Racing and back to Egypt: 48 / 48 / 43 / 48 chunks, 736 frames in total.
 Keyboard/mouse input, on-screen controls, focus-loss release, pause/resume and
 TURN/TCP reconnect passed without browser errors.
 
-All 52 CPU tests pass. They exercise the application against a scripted model
+All 58 CPU tests pass. They exercise the application against a scripted model
 half, model bookkeeping with fake compute, real Runtime hooks and worker IPC,
 including refused steps, failed generation, world identity, seed isolation,
 frame pairing, pause/resume, viewer disconnects, typed control contracts and

@@ -212,13 +212,33 @@ def test_application_hooks_against_scripted_model_half(app):
         with pytest.raises(RuntimeError) as caught:
             app.generate(next_input)
         assert caught.value is failure
-        messages_before = len(app.messages)
-        with pytest.raises(RuntimeError) as caught:
-            await app.process_output(StepOutcome(error=failure, elapsed=0.1))
-        assert caught.value is failure
+        engine.reset.reset_mock()
+        output = await app.process_output(StepOutcome(error=failure, elapsed=0.1))
+        assert output is None
         assert app.state._completed_chunks == 1 and app.state._frame_end == 0
+        assert not app.state._running and app._game is None
+        assert app.messages[-2].running is False
+        assert app.messages[-1] == GameFinished(world_id=1, reason="model_error")
+        engine.reset.assert_called_once_with()
+        engine.shutdown.assert_not_called()
+
+    asyncio.run(run())
+
+
+def test_model_error_from_an_unhealthy_runner_ends_the_session(app):
+    async def run():
+        await app.start()
+        await step(app)
+        game = app._game
+        app._engine._backend.error = RuntimeError("worker crashed")
+        app._engine.healthy = False
+        messages_before = len(app.messages)
+        with pytest.raises(RuntimeError, match="worker crashed"):
+            await step(app)
+        assert game.closed and app._game is None
+        assert app.state._completed_chunks == 1
         assert len(app.messages) == messages_before
-        engine.shutdown.assert_called_once_with()
+        app._engine.shutdown.assert_called_once_with()
 
     asyncio.run(run())
 
@@ -254,18 +274,29 @@ def test_generate_does_not_read_application_state(app):
     asyncio.run(run())
 
 
-def test_failure_never_advances_completed_count(app):
+def test_model_error_ends_world_without_advancing_and_allows_restart(app):
     async def run():
         await app.start()
         await step(app)
-        game = app._game
-        app._engine._backend.error = RuntimeError("native compute failed")
-        with pytest.raises(RuntimeError, match="native compute failed"):
-            await step(app)
-        assert game.closed
+        game, backend = app._game, app._engine._backend
+        backend.error = RuntimeError("native compute failed")
+        _, output = await step(app)
+        assert output is None
+        assert game.closed and app._game is None
         assert app.state._completed_chunks == 1
         assert app.state._frame_end == 0
-        assert app._engine._failed
+        assert app.messages[-1] == GameFinished(world_id=1, reason="model_error")
+        assert backend.closes == 1 and not app._engine._failed
+        with pytest.raises(ApplicationError):
+            await step(app)
+        backend.error = None
+        await app.start()
+        for _ in range(10):
+            await step(app)
+        assert app.state._world_id == 2 and app.state._completed_chunks == 10
+        assert app._engine._backend is backend
+        assert backend.starts == [0, 0]
+        app._engine.shutdown.assert_not_called()
 
     asyncio.run(run())
 
@@ -327,6 +358,50 @@ def test_control_refusal_and_awaited_reply(app):
         with pytest.raises(CommandError) as caught:
             app.action("retry")
         assert caught.value.code == "wrong_scene"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("set_controls", {"forward": 1}),
+        ("set_paused", {"paused": True}),
+        ("look", {"dx": 5, "dy": 0}),
+        ("action", {"action": "jump"}),
+    ],
+)
+def test_lost_control_connection_is_a_named_refusal(app, name, arguments):
+    async def run():
+        await app.start()
+        await step(app)
+        game = app._game
+        game.send = Mock(side_effect=NativeGameError("lost control connection"))
+        messages_before = len(app.messages)
+        with pytest.raises(CommandError) as caught:
+            await command(app, name, **arguments)
+        assert caught.value.code == "game_unavailable"
+        assert isinstance(caught.value.__cause__, NativeGameError)
+        assert len(app.messages) == messages_before
+        app.state.paused = False
+        with pytest.raises(ApplicationError, match="Game input failed"):
+            await step(app)
+        assert game.closed
+        assert app.messages[-1] == GameFinished(world_id=1, reason="native_game_error")
+
+    asyncio.run(run())
+
+
+def test_last_viewer_leaving_tolerates_a_lost_control_connection(app):
+    async def run():
+        await app.start()
+        await step(app)
+        app.connected = asyncio.Event()
+        app.state._forward = 1
+        app._game.send = Mock(side_effect=NativeGameError("lost control connection"))
+        await app.on_disconnected(None)
+        assert app.state._forward == 0
+        assert app.messages[-1].running is True
 
     asyncio.run(run())
 
@@ -453,10 +528,16 @@ def test_real_runtime_step_loop(app, fail_at):
         await app.start()
         emitted = []
         reports = []
-        done = asyncio.Event()
+        done, finished = asyncio.Event(), asyncio.Event()
+        send = app.send
 
         async def emit(output, *, compute_time=None):
             emitted.append((output, compute_time))
+
+        async def record(message):
+            await send(message)
+            if isinstance(message, GameFinished):
+                finished.set()
 
         def report(value, session, rate):
             reports.append(value)
@@ -467,6 +548,7 @@ def test_real_runtime_step_loop(app, fail_at):
                 done.set()
 
         app.emit = emit
+        app.send = record
         app._report_step = report
         app._live.set()
         task = asyncio.create_task(app.run())
@@ -477,10 +559,16 @@ def test_real_runtime_step_loop(app, fail_at):
                 # Fixed native capture cadence, not model-compute-based playout.
                 assert all(value[1] is None for value in emitted)
             else:
-                with pytest.raises(RuntimeError, match="real loop failure"):
-                    await asyncio.wait_for(task, timeout=5)
-                assert len(reports) == len(emitted) == fail_at
+                await asyncio.wait_for(finished.wait(), timeout=5)
+                await asyncio.sleep(0.05)
+                assert not task.done()
+                # The recovered step is reported without media; later steps
+                # are refused until a new start.
+                assert len(emitted) == fail_at and len(reports) == fail_at + 1
                 assert app.state._completed_chunks == fail_at
+                assert not app.state._running
+                assert app.messages[-1].reason == "model_error"
+                app._engine.shutdown.assert_not_called()
         finally:
             if not task.done():
                 task.cancel()
@@ -825,8 +913,16 @@ def test_control_schema_has_one_path_and_typed_status(app):
     assert status["fire"]["type"] == "boolean"
     assert status["weapon"]["enum"] == [0, 1, 2]
     reason = schema["components"]["schemas"]["GameFinished"]["properties"]["reason"]
-    assert reason["enum"] == ["native_game_ended", "rollout_limit", "native_game_error"]
+    assert reason["enum"] == [
+        "native_game_ended",
+        "rollout_limit",
+        "native_game_error",
+        "model_error",
+    ]
     assert "`native_game_error`" in reason["description"]
+    assert "`model_error`" in reason["description"]
+    for name in ("set_paused", "set_controls", "look", "action"):
+        assert "`game_unavailable`" in contract.commands[name].description
     assert json.loads(json.dumps(app._status().to_wire_format()))["data"]["weapon"] == 0
 
 
