@@ -7,6 +7,7 @@ from pathlib import Path
 
 from reactor_runtime import (
     ApplicationError,
+    ClientInfo,
     CommandError,
     InputField,
     ReactorApp,
@@ -21,7 +22,13 @@ from reactor_runtime.distributed import DistributedRunner
 
 from hy_nomas_assets import resolve_assets
 from hy_nomas_camera import CAMERAS, KEYS, decode_trajectory, plan_camera, plan_keyboard
-from hy_nomas_model import HyNomasInput, HyNomasModel, HyNomasResult, WorldStart
+from hy_nomas_model import (
+    MAX_WORLD_FRAMES,
+    HyNomasInput,
+    HyNomasModel,
+    HyNomasResult,
+    WorldStart,
+)
 from hy_nomas_types import HyNomasOutput, HyNomasState, StateUpdate
 
 
@@ -64,7 +71,7 @@ class HyNomas(ReactorApp):
             raise ApplicationError("Press Start or resume the active world.")
         if not state.prompt.strip():
             raise ApplicationError("Enter a prompt before generating.")
-        count = min(state._start.segment_frames, 2880 - state._generated)
+        count = min(state._start.segment_frames, MAX_WORLD_FRAMES - state._generated)
         if state.camera == "trajectory":
             if state._camera_poses is None or state._camera_cursor + count > len(
                 state._camera_poses
@@ -117,15 +124,22 @@ class HyNomas(ReactorApp):
             result.complete
             or state.camera == "trajectory"
             and len(state._camera_poses) - state._camera_cursor
-            < min(state._start.segment_frames, 2880 - state._generated)
+            < min(state._start.segment_frames, MAX_WORLD_FRAMES - state._generated)
         ):
             state.paused = True
         await self.send(self._status())
         return HyNomasOutput(main_video=result.frames)
 
     @connected
-    async def on_connected(self) -> None:
-        await self.send(self._status())
+    async def on_connected(self, client: ClientInfo) -> None:
+        await client.send(self._status())
+
+    @event(
+        name="get_state",
+        description="Read the current shared world state. Replies only to the caller without changing the world or broadcasting.",
+    )
+    def get_state(self) -> StateUpdate:
+        return self._status()
 
     @session_ended
     def on_session_ended(self) -> None:
@@ -134,7 +148,7 @@ class HyNomas(ReactorApp):
 
     @event(
         name="start",
-        description="Start a fresh text-generated world, replacing previous playback. Fails with invalid_prompt for empty text, invalid_segment_frames unless frames are a multiple of 24, invalid_camera for unknown motion, invalid_camera_path for malformed data, or camera_path_too_short for an insufficient selected trajectory.",
+        description="Start a fresh text-generated world, replacing previous playback. Fails with invalid_prompt for empty text, invalid_segment_frames unless frames are a multiple of 24, invalid_camera when a trajectory is supplied with another camera mode, invalid_camera_path for malformed data, or camera_path_too_short for an insufficient selected trajectory.",
     )
     async def start(
         self,
@@ -187,8 +201,6 @@ class HyNomas(ReactorApp):
                 "invalid_segment_frames", "Choose a multiple of 24 frames."
             )
         state = self.state
-        if camera not in CAMERAS:
-            raise CommandError("invalid_camera", "Choose a supported camera motion.")
         camera_path = None
         if trajectory is not None:
             if camera != "trajectory":
@@ -258,7 +270,7 @@ class HyNomas(ReactorApp):
 
     @event(
         name="set_camera",
-        description="Select camera motion for the next segment while retaining history and pause state. Can be staged before Start. Fails with invalid_camera for unknown motion, camera_path_too_short for a missing/exhausted trajectory, or rollout_complete after the 120-second duration.",
+        description="Select camera motion for the next segment while retaining history and pause state. Can be staged before Start. Fails with camera_path_too_short for a missing/exhausted trajectory, or rollout_complete after the 120-second duration.",
     )
     async def set_camera(
         self,
@@ -267,10 +279,6 @@ class HyNomas(ReactorApp):
         ),
     ) -> StateUpdate:
         self._require_unfinished()
-        if camera not in CAMERAS:
-            raise CommandError(
-                "invalid_camera", "Choose one of the supported camera motions."
-            )
         if camera == "trajectory":
             self._require_camera_frames()
         if camera != self.state.camera:
@@ -410,7 +418,7 @@ class HyNomas(ReactorApp):
     def _require_camera_frames(self) -> None:
         state = self.state
         needed = (
-            min(state._start.segment_frames, 2880 - state._generated)
+            min(state._start.segment_frames, MAX_WORLD_FRAMES - state._generated)
             if state._start
             else 48
         )

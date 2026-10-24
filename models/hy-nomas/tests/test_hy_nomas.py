@@ -1,15 +1,18 @@
 import asyncio
 import io
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import numpy as np
 import pytest
 import yaml
 from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
+from reactor_runtime.interface.model.contract import ContractError, ModelContract
 
 from hy_nomas import HyNomas
 from hy_nomas_attention import decoder_ranges
@@ -312,9 +315,35 @@ def test_camera_planning_is_rigid_and_uses_native_identity_first_frame(mode):
 def test_text_only_disables_camera_and_invalid_motion_is_refused():
     assert plan_camera("text_only", 120) == (None, None)
     instance, messages = app()
-    with pytest.raises(CommandError):
-        asyncio.run(instance.set_camera("teleport"))
+    contract = ModelContract.of(HyNomas)
+    for command in ("start", "set_camera"):
+        with pytest.raises(ContractError):
+            contract.validate(command, {"camera": "teleport"})
     assert not messages and instance.state.camera == "text_only"
+
+
+def test_keyboard_has_one_atomic_control_path():
+    contract = ModelContract.of(HyNomas)
+    assert "set_keyboard" in contract.commands
+    assert (
+        not {
+            "set_w",
+            "set_s",
+            "set_a",
+            "set_d",
+            "set_up",
+            "set_down",
+            "set_left",
+            "set_right",
+        }
+        & contract.commands.keys()
+    )
+    instance, messages = app()
+    payload = contract.validate("set_keyboard", {"world_id": 1, "w": True})
+    with pytest.raises(CommandError) as caught:
+        asyncio.run(instance.set_keyboard(**vars(payload)))
+    assert caught.value.code == "no_world"
+    assert not messages and instance.state._held_keys == ()
 
 
 def npz(poses=None, intrinsics=None):
@@ -378,15 +407,30 @@ def test_trajectory_cursor_ack_and_exhaustion_do_not_reset_world():
     asyncio.run(check())
 
 
-def test_connect_broadcasts_current_world_without_reset():
+def test_connect_sends_current_world_only_to_joiner_without_reset():
     instance, messages = app()
     asyncio.run(begin(instance, prompt="courtyard"))
     asyncio.run(instance.process_output(StepOutcome(result=result(3), elapsed=0.5)))
     before = instance._status()
     messages.clear()
-    asyncio.run(instance.on_connected())
-    assert messages == [before]
+    joiner = SimpleNamespace(send=AsyncMock())
+    asyncio.run(instance.on_connected(joiner))
+    joiner.send.assert_awaited_once_with(before)
+    assert messages == []
     assert instance._status() == before
+    instance.engine.reset.assert_not_called()
+
+
+def test_get_state_is_a_read_only_caller_reply():
+    instance, messages = app()
+    asyncio.run(begin(instance, prompt="courtyard"))
+    asyncio.run(instance.process_output(StepOutcome(result=result(3), elapsed=0.5)))
+    before = instance._status()
+    messages.clear()
+    reply = instance.get_state()
+    assert reply == before and instance._status() == before
+    assert messages == []
+    instance.engine.generate.assert_not_called()
     instance.engine.reset.assert_not_called()
 
 
@@ -672,6 +716,65 @@ def test_bad_performance_settings_fail_before_asset_access(
     path.write_text(yaml.safe_dump(config))
     with pytest.raises(ValueError):
         resolve_assets(path, tmp_path)
+    download.assert_not_called()
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_completed_read_only_weights_need_no_runtime_writes(
+    tmp_path, monkeypatch, override
+):
+    from hy_nomas_assets import SOURCE_REVISION, resolve_assets
+
+    weights = tmp_path / "weights"
+    for name in [
+        "model/DiT/distilled/diffusion_pytorch_model_ema_0_995.safetensors",
+        "model/VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors",
+        "text_encoder/model.safetensors.index.json",
+        *[f"text_encoder/model-{i:05d}-of-00005.safetensors" for i in range(1, 6)],
+    ]:
+        path = weights / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    download = Mock(side_effect=AssertionError("Completed weights must not download"))
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download)
+    )
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: SOURCE_REVISION)
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {"source": str(tmp_path), "num_gpus": 4, "height": 720, "width": 1280}
+        )
+    )
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    expected = {
+        "TORCHINDUCTOR_CACHE_DIR": cache / "hy-nomas/inductor",
+        "TORCH_EXTENSIONS_DIR": cache / "hy-nomas/extensions",
+    }
+    for name, path in expected.items():
+        if override:
+            path = tmp_path / "explicit" / name.lower()
+            expected[name] = path
+            monkeypatch.setenv(name, str(path))
+        else:
+            monkeypatch.delenv(name, raising=False)
+    mkdir = Path.mkdir
+
+    def reject_weight_write(path, *args, **kwargs):
+        if path.is_relative_to(weights):
+            raise PermissionError("read-only weights")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", reject_weight_write)
+    weights.chmod(0o555)
+    try:
+        settings, _ = resolve_assets(config, weights)
+    finally:
+        weights.chmod(0o755)
+    assert settings.dit.is_file()
+    assert all(os.environ[name] == str(path) for name, path in expected.items())
+    assert not (weights / "kernels").exists()
     download.assert_not_called()
 
 

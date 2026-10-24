@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+MAX_WORLD_FRAMES = 2880
+"""Released interactive noise-bank horizon at the native 24 FPS timebase."""
+
 if TYPE_CHECKING:
     from hy_nomas_backend import HyNomasBackend
 

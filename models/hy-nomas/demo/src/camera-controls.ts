@@ -26,7 +26,7 @@ export class CameraControls {
     stage: HTMLElement,
     private send: (movement: Movement) => Promise<void>,
     private onEnable: () => void,
-    private onError: (message: string) => void,
+    private onError: (cause: unknown) => void,
   ) {
     this.buttons = Array.from(root.querySelectorAll<HTMLButtonElement>("[data-camera-key]"));
     this.toggle = root.querySelector<HTMLButtonElement>("#keyboard-toggle")!;
@@ -139,7 +139,7 @@ export class CameraControls {
     } catch (cause) {
       if (revision === this.revision) {
         this.latest = this.motion = undefined;
-        this.onError(cause instanceof Error ? cause.message : String(cause));
+        this.onError(cause);
       }
     } finally {
       this.sending = false;

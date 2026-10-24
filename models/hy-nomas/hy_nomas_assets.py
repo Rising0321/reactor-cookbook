@@ -116,9 +116,11 @@ def resolve_assets(
             allow_patterns=["*.json", "*.txt", "*.safetensors", "LICENSE"],
             local_dir=text_dir,
         )
-    # Compiler caches persist with weights and are inherited by isolated workers.
-    kernels = root / "kernels"
-    kernels.mkdir(parents=True, exist_ok=True)
+    # Completed weights may be mounted read-only; workers inherit writable
+    # compiler locations independently of checkpoint storage.
+    kernels = (
+        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "hy-nomas"
+    )
     os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(kernels / "inductor"))
     os.environ.setdefault("TORCH_EXTENSIONS_DIR", str(kernels / "extensions"))
     cutlass = Path(config.get("cutlass", "/opt/cutlass"))

@@ -62,6 +62,9 @@ let uploadedFile: File | undefined;
 let uploadedCameraName = "";
 let sessionId = new URL(location.href).searchParams.get("session") || undefined;
 
+// The SDK supplies a refused command's code and reason on its error event.
+class Refused extends Error {}
+
 try { input("endpoint").value = localStorage.getItem("hy-nomas.endpoint") || input("endpoint").value; } catch { /* Optional preference. */ }
 
 const linkedEndpoint = new URL(location.href).searchParams.get("endpoint");
@@ -70,14 +73,17 @@ if (linkedEndpoint) input("endpoint").value = linkedEndpoint;
 const controls = new CameraControls(el("camera-controller"), el("video-shell"), async ({keys, stop, latch, world: controlledWorld}) => {
   const connection = client;
   if (!connection || !ready || world !== controlledWorld) return;
-  const reply = await connection.sendCommand("set_keyboard", {
+  error("");
+  await command("set_keyboard", {
     world_id: controlledWorld, stop, latch,
     ...Object.fromEntries(["w","s","a","d","up","down","left","right"].map(key => [key, keys.includes(key)])),
   });
-  if (reply === undefined) throw new Error("Camera input was refused. Check the current world and reconnect if needed.");
-}, () => { camera.value = "keyboard"; }, error);
+}, () => { camera.value = "keyboard"; }, reportError);
 
 function error(text: string) { el("error").textContent = text; el("error").hidden = !text; }
+function reportError(cause: unknown) {
+  if (!(cause instanceof Refused)) error(cause instanceof Error ? cause.message : String(cause));
+}
 function clearPlayer() {
   if (frameCallback !== undefined) video.cancelVideoFrameCallback(frameCallback);
   frameCallback = undefined; video.pause(); video.srcObject = null;
@@ -148,13 +154,13 @@ function readState(state: Record<string, unknown>) {
 async function command(name: string, args: Record<string, unknown> = {}) {
   if (!client) throw new Error("Connect to your Runtime first.");
   const reply = await client.sendCommand(name, args);
-  if (reply === undefined) throw new Error(el("error").textContent || `The ${name} command was refused.`);
+  if (reply === undefined) throw new Refused(name);
   return reply;
 }
 async function act(action: () => Promise<unknown>) {
   if (busy) return;
   busy = true; error(""); refresh();
-  try { await action(); } catch (cause) { error(cause instanceof Error ? cause.message : String(cause)); }
+  try { await action(); } catch (cause) { reportError(cause); }
   finally { busy = false; refresh(); }
 }
 function resetConnection() {
@@ -215,7 +221,13 @@ button("connect").onclick = () => void act(async () => {
   connection.on("message", (message) => {
     if (client === connection && message.type === "state_update") readState(message.data as Record<string,unknown>);
   });
-  try { await connection.connect(undefined, sessionId ? {sessionId} : undefined); }
+  try {
+    await connection.connect(undefined, sessionId ? {sessionId} : undefined);
+    if (client === connection) {
+      const snapshot = await command("get_state");
+      readState(snapshot.data as Record<string, unknown>);
+    }
+  }
   catch (cause) { if (client === connection) client = undefined; connection[Symbol.dispose](); resetConnection(); throw cause; }
 });
 async function uploadPath() {

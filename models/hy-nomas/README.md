@@ -50,7 +50,11 @@ into the adapter.
 
 Startup automatically downloads the selected official distilled DiT, PixelUMM
 decoder, and Qwen2.5-VL-7B text encoder into the persistent CLI weights directory.
-It reuses completed downloads on later starts. No training or teacher weights
+It reuses completed downloads on later starts. Completed checkpoint directories
+can be mounted read-only. Compiler caches use `TORCHINDUCTOR_CACHE_DIR` and
+`TORCH_EXTENSIONS_DIR`, defaulting under `$XDG_CACHE_HOME/hy-nomas` or
+`~/.cache/hy-nomas`; use writable persistent paths to retain compiled kernels
+across container restarts. No training or teacher weights
 are needed. Model and text revisions are pinned in `hy_nomas_assets.py`.
 To reuse an existing cache, pass `--weights /your/persistent/hy-nomas` containing
 `model/DiT/`, `model/VAE/`, and `text_encoder/` in the same layout.
@@ -133,6 +137,7 @@ alone does not configure hosted authentication.
 
 | Demo control | SDK command | Behavior |
 | --- | --- | --- |
+| Connect / Join this world | `get_state` | Reads the shared state for this viewer after connecting, including paused worlds. |
 | Start world / Start new world | `start` | New seed and segment length; replaces the world and queued playback. |
 | Update prompt | `set_prompt` | Re-encodes the next segment's text while retaining visual history, random state, and decoding context. |
 | WASD / arrow keys / screen buttons | `set_keyboard` | Combined native camera motion, retaining prompt and world; quick taps queue once, stop clears held and queued input. |
@@ -304,7 +309,7 @@ one scene/seed, not a general quality guarantee or proof of a specific kernel
 fault. Long worlds can drift in geometry, color and prompt adherence.
 
 All 256 keyboard combinations at 48/120/240 frames match the released planner
-exactly (768 CPU cases). Both deliveries pass **77 CPU tests**, schema rendering,
+exactly (768 CPU cases). Both deliveries pass **81 CPU tests**, schema rendering,
 manifest validation, Ruff checks/formatting and frontend typecheck/build. Real
 GPU probes cover Q/K/V communication, fused normalization/rotary output, FA4
 metadata invalidation and official quantized weight/scale handling. The resident
@@ -327,8 +332,9 @@ run; RTX 4090 execution and the offload profile remain outside this acceptance.
 - `demo/`: official SDK client with WASD/arrows, touch buttons and safe keyboard capture; `GET /schema` is the complete command contract.
 
 `DistributedRunner` owns one worker per GPU and transports CPU arrays. The model
-half imports no Runtime API and owns its history. Commands run between steps;
-errors from generation propagate rather than silently resetting the world.
+half imports no Runtime API and owns its history. Commands run between steps.
+A generation or worker failure ends the session and step loop. Restart
+`reactor run` to reload the service after such a failure.
 A newly connected viewer receives the current shared state. Closing a viewer
 tab leaves the other viewers connected. The explicit **Disconnect** button ends
 the shared session for everyone; model weights stay loaded for the next session.

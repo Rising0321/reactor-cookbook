@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from hy_nomas_model import HyNomasInput, ModelSettings, WorldStart
+from hy_nomas_model import MAX_WORLD_FRAMES, HyNomasInput, ModelSettings, WorldStart
 from hy_nomas_prompts import shape_prompt
 
 
@@ -171,7 +171,7 @@ class HyNomasBackend:
         import torch
         from hymm.utils.video_output import video_to_uint8_numpy
 
-        frames = min(self._segment_frames, 2880 - self._generated)
+        frames = min(self._segment_frames, MAX_WORLD_FRAMES - self._generated)
         camera_path = None
         if input.c2ws is not None:
             camera_path = str(Path(self._scratch.name) / "camera.npz")
@@ -206,7 +206,7 @@ class HyNomasBackend:
         )
         self._generated += frames
         self._last_prompt = input.prompt
-        complete = self._generated == 2880
+        complete = self._generated == MAX_WORLD_FRAMES
         session = self.pipeline._interactive_pixelumm_decode_session
         if self.rank == 0:
             metadata = self.pipeline._last_pixelumm_streaming_metadata

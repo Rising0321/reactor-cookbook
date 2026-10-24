@@ -12,6 +12,8 @@ import zipfile
 
 import numpy as np
 
+from hy_nomas_model import MAX_WORLD_FRAMES
+
 CAMERAS = [
     "text_only",
     "keyboard",
@@ -95,7 +97,11 @@ def decode_trajectory(data: bytes) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError(
             "Use an NPZ containing numeric c2ws and intrinsics arrays."
         ) from exc
-    if poses.ndim != 3 or poses.shape[1:] != (4, 4) or not 48 <= len(poses) <= 2880:
+    if (
+        poses.ndim != 3
+        or poses.shape[1:] != (4, 4)
+        or not 48 <= len(poses) <= MAX_WORLD_FRAMES
+    ):
         raise ValueError("c2ws must have shape [T,4,4], with 48–2880 frames at 24 FPS.")
     if intrinsics.shape == (3, 3):
         intrinsics = np.repeat(intrinsics[None], len(poses), axis=0)
