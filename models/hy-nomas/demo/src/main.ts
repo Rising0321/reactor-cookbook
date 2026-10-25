@@ -3,7 +3,7 @@ import "./style.css";
 import { CameraControls } from "./camera-controls";
 
 const modes: Record<string, string> = {
-  keyboard: "WASD + arrow keys", text_only: "Follow the prompt", stationary: "Hold the view",
+  text_only: "Follow the prompt", keyboard: "WASD + arrow keys", stationary: "Hold the view",
   forward: "Move forward", backward: "Move backward", strafe_left: "Move left",
   strafe_right: "Move right", look_left: "Look left", look_right: "Look right",
   look_up: "Look up", look_down: "Look down", trajectory: "Uploaded camera path",
@@ -54,6 +54,7 @@ const video = el<HTMLVideoElement>("video");
 let client: Reactor | undefined;
 let ready = false, busy = false, active = false, paused = true, complete = false;
 let world = 0, emitted = 0;
+let activeCamera = "text_only";
 let media = new MediaStream();
 let showing = false;
 let frameCallback: number | undefined;
@@ -91,7 +92,7 @@ function clearPlayer() {
   el("playback-time").textContent = "00:00";
 }
 function refresh() {
-  controls.update(ready && active && !complete, world);
+  controls.update(ready && active && !complete, world, activeCamera === "keyboard");
   button("connect").disabled = busy;
   button("connect").title = client ? "End this session and its world for all viewers." : "Connect to a new or shared session.";
   button("forget-session").hidden = ready || !sessionId;
@@ -135,6 +136,7 @@ function readState(state: Record<string, unknown>) {
   const nextWorld = Number(state.world_id);
   if (nextWorld !== world) clearPlayer();
   world = nextWorld; active = Boolean(state.active); paused = Boolean(state.paused);
+  activeCamera = String(state.camera);
   complete = Boolean(state.complete); emitted = Number(state.emitted_frames);
   uploadedCameraName = String(state.camera_path || "");
   const queued = (state.queued_keyboard_keys || []) as string[];
@@ -165,6 +167,7 @@ async function act(action: () => Promise<unknown>) {
 }
 function resetConnection() {
   clearPlayer(); ready = active = complete = false; paused = true; world = emitted = 0;
+  activeCamera = "text_only";
   media = new MediaStream(); uploadedFile = undefined; uploadedCameraName = "";
   el("connection").textContent = "disconnected"; button("connect").textContent = "Connect";
   refresh();

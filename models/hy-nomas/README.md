@@ -15,11 +15,11 @@ live prompt editing, combined keyboard/touch camera controls, pause/resume, and 
 ## What you need
 
 - Linux, Docker, an NVIDIA driver and NVIDIA Container Toolkit.
-- **Four NVIDIA B200 GPUs** for the tested resident inference profile. Each worker
+- **Eight NVIDIA B200 GPUs** for the tested resident inference profile. Each worker
   loads the model; video tokens and attention history use sequence parallelism.
-  The full 120-second default rollout peaked at **134.34 GiB per GPU**.
-  One-, two- and four-GPU model runs were compared; four was fastest for the
-  tested interactive segments. FA4 targets Blackwell SM100; the SM89 FP8 kernel
+  The eight-GPU profile was validated over complete 120-second worlds with
+  120-frame segments. Full history increases memory use and generation cost.
+  FA4 targets Blackwell SM100; the SM89 FP8 kernel
   also builds, but RTX 4090 GPU execution has not been validated.
 - At least 128 GB host RAM and about 80 GB for the inference checkpoints, plus
   space for the image and build cache. Allow at least 200 GB of free disk space.
@@ -34,8 +34,12 @@ Run from this directory:
 ```sh
 reactor validate
 reactor build
-reactor run --gpus '"device=0,1,2,3"' --shm-size 8g --port 8080
+reactor run --gpus '"device=0,1,2,3,4,5,6,7"' --shm-size 8g --port 8080
 ```
+
+The main, fast and resident quantized presets use eight workers. For another
+supported count (1, 2, 4 or 8), match the selected config's `num_gpus`, the
+manifest's `model.resources.gpu.count`, and the devices selected by `--gpus`.
 
 The build installs Reactor Runtime 3.10.0, Python 3.13, CUDA 13.0.2,
 PyTorch 2.10, and the released [MagiAttention 1.1.0 FA4 backend](https://github.com/SandAI-org/MagiAttention/releases/tag/v1.1.0)
@@ -66,7 +70,7 @@ curl -fsS http://localhost:8080/health
 curl -fsS http://localhost:8080/schema
 ```
 
-Startup prepares two 48-frame segments and discards that temporary world before
+Startup prepares two 120-frame segments and discards that temporary world before
 readiness. Weights, working history and decoder state stay on GPU in the default
 profile. The health state should be `available`. Connecting does not begin inference.
 Stop the foreground `reactor run` process to stop the service; restarting reloads
@@ -87,8 +91,9 @@ Open **http://localhost:5173**, set **Runtime endpoint** to
 **http://localhost:8080**, and press **Connect**. Enter a prompt, then press
 **Start world**. Click the video or **Enable camera keys** to explore. Only Start
 begins generation. The playback timer appears after the browser presents its
-first generated frame. The demo starts with keyboard camera control and 48-frame
-segments for interaction; the API still defaults to 120-frame segments.
+first generated frame. The demo and API default to **Follow the prompt** and
+**120-frame / 5-second segments**. Clicking the video or enabling camera keys
+only arms keyboard capture; pressing a movement/look key activates camera control.
 
 **W / S** move forward/backward, **A / D** strafe left/right, and **arrow keys**
 look up/down/left/right. Combine movement and look keys, such as W + D + →.
@@ -158,7 +163,9 @@ provided. First-, second-,
 and third-person framing can be described in the prompt or its native
 `perspective_view` field; calibrated motion uses the camera controls below.
 Updates do not resume a paused world. Already queued frames retain their original conditions;
-visible responses can be gradual. Start is distinct from Update prompt.
+requested actions or scene changes can be delayed or ignored. Time fields are
+optional for fixed-frame requests; omitting them disables per-action time windows.
+Start is distinct from Update prompt.
 
 Keyboard input follows the released multi-key trajectory generator exactly.
 The `set_keyboard` command carries the current `world_id` and eight native key
@@ -170,6 +177,8 @@ and queued motion. Input for an old world is refused after Start/Restart.
 **WASD + arrow keys** both supply an explicit stationary camera condition; releasing
 all keys does not switch to text-only generation. Other presets move
 forward/backward/left/right or look left/right/up/down.
+For a fresh text-only comparison, choose **Follow the prompt** and **Start new
+world**. Changing an existing world's camera retains its generated history.
 Preset geometry follows the released keyboard/mouse generator: 24 FPS,
 2.8 units/second translation and 25 degrees/second rotation before the selected
 gains (defaults 1.0 and 2.5). Each segment supplies a relative camera path as in
@@ -251,7 +260,8 @@ prompt length may require additional compilation.
 
 The optional `hy_nomas_low_mem.yaml` retains the released one-GPU offload-style
 configuration and quantization; the main performance work uses resident B200
-inference. It is not an RTX 4090 speed validation.
+inference. Match the manifest GPU count and device selection to its single worker
+when selecting it. It is not an RTX 4090 speed validation.
 
 The 720×1280 request produces **704×1280 RGB** with the released latent geometry.
 PixelUMM has overlapping, future-dependent windows. The adapter sends its native
@@ -262,7 +272,27 @@ unfinished ending from the old world.
 
 ### Measured validation
 
-An eight-step/full-history BF16 baseline before the cache-staging kernel completed
+On eight B200s, a matched eight-step/full-history BF16 comparison generated and
+emitted all **2880 frames in 24 consecutive 120-frame segments**. The cache-staging
+path averaged **19.28 generation FPS**, versus **17.85** and **17.72 FPS** in the
+controls before and after it. All generated latents and complete RGB arrays were
+bit-identical across those three runs. A separate paired 10×120-frame world with
+two prompt edits and movement/look changes also matched exactly on every latent
+and all 1164 emitted stable frames; its final 36 frames remained pending because
+the world ended before the native horizon. These comparisons isolate the staging
+kernel against the existing FA4/compiled implementation. They do not establish
+equality to the original Hopper kernels or long-history 24 FPS real time.
+
+The rebuilt eight-GPU Runtime image completed another 24×120-frame world through
+the production SDK client at **18.53 generation FPS**, with the first generated
+picture **3.37 seconds after Start** following shape warmup. Relay-only TURN/TCP
+and software-decoding Chromium measured **17.43 FPS** by presentation-counter
+increments. Receiver stats reached 2880 decoded frames with zero reported drops;
+startup frames are included, so the count does not prove pixel-exact delivery of
+each model frame. Playback remains adaptive.
+
+An earlier four-GPU, eight-step/full-history BF16 baseline before cache staging
+completed
 **60 consecutive 48-frame segments** in one Runtime session on **four B200 GPUs**, generating and
 emitting all **2880 frames** at 704×1280. This fixed-prompt, seed-42 run used
 **Follow the prompt** with no camera conditioning and no intermediate reset.
@@ -293,25 +323,6 @@ tap/release, typing safety, blur, touch controls, shared viewing, reset and
 stale-world refusal. Explicit Disconnect/fresh Connect and viewer-only disposal
 were also checked in the production client.
 
-On eight B200s, a matched eight-step/full-history BF16 comparison generated and
-emitted all **2880 frames in 24 consecutive 120-frame segments**. The cache-staging
-path averaged **19.28 generation FPS**, versus **17.85** and **17.72 FPS** in the
-controls before and after it. All generated latents and complete RGB arrays were
-bit-identical across those three runs. A separate paired 10×120-frame world with
-two prompt edits and movement/look changes also matched exactly on every latent
-and all 1164 emitted stable frames; its final 36 frames remained pending because
-the world ended before the native horizon. These comparisons isolate the staging
-kernel against the existing FA4/compiled implementation. They do not establish
-equality to the original Hopper kernels or long-history 24 FPS real time.
-
-The rebuilt eight-GPU Runtime image completed another 24×120-frame world through
-the production SDK client at **18.53 generation FPS**, with the first generated
-picture **3.37 seconds after Start** following shape warmup. Relay-only TURN/TCP
-and software-decoding Chromium measured **17.43 FPS** by presentation-counter
-increments. Receiver stats reached 2880 decoded frames with zero reported drops;
-startup frames are included, so the count does not prove pixel-exact delivery of
-each model frame. Playback remains adaptive.
-
 A short fixed-seed BF16 comparison used two 48-frame calls and a direct native
 96-frame run: latent and complete decoded RGB maximum/mean error were **0**.
 A 240-frame comparison had latent maximum/mean error 0 and RGB MAE **0.244/255**,
@@ -332,7 +343,10 @@ original Hopper kernel could not execute. A controlled 30-second comparison of
 the same scene, seed and prompts showed warming with both stationary and moving
 camera conditioning, more strongly than without camera conditioning. This is
 one scene/seed, not a general quality guarantee or proof of a specific kernel
-fault. Long worlds can drift in geometry, color and prompt adherence.
+fault. Another matched 120-second pure-text run through the original launcher
+also developed warmer skin and backgrounds. Camera conditioning can make warming
+more pronounced; disabling it does not guarantee stable color. Long worlds can
+drift in geometry, color and prompt adherence.
 
 All 256 keyboard combinations at 48/120/240 frames match the released planner
 exactly (768 CPU cases). Both deliveries pass **81 CPU tests**, schema rendering,

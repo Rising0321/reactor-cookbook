@@ -1,6 +1,6 @@
 # Official DiT/INT8-KV/FP8-decoder quantization with all weights resident.
 source: /opt/hy-nomas
-num_gpus: 4
+num_gpus: 8
 height: 720
 width: 1280
 # Released default distilled Euler sampler.

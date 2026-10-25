@@ -2,12 +2,12 @@ $schema: reactor/v2
 
 model:
   name: hy-nomas
-  version: v0.2.1
+  version: v0.2.2
   description: Hy-Nomas distilled world generation with live prompts and camera trajectories.
   resources:
     gpu:
       type: NVIDIA_B200
-      count: 4
+      count: 8
     cpu:
       request: "8"
       limit: "32"

@@ -10,6 +10,8 @@ export class CameraControls {
   private pointers = new Map<number, string>();
   private available = false;
   private enabled = false;
+  private controlling = false;
+  private keyboardActive = false;
   private world = 0;
   private revision = 0;
   private sending = false;
@@ -25,7 +27,7 @@ export class CameraControls {
     private root: HTMLElement,
     stage: HTMLElement,
     private send: (movement: Movement) => Promise<void>,
-    private onEnable: () => void,
+    private onMovement: () => void,
     private onError: (cause: unknown) => void,
   ) {
     this.buttons = Array.from(root.querySelectorAll<HTMLButtonElement>("[data-camera-key]"));
@@ -36,7 +38,7 @@ export class CameraControls {
       if (this.enabled) this.release(true);
       else { this.enable(); stage.focus({preventScroll: true}); }
     };
-    this.stop.onclick = () => this.release();
+    this.stop.onclick = () => this.release(false, true);
     stage.addEventListener("pointerdown", () => {
       this.enable(); stage.focus({preventScroll: true});
     });
@@ -78,21 +80,23 @@ export class CameraControls {
     this.render();
   }
 
-  update(available: boolean, world: number) {
+  update(available: boolean, world: number, keyboardActive: boolean) {
     if (world !== this.world || !available && this.available) {
       this.revision++; this.physical.clear(); this.pointers.clear();
-      this.latest = this.motion = undefined; this.enabled = false;
+      this.latest = this.motion = undefined; this.enabled = this.controlling = false;
       clearTimeout(this.flushTimer); this.flushTimer = undefined;
     }
-    this.world = world; this.available = available; this.render();
+    this.world = world; this.available = available; this.keyboardActive = keyboardActive; this.render();
   }
 
-  release(disable = false) {
-    if (!this.enabled && !this.physical.size && !this.pointers.size) return;
+  release(disable = false, explicitStop = false) {
+    if (!this.enabled && !this.physical.size && !this.pointers.size && !explicitStop) return;
+    const stop = this.controlling || explicitStop && this.keyboardActive;
+    this.controlling = false;
     this.physical.clear(); this.pointers.clear();
     this.motion = undefined;
     clearTimeout(this.flushTimer); this.flushTimer = undefined;
-    if (this.available) { this.latest = {keys: [], stop: true, latch: false, world: this.world}; void this.pump(); }
+    if (this.available && stop) { this.latest = {keys: [], stop: true, latch: false, world: this.world}; void this.pump(); }
     if (disable) this.enabled = false;
     this.render();
   }
@@ -103,15 +107,14 @@ export class CameraControls {
 
   private enable() {
     if (!this.available || this.enabled) return;
-    this.enabled = true; this.onEnable();
-    this.latest = {keys: [], stop: true, latch: false, world: this.world};
-    this.schedule(); this.render();
+    this.enabled = true; this.render();
   }
 
   private keys() { return [...new Set([...this.physical, ...this.pointers.values()])].sort(); }
 
   private changed(latch = false) {
     const movement = {keys: this.keys(), stop: false, latch, world: this.world};
+    if (movement.keys.length) { this.controlling = true; this.onMovement(); }
     this.latest = movement;
     if (movement.keys.length && latch) this.motion = movement;
     this.render(); this.schedule();
