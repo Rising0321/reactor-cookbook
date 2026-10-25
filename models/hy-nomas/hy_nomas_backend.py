@@ -149,6 +149,11 @@ class HyNomasBackend:
             from hy_nomas_exchange import SequenceExchange
 
             self._exchange = SequenceExchange(packed_qkv=True)
+        self._cache_staging = None
+        if capability == (10, 0) and not settings.cpu_offload:
+            from hy_nomas_cache import CacheStaging
+
+            self._cache_staging = CacheStaging()
         # Compile the repeated region once per shape, avoiding a graph containing
         # all decoder layers. The released DiT compiles its own pre/post regions.
         for layer in self.pipeline.vae.decoder.layers:
@@ -178,6 +183,8 @@ class HyNomasBackend:
             np.savez(camera_path, c2ws=input.c2ws, intrinsics=input.intrinsics)
         if self._exchange is not None:
             self._exchange.begin_step()
+        if self._cache_staging is not None:
+            self._cache_staging.reset()
         output = self.pipeline.inference(
             prompts=[
                 shape_prompt(
@@ -236,6 +243,8 @@ class HyNomasBackend:
 
         clear_fa4_cache()
         self._text_encoding.cache_clear()
+        if self._cache_staging is not None:
+            self._cache_staging.reset()
         if self._exchange is not None:
             self._exchange.reset()
         pipeline = self.pipeline

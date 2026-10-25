@@ -14,6 +14,6 @@ cache_int8_weights: false
 decoder_batch_size: 3
 cutlass: /opt/cutlass
 # Prepare initial/continuation shapes before readiness, then discard that world.
-warmup_frames: 48
+warmup_frames: 120
 # Let Runtime adapt playback to measured generation throughput.
 playback_fps: null

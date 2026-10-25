@@ -32,7 +32,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <div class="row camera-strengths"><label for="translation">Translation<input id="translation" type="number" min="0.1" max="3" step="0.1" value="1"></label><label for="rotation">Rotation<input id="rotation" type="number" min="0.1" max="3" step="0.1" value="2.5"></label></div>
   <button id="apply-camera" class="secondary" disabled>Apply camera</button>
   <label class="upload-card" for="trajectory"><span class="upload-icon" aria-hidden="true">↗</span><span><strong>Choose a camera path</strong><small>NPZ · c2ws + intrinsics · 24 FPS · up to 4 MiB</small></span><input id="trajectory" class="file-input" type="file" accept=".npz"></label><p id="selection" class="hint">Choose a path, then press Apply camera or Start.</p></details>
-  <details class="settings"><summary>Generation settings</summary><div class="row"><label for="seed">Seed<input id="seed" type="number" min="0" max="2147483647" value="42"></label><label for="frames">Segment duration<select id="frames"><option value="48" selected>2 seconds</option><option value="72">3 seconds</option><option value="120">5 seconds</option><option value="240">10 seconds</option></select></label></div></details>
+  <details class="settings"><summary>Generation settings</summary><div class="row"><label for="seed">Seed<input id="seed" type="number" min="0" max="2147483647" value="42"></label><label for="frames">Segment duration<select id="frames"><option value="48">2 seconds</option><option value="72">3 seconds</option><option value="120" selected>5 seconds</option><option value="240">10 seconds</option></select></label></div></details>
 
  </aside>
  <section class="stage">

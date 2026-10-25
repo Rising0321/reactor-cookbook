@@ -186,8 +186,9 @@ fewer than one segment remains; upload a longer path or choose another camera
 before resuming. Invalid uploads return a command error without replacing the
 current world.
 
-Segments can contain 48–240 frames in multiples of 24; the demo offers 2, 3, 5,
-and 10 seconds at the native 24 FPS timebase. The released interactive noise bank
+Segments can contain 48–240 frames in multiples of 24; the demo defaults to
+**120 frames / 5 seconds** and also offers 2, 3, and 10 seconds at the native
+24 FPS timebase. The released interactive noise bank
 limits a world to **2880 generated frames / 120 native seconds**. Start or Restart
 creates another world after that limit. Reset discards any unfinished buffered
 ending from the old world.
@@ -209,6 +210,12 @@ convert display pixels to RGB8 on GPU before the required CPU result handoff.
 Frozen text encodings have a two-entry cache keyed by all native arguments.
 Prompt updates still refresh native conditioning, and camera and prompt inputs
 are supplied together on every segment.
+
+BF16 cache staging avoids repeated history copies and fuses visible K/V gathering.
+Its INT32 pointers copy pairs of BF16 bit patterns without quantization. Visibility
+metadata is bounded, invalidated on mask mutation, and cleared between segments
+and worlds; current Q/K/V are computed on every step. Other cache formats and
+attention modes retain their native paths.
 
 The optional `hy_nomas_fast.yaml` uses four steps and a recent-history budget of
 36 latent-frame equivalents. These are explicit quality/context tradeoffs:
@@ -236,7 +243,7 @@ DiT weights and their exact BF16 expansion on GPU to avoid repeated dequantizati
 resident `int8_fp8` inference.
 
 `decoder_batch_size: 3` groups independent native windows without changing noise
-or blending order. `warmup_frames: 48` prepares the default frontend shape before
+or blending order. `warmup_frames: 120` prepares the default frontend shape before
 readiness; `null` disables startup warmup. `playback_fps: null` uses Runtime's
 adaptive playback policy, following measured generation throughput. Set `24`
 only when native-rate pacing is explicitly wanted. Changing segment shape or
@@ -255,8 +262,8 @@ unfinished ending from the old world.
 
 ### Measured validation
 
-The **default eight-step/full-history BF16 profile** completed **60 consecutive
-48-frame segments** in one Runtime session on **four B200 GPUs**, generating and
+An eight-step/full-history BF16 baseline before the cache-staging kernel completed
+**60 consecutive 48-frame segments** in one Runtime session on **four B200 GPUs**, generating and
 emitting all **2880 frames** at 704×1280. This fixed-prompt, seed-42 run used
 **Follow the prompt** with no camera conditioning and no intermediate reset.
 
@@ -285,6 +292,25 @@ Runtime rollout at **17.95 generated FPS** over segments 3–60. A separate
 tap/release, typing safety, blur, touch controls, shared viewing, reset and
 stale-world refusal. Explicit Disconnect/fresh Connect and viewer-only disposal
 were also checked in the production client.
+
+On eight B200s, a matched eight-step/full-history BF16 comparison generated and
+emitted all **2880 frames in 24 consecutive 120-frame segments**. The cache-staging
+path averaged **19.28 generation FPS**, versus **17.85** and **17.72 FPS** in the
+controls before and after it. All generated latents and complete RGB arrays were
+bit-identical across those three runs. A separate paired 10×120-frame world with
+two prompt edits and movement/look changes also matched exactly on every latent
+and all 1164 emitted stable frames; its final 36 frames remained pending because
+the world ended before the native horizon. These comparisons isolate the staging
+kernel against the existing FA4/compiled implementation. They do not establish
+equality to the original Hopper kernels or long-history 24 FPS real time.
+
+The rebuilt eight-GPU Runtime image completed another 24×120-frame world through
+the production SDK client at **18.53 generation FPS**, with the first generated
+picture **3.37 seconds after Start** following shape warmup. Relay-only TURN/TCP
+and software-decoding Chromium measured **17.43 FPS** by presentation-counter
+increments. Receiver stats reached 2880 decoded frames with zero reported drops;
+startup frames are included, so the count does not prove pixel-exact delivery of
+each model frame. Playback remains adaptive.
 
 A short fixed-seed BF16 comparison used two 48-frame calls and a direct native
 96-frame run: latent and complete decoded RGB maximum/mean error were **0**.
@@ -322,6 +348,7 @@ run; RTX 4090 execution and the offload profile remain outside this acceptance.
 - `hy_nomas_model.py`: plain model and frozen CPU input/result contracts.
 - `hy_nomas_backend.py`: pinned native pipeline, attention history and stable decoding.
 - `hy_nomas_attention.py`: released FA4 dispatch and equivalent decoder mask geometry.
+- `hy_nomas_cache.py`: BF16 cache staging and versioned visibility metadata.
 - `hy_nomas_infra.py`, `hy_nomas_exchange.py`, `hy_nomas_fusions.py`: resident decoding, communication and GPU kernels.
 - `hy_nomas_quantization.py`, `hy_nomas_fp8_sm100.cu`: official quantized checkpoints and architecture-matched FP8 GEMM.
 - `hy_nomas_camera.py`: native-compatible keyboard/preset paths and NPZ validation.
