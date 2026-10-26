@@ -10,7 +10,7 @@ chunk; `reset` rewinds it and `set_image` restores held-axis control. The
 includes `camera_path_chunks`. This deployment uses the distilled first-person
 checkpoint; upstream third-person generation uses a separate checkpoint.
 
-The adapter uses Reactor Runtime 3.5's native step loop. `process_input()` plans
+The adapter uses Reactor Runtime 3.10's native step loop. `process_input()` plans
 camera poses, `generate()` forwards one chunk to `MatrixGame35Model`, and
 `process_output()` publishes video and state updates. The model owns the
 persistent worker and its rollout; frozen input and result dataclasses carry
@@ -53,7 +53,7 @@ while camera axes are sampled again before the next expensive turn begins.
 
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, and its `build` block defines the complete Python 3.12 serving
-image with Reactor Runtime 3.5.0. `requirements.txt` contains the model
+image with Reactor Runtime 3.10.0. `requirements.txt` contains the model
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires

@@ -24,7 +24,7 @@ starts generation.
 
 ## Run with the Reactor CLI
 
-The adapter uses Reactor Runtime 3.5's native step loop. The application resolves
+The adapter uses Reactor Runtime 3.10's native step loop. The application resolves
 uploads and plans camera poses; `alayaworld_model.py` owns the native engine and
 rollout cache. A new world first initializes its cache and reports its exact
 camera origin. Subsequent steps generate one native chunk and publish its media
@@ -32,7 +32,7 @@ and state. Runtime measures each generation step for playout pacing.
 
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
-12.8 image with Reactor Runtime 3.5.0. `requirements.txt` contains the model
+12.8 image with Reactor Runtime 3.10.0. `requirements.txt` contains the model
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's

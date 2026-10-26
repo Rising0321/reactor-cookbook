@@ -26,7 +26,7 @@ reactor build
 reactor run --gpus device=0 -e HF_TOKEN
 ```
 
-The build installs one pinned upstream checkout and Runtime 3.6. Startup
+The build installs one pinned upstream checkout and Runtime 3.10. Startup
 validates that checkout and downloads missing checkpoint files to the mounted
 weights directory. Use `--weights /path/to/weights` to select storage and
 `--port` to change the default HTTP port 8080.

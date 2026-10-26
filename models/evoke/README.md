@@ -10,7 +10,7 @@ at the path end. `reset` replays it. Selecting new conditioning restores held
 camera controls. Uploads are limited to 16 MiB; text-only worlds do not accept
 camera paths.
 
-The adapter uses Reactor Runtime 3.5's native step loop. `evoke.py` owns commands
+The adapter uses Reactor Runtime 3.10's native step loop. `evoke.py` owns commands
 and camera planning; `evoke_model.py` owns the persistent inference worker and
 rollout state. Frozen inputs and results carry one native chunk per step and
 acknowledge new conditioning through a world ID.
@@ -43,7 +43,7 @@ license before commercial use.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.5.0 image, while `requirements.txt` lists the
+controls its Reactor Runtime 3.10.0 image, while `requirements.txt` lists the
 adapter's serving dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.

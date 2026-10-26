@@ -1,6 +1,6 @@
 # Run SANA-WM through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop with typed input snapshots
+The adapter uses Reactor Runtime 3.10's native step loop with typed input snapshots
 and one native chunk per generation step.
 
 Run NVIDIA's public [SANA-WM](https://github.com/NVlabs/SANA) streaming world
@@ -23,7 +23,7 @@ weights cache and calls its streaming inference components directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` controls its Reactor
-Runtime 3.5.0, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
+Runtime 3.10.0, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
 `requirements.txt` contains the model's inference dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
