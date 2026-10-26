@@ -1,6 +1,6 @@
 # Play LingBot-World-V2 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop. The application plans
+The adapter uses Reactor Runtime 3.10's native step loop. The application plans
 camera poses in `process_input()`, forwards one chunk to `LingbotV2Model` in
 `generate()`, and publishes video and state updates in `process_output()`.
 The model owns the native causal rollout. Frozen input and result dataclasses
@@ -29,6 +29,9 @@ prompt and seed. Its `camera_path_selected` response reports the accepted
 13 frames; each subsequent output is 16 frames. Path resampling rounds down
 to complete chunks, so 49 input poses produce 3 chunks / 45 output frames.
 Generation stops at path end without padding, looping, or resetting history.
+The optional `set_camera_path(noise_chunks=...)` argument selects an initial
+noise horizon at least as long as the path and at most the configured rollout
+limit. Its default `-1` allocates exactly the path length.
 
 `reset` replays the selected path. `set_image` or `random_image` clears it and
 restores interactive camera controls. While a path is selected, `set_camera`
@@ -54,7 +57,7 @@ before running or redistributing the model.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` names the model,
-controls its Reactor Runtime 3.5.0, CUDA and Python image, and points Runtime at
+controls its Reactor Runtime 3.10.0, CUDA and Python image, and points Runtime at
 the model adapter and configuration. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -181,3 +184,12 @@ chunk, one world supports 256 chunks: about 4 minutes and 15 seconds of steady
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
 clips up to five minutes. LingBot-World-V2 emits video without audio.
+
+## Stepped evaluation
+
+The workspace uses the released Reactor Runtime 3.10.0. A client can select
+`generation="stepped"` and call `await client.step()` to receive each native
+chunk directly on `main_video`. The same application serves streamed sessions.
+Rebuild the image after updating the Runtime pin. WBench supplies its camera
+path and calibration through `set_camera_path`; no model-specific step command
+or shared capture directory is required.

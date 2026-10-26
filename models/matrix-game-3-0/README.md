@@ -1,6 +1,6 @@
 # Play Matrix-Game 3.0 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop. `matrix_game_3_0.py`
+The adapter uses Reactor Runtime 3.10's native step loop. `matrix_game_3_0.py`
 handles client commands and publishes video and state updates;
 `matrix_game_3_0_model.py` owns the native rollout and its successful chunk
 count without a Runtime dependency. Typed inputs identify each world and
@@ -30,7 +30,7 @@ cache and calls the upstream interactive pipeline directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.5.0, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.10.0, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.

@@ -173,7 +173,7 @@ def test_reactor_manifest_declares_generated_gpu_build() -> None:
     assert document["$schema"] == "reactor/v2"
     assert document["model"]["resources"]["gpu"]["count"] == 1
     assert document["runtime"]["weights_path"] == "~/.cache/reactor_registry/evoke"
-    assert document["build"]["runtime_version"] == "3.5.0"
+    assert document["build"]["runtime_version"] == "3.10.0"
     assert document["build"]["python_requirements"] == "requirements.txt"
     assert "git" in document["build"]["system_packages"]
     assert not (EXAMPLE_DIR / "Dockerfile").exists()

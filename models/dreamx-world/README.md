@@ -43,7 +43,7 @@ from chunk 1.
 
 ## Run
 
-The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+The adapter uses Reactor Runtime 3.10's native step loop. Each step snapshots
 the current inputs, generates one native chunk, and publishes its media and state.
 
 The `build` block in `reactor.yaml` controls the model image: Reactor Runtime

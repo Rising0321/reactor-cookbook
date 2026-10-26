@@ -7,7 +7,7 @@ keys and update the scene description between generated chunks.
 ## Run
 
 Requires the Reactor CLI, Docker, NVIDIA Container Toolkit and one available
-B200 GPU. This workspace builds from `reactor.yaml` and serves on Runtime 3.6.
+B200 GPU. This workspace builds from `reactor.yaml` and serves on Runtime 3.10.
 
 ```sh
 cd models/yume-1-5
