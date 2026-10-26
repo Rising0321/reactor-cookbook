@@ -92,15 +92,13 @@ def app():
 
 
 async def begin(instance, **kwargs):
-    values = {
-        "prompt": "",
-        "seed": 42,
-        "segment_frames": 120,
-        "camera": instance.state.camera,
-        "translation_strength": 1.0,
-        "rotation_strength": 2.5,
-        "trajectory": None,
-    }
+    camera = kwargs.pop("camera", None)
+    trajectory = kwargs.pop("trajectory", None)
+    if trajectory is not None:
+        await instance.set_camera_path(trajectory)
+    if camera is not None:
+        await instance.set_camera(camera)
+    values = {"prompt": "", "seed": 42, "chunk_frames": 120}
     values.update(kwargs)
     return await instance.start(**values)
 
@@ -155,7 +153,7 @@ def test_generate_uses_only_snapshot():
 def test_anchor_until_ack_and_two_live_updates_while_paused():
     async def check():
         instance, _ = app()
-        await begin(instance, prompt="garden", seed=123, segment_frames=120)
+        await begin(instance, prompt="garden", seed=123, chunk_frames=120)
         first = await instance.process_input()
         assert first.start.seed == 123
         assert (await instance.process_input()).start == first.start
@@ -183,12 +181,12 @@ def test_anchor_until_ack_and_two_live_updates_while_paused():
 def test_fresh_world_and_session_seed_isolation():
     async def check():
         instance, _ = app()
-        await begin(instance, prompt="garden", seed=99, segment_frames=120)
+        await begin(instance, prompt="garden", seed=99, chunk_frames=120)
         await instance.process_output(StepOutcome(result=result(), elapsed=1))
-        await instance.reset()
+        await instance.reset(seed=None)
         assert instance.state._world_id == 2 and instance.state._completed == 0
         assert (await instance.process_input()).start.seed == 99
-        await begin(instance, prompt="forest", seed=42, segment_frames=48)
+        await begin(instance, prompt="forest", seed=42, chunk_frames=48)
         assert (await instance.process_input()).start.seed == 42
         instance.on_session_ended()
         instance.engine.reset.assert_called_once()
@@ -200,7 +198,7 @@ def test_fresh_world_and_session_seed_isolation():
 
 def test_error_outcome_never_acknowledges_or_increments():
     instance, _ = app()
-    asyncio.run(begin(instance, prompt="garden", seed=42, segment_frames=120))
+    asyncio.run(begin(instance, prompt="garden", seed=42, chunk_frames=120))
     with pytest.raises(RuntimeError, match="native failure"):
         asyncio.run(
             instance.process_output(
@@ -213,7 +211,7 @@ def test_error_outcome_never_acknowledges_or_increments():
 def test_real_loop_routes_model_error_through_outcome():
     async def check():
         instance, _ = app()
-        await begin(instance, prompt="garden", seed=42, segment_frames=120)
+        await begin(instance, prompt="garden", seed=42, chunk_frames=120)
         instance.engine.generate.side_effect = RuntimeError("failed compute")
         instance._on_loop_ready()
         instance._live.set()
@@ -265,7 +263,7 @@ def test_model_owns_history_and_failure_does_not_increment():
 def test_native_horizon_is_explicit_and_reset_allows_new_world():
     async def check():
         instance, _ = app()
-        await begin(instance, prompt="garden", seed=42, segment_frames=120)
+        await begin(instance, prompt="garden", seed=42, chunk_frames=120)
         await instance.process_output(
             StepOutcome(result=result(index=24, complete=True), elapsed=1)
         )
@@ -273,14 +271,13 @@ def test_native_horizon_is_explicit_and_reset_allows_new_world():
         for call in (
             instance.set_paused(False),
             instance.set_prompt("rain"),
-            instance.set_camera("look_left"),
         ):
             with pytest.raises(CommandError) as error:
                 await call
             assert error.value.code == "rollout_complete"
         with pytest.raises(ApplicationError):
             await instance.process_input()
-        await instance.reset()
+        await instance.reset(seed=None)
         assert not instance.state._complete and not instance.state.paused
 
     asyncio.run(check())
@@ -316,9 +313,8 @@ def test_text_only_disables_camera_and_invalid_motion_is_refused():
     assert plan_camera("text_only", 120) == (None, None)
     instance, messages = app()
     contract = ModelContract.of(HyNomas)
-    for command in ("start", "set_camera"):
-        with pytest.raises(ContractError):
-            contract.validate(command, {"camera": "teleport"})
+    with pytest.raises(ContractError):
+        contract.validate("set_camera", {"camera": "teleport"})
     assert not messages and instance.state.camera == "text_only"
 
 
@@ -387,7 +383,7 @@ def test_trajectory_cursor_ack_and_exhaustion_do_not_reset_world():
         instance.state._camera_poses = poses
         instance.state._camera_intrinsics = intrinsics
         await instance.set_camera("trajectory")
-        await begin(instance, prompt="garden", seed=42, segment_frames=120)
+        await begin(instance, prompt="garden", seed=42, chunk_frames=120)
         first = await instance.process_input()
         assert np.array_equal(first.c2ws, poses[:120])
         assert instance.state._camera_cursor == 0
@@ -421,23 +417,148 @@ def test_connect_sends_current_world_only_to_joiner_without_reset():
     instance.engine.reset.assert_not_called()
 
 
-def test_get_state_is_a_read_only_caller_reply():
-    instance, messages = app()
-    asyncio.run(begin(instance, prompt="courtyard"))
-    asyncio.run(instance.process_output(StepOutcome(result=result(3), elapsed=0.5)))
-    before = instance._status()
-    messages.clear()
-    reply = instance.get_state()
-    assert reply == before and instance._status() == before
-    assert messages == []
-    instance.engine.generate.assert_not_called()
-    instance.engine.reset.assert_not_called()
+def test_client_surface_has_staged_camera_and_shared_chunk_names():
+    instance, _ = app()
+    contract = ModelContract.of(HyNomas)
+    assert "get_state" not in contract.commands
+    assert "release_controls" in contract.commands
+    assert set(vars(contract.validate("start", {}))) == {
+        "prompt",
+        "seed",
+        "chunk_frames",
+    }
+    assert vars(contract.validate("reset", {})) == {"seed": None}
+    assert vars(contract.validate("set_keyboard", {}))["world_id"] is None
+    status = vars(instance._status())
+    assert {
+        "completed_chunks",
+        "last_chunk_seconds",
+        "limit_reached",
+        "chunk_frames",
+        "pressed_keys",
+    } <= status.keys()
+    assert (
+        not {
+            "completed_segments",
+            "last_segment_seconds",
+            "complete",
+            "segment_frames",
+            "generated_frames",
+            "queued_keyboard_keys",
+            "keyboard_keys",
+        }
+        & status.keys()
+    )
+
+
+@pytest.mark.parametrize("transition", ["start", "reset"])
+@pytest.mark.parametrize("old_complete", [False, True])
+def test_replaced_world_results_never_update_state_or_emit(transition, old_complete):
+    async def check():
+        instance, messages = app()
+        instance.output.flush = Mock()
+        await begin(instance, prompt="old world")
+        poses, intrinsics = plan_camera("forward", 2880)
+        instance.state._camera_poses = poses
+        instance.state._camera_intrinsics = intrinsics
+        await instance.set_camera("trajectory")
+        for index in range(1, 24):
+            await instance.process_input()
+            await instance.process_output(
+                StepOutcome(result=result(index), elapsed=0.1)
+            )
+        in_flight = await instance.process_input()
+        assert in_flight.world_id == 1 and in_flight.start is None
+        if transition == "start":
+            await begin(instance, prompt="new world", seed=77)
+        else:
+            await instance.reset(seed=77)
+        before = instance._status()
+        cursor = instance.state._camera_cursor
+        messages.clear()
+        instance.output.flush.reset_mock()
+        output = await instance.process_output(
+            StepOutcome(result=result(24, world=1, complete=old_complete), elapsed=9)
+        )
+        assert output is None and instance._status() == before
+        assert instance.state._camera_cursor == cursor == 0
+        assert instance.state._generated == instance.state._emitted == 0
+        assert not messages
+        instance.output.flush.assert_not_called()
+        current = await instance.process_input()
+        assert current.world_id == 2 and current.start.seed == 77
+        np.testing.assert_array_equal(current.c2ws, poses[:120])
+        accepted = await instance.process_output(
+            StepOutcome(result=result(1, world=2), elapsed=0.2)
+        )
+        assert accepted is not None and instance.state._completed == 1
+        assert not instance.state._complete
+
+    asyncio.run(check())
+
+
+def test_reset_seed_defaults_to_current_and_new_seed_reaches_anchor():
+    async def check():
+        instance, _ = app()
+        await begin(instance, prompt="garden", seed=99, chunk_frames=72)
+        contract = ModelContract.of(HyNomas)
+        await instance.reset(**vars(contract.validate("reset", {})))
+        first = await instance.process_input()
+        assert first.start == WorldStart(seed=99, segment_frames=72)
+        await instance.reset(**vars(contract.validate("reset", {"seed": 17})))
+        assert (await instance.process_input()).start == WorldStart(
+            seed=17, segment_frames=72
+        )
+
+    asyncio.run(check())
+
+
+def test_camera_settings_can_be_staged_after_limit_for_next_start():
+    async def check():
+        instance, _ = app()
+        await begin(instance, prompt="garden")
+        await instance.process_output(
+            StepOutcome(result=result(24, complete=True), elapsed=0.1)
+        )
+        await instance.set_camera("look_right")
+        await instance.set_translation_strength(1.5)
+        await instance.set_rotation_strength(1.2)
+        assert instance.state._complete and instance.state.paused
+        await begin(instance, prompt="forest", chunk_frames=72)
+        current = await instance.process_input()
+        assert current.translation_strength == 1.5 and current.rotation_strength == 1.2
+        assert current.c2ws.shape == (72, 4, 4)
+        assert not instance.state._complete
+
+    asyncio.run(check())
+
+
+def test_release_controls_preserves_text_only_and_rejects_delayed_world():
+    async def check():
+        instance, messages = app()
+        contract = ModelContract.of(HyNomas)
+        await begin(instance, prompt="garden")
+        await instance.release_controls(
+            **vars(contract.validate("release_controls", {}))
+        )
+        assert instance.state.camera == "text_only"
+        await instance.set_keyboard(
+            **vars(contract.validate("set_keyboard", {"w": True}))
+        )
+        assert instance.state._held_keys == ("w",)
+        await instance.reset(seed=None)
+        messages.clear()
+        with pytest.raises(CommandError) as caught:
+            await instance.release_controls(world_id=1)
+        assert caught.value.code == "world_changed" and not messages
+
+    asyncio.run(check())
 
 
 def test_segment_geometry_refusal_is_atomic():
     instance, messages = app()
     with pytest.raises(CommandError):
-        asyncio.run(begin(instance, prompt="garden", seed=42, segment_frames=49))
+        asyncio.run(begin(instance, prompt="garden", seed=42, chunk_frames=49))
     assert instance.state._start is None and not messages
 
 
@@ -494,13 +615,15 @@ def test_malformed_upload_command_does_not_change_camera_or_world():
 
 
 async def keyboard(instance, keys=(), stop=False, world_id=None, latch=True):
+    identity = instance.state._world_id if world_id is None else world_id
+    if stop:
+        return await instance.release_controls(world_id=identity)
     return await instance.set_keyboard(
-        world_id=instance.state._world_id if world_id is None else world_id,
+        world_id=identity,
         **{
             key: key in keys
             for key in ("w", "s", "a", "d", "up", "down", "left", "right")
         },
-        stop=stop,
         latch=latch,
     )
 
@@ -550,8 +673,7 @@ def test_keyboard_tap_survives_release_once_and_stop_cancels_pending():
         await begin(instance, prompt="garden", camera="keyboard")
         await keyboard(instance, ("w", "left"))
         await keyboard(instance)
-        assert instance._status().keyboard_keys == []
-        assert instance._status().queued_keyboard_keys == ["w", "left"]
+        assert instance._status().pressed_keys == []
         first = await instance.process_input()
         assert not np.allclose(first.c2ws[-1], np.eye(4))
         second = await instance.process_input()
@@ -571,7 +693,7 @@ def test_stale_keyboard_world_is_refused_and_reset_clears_held_keys():
         assert error.value.code == "no_world" and not messages
         await begin(instance, prompt="garden", camera="keyboard")
         await keyboard(instance, ("w",))
-        await instance.reset()
+        await instance.reset(seed=None)
         messages.clear()
         with pytest.raises(CommandError) as error:
             await keyboard(instance, ("w",), world_id=1)

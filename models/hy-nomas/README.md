@@ -19,8 +19,7 @@ live prompt editing, combined keyboard/touch camera controls, pause/resume, and 
   loads the model; video tokens and attention history use sequence parallelism.
   The eight-GPU profile was validated over complete 120-second worlds with
   120-frame segments. Full history increases memory use and generation cost.
-  FA4 targets Blackwell SM100; the SM89 FP8 kernel
-  also builds, but RTX 4090 GPU execution has not been validated.
+  This recipe targets Blackwell SM100. Other GPU architectures are not supported.
 - At least 128 GB host RAM and about 80 GB for the inference checkpoints, plus
   space for the image and build cache. Allow at least 200 GB of free disk space.
 - Node.js 22 and npm for the demo (tested with Node 22.23.4).
@@ -142,14 +141,15 @@ alone does not configure hosted authentication.
 
 | Demo control | SDK command | Behavior |
 | --- | --- | --- |
-| Connect / Join this world | `get_state` | Reads the shared state for this viewer after connecting, including paused worlds. |
-| Start world / Start new world | `start` | New seed and segment length; replaces the world and queued playback. |
-| Update prompt | `set_prompt` | Re-encodes the next segment's text while retaining visual history, random state, and decoding context. |
-| WASD / arrow keys / screen buttons | `set_keyboard` | Combined native camera motion, retaining prompt and world; quick taps queue once, stop clears held and queued input. |
+| Connect / Join this world | — | Receives the current world snapshot on connection, including paused worlds. |
+| Start world / Start new world | `start` | New seed and chunk length; replaces the world and queued playback. |
+| Update prompt | `set_prompt` | Re-encodes the next chunk's text while retaining visual history, random state, and decoding context. |
+| WASD / arrow keys / screen buttons | `set_keyboard` | Combined native camera motion, retaining prompt and world; brief taps guide one chunk; release stops future movement. |
+| Stop movement | `release_controls` | Cancels held and brief-tap movement without changing the selected camera. |
 | Apply camera | `set_camera`, `set_translation_strength`, `set_rotation_strength` | Changes the held camera condition for future segments. |
 | Choose a camera path + Apply camera | `set_camera_path` | Uploads and selects a calibrated path; retains the world and pause state. |
-| Pause / Resume | `set_paused` | Holds generation at a segment boundary; buffered video can continue playing. |
-| Restart world | `reset` | Fresh world using the accepted prompt, original seed and segment length; rewinds the uploaded path. |
+| Pause / Resume | `set_paused` | Holds generation at a chunk boundary; buffered video can continue playing. |
+| Restart world | `reset(seed)` | Fresh world using the accepted prompt and chunk length; uses the current seed when omitted and rewinds the uploaded path. |
 
 Prompts accept plain text or one native structured JSON segment. Plain text is
 encoded on the first segment and after an edit. Unchanged plain text in camera
@@ -167,11 +167,12 @@ requested actions or scene changes can be delayed or ignored. Time fields are
 optional for fixed-frame requests; omitting them disables per-action time windows.
 Start is distinct from Update prompt.
 
-Keyboard input follows the released multi-key trajectory generator exactly.
-The `set_keyboard` command carries the current `world_id` and eight native key
-booleans. `latch=true` remembers a newly pressed combination until one segment
-uses it; release-only updates use `latch=false`. `stop=true` cancels both held
-and queued motion. Input for an old world is refused after Start/Restart.
+Keyboard input follows the released movement and look controls. `set_keyboard`
+accepts eight key booleans and `latch=true` to preserve a brief press for one
+chunk. Key-release updates use `latch=false`; `release_controls` cancels both
+held and unconsumed movement. `state_update.pressed_keys` reports held keys.
+An optional `world_id` rejects delayed controls after another viewer starts a
+replacement world; the demo supplies it automatically.
 
 **Follow the prompt** disables camera conditioning. **Hold the view** and idle
 **WASD + arrow keys** both supply an explicit stationary camera condition; releasing
@@ -195,7 +196,7 @@ fewer than one segment remains; upload a longer path or choose another camera
 before resuming. Invalid uploads return a command error without replacing the
 current world.
 
-Segments can contain 48–240 frames in multiples of 24; the demo defaults to
+Chunks can contain 48–240 frames in multiples of 24; the demo defaults to
 **120 frames / 5 seconds** and also offers 2, 3, and 10 seconds at the native
 24 FPS timebase. The released interactive noise bank
 limits a world to **2880 generated frames / 120 native seconds**. Start or Restart
@@ -204,13 +205,10 @@ ending from the old world.
 
 ## Speed and inference settings
 
-The default `hy_nomas.yaml` uses the released **eight-step Euler sampler, full
-history and BF16 precision**. Every generated video/text KV entry is retained
-within the native 120-second world horizon. **CPU offload is disabled.** Text, DiT, decoder weights, working KV and decoder state remain
-resident on the GPUs. In earlier four-step/recent-history 48-frame B200
-experiments, BF16 was slightly faster than the fully quantized combination.
-That comparison does not establish the result for eight-step/full-history
-rollouts or RTX 4090; official quantization remains available separately.
+The default `hy_nomas.yaml` uses the released **eight-step Euler sampler,
+full history and BF16 precision** on eight B200s. **CPU offload is disabled.**
+Weights and working state stay resident. Generation cost and memory use increase
+as the world grows.
 
 On B200, both video attention paths execute FA4. Other infrastructure changes
 batch independent native decoder windows, combine Q/K/V communication, cache
@@ -258,11 +256,6 @@ adaptive playback policy, following measured generation throughput. Set `24`
 only when native-rate pacing is explicitly wanted. Changing segment shape or
 prompt length may require additional compilation.
 
-The optional `hy_nomas_low_mem.yaml` retains the released one-GPU offload-style
-configuration and quantization; the main performance work uses resident B200
-inference. Match the manifest GPU count and device selection to its single worker
-when selecting it. It is not an RTX 4090 speed validation.
-
 The 720×1280 request produces **704×1280 RGB** with the released latent geometry.
 PixelUMM has overlapping, future-dependent windows. The adapter sends its native
 stable prefix: a 48-frame segment initially sends 8 frames and retains 40;
@@ -270,91 +263,39 @@ continuation counts follow native window boundaries. A 120-frame segment initial
 sends 84. At the 2880-frame horizon, the ending is flushed. Reset discards an
 unfinished ending from the old world.
 
-### Measured validation
+### Validation and limits
 
-On eight B200s, a matched eight-step/full-history BF16 comparison generated and
-emitted all **2880 frames in 24 consecutive 120-frame segments**. The cache-staging
-path averaged **19.28 generation FPS**, versus **17.85** and **17.72 FPS** in the
-controls before and after it. All generated latents and complete RGB arrays were
-bit-identical across those three runs. A separate paired 10×120-frame world with
-two prompt edits and movement/look changes also matched exactly on every latent
-and all 1164 emitted stable frames; its final 36 frames remained pending because
-the world ended before the native horizon. These comparisons isolate the staging
-kernel against the existing FA4/compiled implementation. They do not establish
-equality to the original Hopper kernels or long-history 24 FPS real time.
+The default eight-B200, eight-step/full-history BF16 profile completed an
+uninterrupted **24×120-frame world**, generating and emitting all **2880 frames**
+at 704×1280 through the production SDK client. After shape warmup, generation
+averaged **18.53 FPS** and the first generated picture appeared **3.37 seconds
+after Start**. Playback is adaptive; **the full-history world does not sustain
+24 FPS end to end**. Loading and first-use compilation are separate from those
+measurements.
 
-The rebuilt eight-GPU Runtime image completed another 24×120-frame world through
-the production SDK client at **18.53 generation FPS**, with the first generated
-picture **3.37 seconds after Start** following shape warmup. Relay-only TURN/TCP
-and software-decoding Chromium measured **17.43 FPS** by presentation-counter
-increments. Receiver stats reached 2880 decoded frames with zero reported drops;
-startup frames are included, so the count does not prove pixel-exact delivery of
-each model frame. Playback remains adaptive.
+CPU tests cover the application/model boundary, command refusals, paused prompt
+updates, stale-world results after Start/Reset, optional seed changes, shared
+viewers, control release and camera-path validation. Schema/manifest validation,
+Ruff and the frontend build are part of the verification commands below.
+Keyboard geometry matches the released planner for all 256 combinations at
+48, 120 and 240 frames.
 
-An earlier four-GPU, eight-step/full-history BF16 baseline before cache staging
-completed
-**60 consecutive 48-frame segments** in one Runtime session on **four B200 GPUs**, generating and
-emitting all **2880 frames** at 704×1280. This fixed-prompt, seed-42 run used
-**Follow the prompt** with no camera conditioning and no intermediate reset.
+Long worlds can drift in geometry, color and action adherence. The original
+native launcher also produced warmer skin and backgrounds in a matched
+120-second pure-text run; camera-driven runs can warm more strongly. Prompt
+updates refresh model text but do not guarantee that requested actions occur.
+Attention/compiler changes are not universally pixel-identical to the original
+Hopper kernels. Optional quantization has no matched full-world speed guarantee.
 
-| Native content/history stage | Generation FPS | Mean time per 48-frame segment |
-| --- | ---: | ---: |
-| 0–20 seconds | 13.42 | 3.58 s |
-| 20–60 seconds | 8.81 | 5.45 s |
-| 60–120 seconds | 5.54 | 8.66 s |
+From this directory, CPU checks require Runtime 3.10.0, pytest and the small
+NumPy/PyYAML dependencies; native weights and Torch are not needed:
 
-The whole world averaged **7.12 generated FPS** over **404.44 seconds**. The first
-segment took **3.32 seconds** and the last **10.28 seconds / 4.67 FPS**. Generation
-includes worker dispatch, inference, decoding and CPU RGB return. Startup loading
-and warmup are separate. Full history increases inference cost as the world grows.
-
-With adaptive playback and relay-only TURN/TCP, the first generated picture
-appeared **3.60 seconds after Start**. Browser presentation measured **12.97 FPS**
-in the early observed interval and **6.86 FPS** over the observed stream. The
-receiver decoded 2802 frames with zero reported drops before teardown; final
-browser-tail delivery was not verified in this run. Server-side generation and
-emission of all 2880 frames were verified. **The default does not sustain native
-24 FPS end to end.** The 24 FPS export/camera timebase does not pin playback.
-
-The optional four-step/recent-36 fast profile completed another 60×48-frame
-Runtime rollout at **17.95 generated FPS** over segments 3–60. A separate
-13-segment browser run exercised two live prompt edits, combined movement/look,
-tap/release, typing safety, blur, touch controls, shared viewing, reset and
-stale-world refusal. Explicit Disconnect/fresh Connect and viewer-only disposal
-were also checked in the production client.
-
-A short fixed-seed BF16 comparison used two 48-frame calls and a direct native
-96-frame run: latent and complete decoded RGB maximum/mean error were **0**.
-A 240-frame comparison had latent maximum/mean error 0 and RGB MAE **0.244/255**,
-maximum **33/255**. These comparisons used the four-step/recent-history profile
-with FA4 and compiled DiT pre/post regions in both paths. They establish parity
-for that shared path, rather than equality to the original Hopper kernels.
-
-A separate same-latent, 768-frame decoder replay compared the original
-FlexAttention decoder with the enabled decoder optimizations: RGB MAE was
-**0.411/255**, maximum **237/255**, with mean channel biases below **0.002/255**.
-Sparse pixel differences remain. Compiler/attention changes can alter long
-subsequent trajectories; universal pixel equality is not established.
-
-The original Docker image and shell launcher were also run without Reactor on
-the packaged 10-second example and official 33-second text / 30-second camera
-benchmark cases. B200 required the native FlexAttention option because the
-original Hopper kernel could not execute. A controlled 30-second comparison of
-the same scene, seed and prompts showed warming with both stationary and moving
-camera conditioning, more strongly than without camera conditioning. This is
-one scene/seed, not a general quality guarantee or proof of a specific kernel
-fault. Another matched 120-second pure-text run through the original launcher
-also developed warmer skin and backgrounds. Camera conditioning can make warming
-more pronounced; disabling it does not guarantee stable color. Long worlds can
-drift in geometry, color and prompt adherence.
-
-All 256 keyboard combinations at 48/120/240 frames match the released planner
-exactly (768 CPU cases). Both deliveries pass **81 CPU tests**, schema rendering,
-manifest validation, Ruff checks/formatting and frontend typecheck/build. Real
-GPU probes cover Q/K/V communication, fused normalization/rotary output, FA4
-metadata invalidation and official quantized weight/scale handling. The resident
-quantized preset has not had a matched eight-step/full-history 120-second speed
-run; RTX 4090 execution and the offload profile remain outside this acceptance.
+```sh
+PYTHONPATH=. python -m pytest tests/ -q
+python -m reactor_runtime.schema --path . --out /tmp/hy-nomas-schema.json
+reactor validate
+cd demo && npm ci && npm run build
+```
 
 ## Code and SDKs
 

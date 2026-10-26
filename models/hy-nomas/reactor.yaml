@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: hy-nomas
-  version: v0.2.2
+  version: v0.3.0
   description: Hy-Nomas distilled world generation with live prompts and camera trajectories.
   resources:
     gpu:

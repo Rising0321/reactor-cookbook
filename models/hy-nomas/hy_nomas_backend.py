@@ -38,10 +38,8 @@ class HyNomasBackend:
         from hy_nomas_attention import install_decoder_fa4, install_fa4
 
         capability = torch.cuda.get_device_capability()
-        if capability not in ((8, 9), (10, 0)):
-            raise RuntimeError(
-                "This build supports Blackwell SM100 and the SM89 low-memory profile."
-            )
+        if capability != (10, 0):
+            raise RuntimeError("This build supports Blackwell SM100 GPUs.")
         if settings.cpu_offload and (
             world_size != 1
             or settings.cache_int8_weights
@@ -50,13 +48,12 @@ class HyNomasBackend:
             raise ValueError(
                 "CPU offload requires one GPU, one decoder window and uncached weights."
             )
-        if capability == (10, 0):
-            install_fa4()
-            install_decoder_fa4()
+        install_fa4()
+        install_decoder_fa4()
         overrides = [
             "+experiment=inference",
             "model.dit.seg_ar_attention_backend=magi"
-            if capability == (10, 0) and not settings.cpu_offload
+            if not settings.cpu_offload
             else "model.dit.seg_ar_attention_backend=flex",
             "inference.torch_compile=true",
             "model.vae.compile_decoder=false",
@@ -74,7 +71,7 @@ class HyNomasBackend:
         if settings.precision != "bf16":
             from hy_nomas_quantization import install_fp8
 
-            install_fp8(settings.source, settings.cutlass, capability)
+            install_fp8(settings.cutlass)
             overrides.append("model.vae.cutlass_fp8=true")
         if settings.precision == "int8_fp8":
             overrides += [
@@ -148,9 +145,9 @@ class HyNomasBackend:
         if world_size > 1:
             from hy_nomas_exchange import SequenceExchange
 
-            self._exchange = SequenceExchange(packed_qkv=True)
+            self._exchange = SequenceExchange()
         self._cache_staging = None
-        if capability == (10, 0) and not settings.cpu_offload:
+        if not settings.cpu_offload:
             from hy_nomas_cache import CacheStaging
 
             self._cache_staging = CacheStaging()

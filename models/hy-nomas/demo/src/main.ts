@@ -18,21 +18,21 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
  <aside>
   <p class="eyebrow">01 / SHAPE YOUR WORLD</p><h1>Describe your world.</h1><p class="intro">Change the scene with words. Explore with WASD.</p>
   <label class="field-title" for="prompt">Prompt <span>Scene · style · action</span></label><textarea id="prompt" rows="6" maxlength="8192" placeholder="Describe the world you want to create…"></textarea>
-  <button id="update" class="secondary" disabled>Update prompt</button><p class="hint">Updates guide the next segment while preserving the current world.</p>
+  <button id="update" class="secondary" disabled>Update prompt</button><p class="hint">Updates guide the next chunk while preserving the current world.</p>
   <button id="start" class="primary" disabled>Start world <span aria-hidden="true">↗</span></button><p id="start-hint" class="hint">Connect to your Runtime to begin.</p><p id="error" role="alert" hidden></p>
   <div class="camera-controller" id="camera-controller">
    <div class="controller-heading"><div><strong>Camera control</strong><p id="keyboard-status">Start a world to explore.</p></div><button id="keyboard-toggle" aria-pressed="false" disabled>Enable camera keys</button></div>
    <div class="control-pads">
     <div class="control-pad"><span>MOVE</span><div class="key-grid"><button data-camera-key="w" class="key-top" aria-label="Move forward (W)" disabled>W</button><button data-camera-key="a" aria-label="Move left (A)" disabled>A</button><button data-camera-key="s" aria-label="Move backward (S)" disabled>S</button><button data-camera-key="d" aria-label="Move right (D)" disabled>D</button></div></div>
     <div class="control-pad"><span>LOOK</span><div class="key-grid"><button data-camera-key="up" class="key-top" aria-label="Look up (up arrow)" disabled>↑</button><button data-camera-key="left" aria-label="Look left (left arrow)" disabled>←</button><button data-camera-key="down" aria-label="Look down (down arrow)" disabled>↓</button><button data-camera-key="right" aria-label="Look right (right arrow)" disabled>→</button></div></div>
-    <div class="control-feedback"><p id="keyboard-queue" role="status">No camera movement queued.</p><button id="camera-stop" disabled>Stop movement</button><small>Each input guides the next segment. Buffered video plays first.</small></div>
+    <div class="control-feedback"><p id="keyboard-queue" role="status">No camera movement queued.</p><button id="camera-stop" disabled>Stop movement</button><small>Each input guides the next chunk. Buffered video plays first.</small></div>
    </div>
   </div>
   <details class="camera-options"><summary>Camera presets &amp; uploaded paths</summary><label class="field-title" for="camera">Camera <span>Next segment</span></label><select id="camera">${Object.entries(modes).map(([key, label]) => `<option value="${key}">${label}</option>`).join("")}</select>
   <div class="row camera-strengths"><label for="translation">Translation<input id="translation" type="number" min="0.1" max="3" step="0.1" value="1"></label><label for="rotation">Rotation<input id="rotation" type="number" min="0.1" max="3" step="0.1" value="2.5"></label></div>
   <button id="apply-camera" class="secondary" disabled>Apply camera</button>
   <label class="upload-card" for="trajectory"><span class="upload-icon" aria-hidden="true">↗</span><span><strong>Choose a camera path</strong><small>NPZ · c2ws + intrinsics · 24 FPS · up to 4 MiB</small></span><input id="trajectory" class="file-input" type="file" accept=".npz"></label><p id="selection" class="hint">Choose a path, then press Apply camera or Start.</p></details>
-  <details class="settings"><summary>Generation settings</summary><div class="row"><label for="seed">Seed<input id="seed" type="number" min="0" max="2147483647" value="42"></label><label for="frames">Segment duration<select id="frames"><option value="48">2 seconds</option><option value="72">3 seconds</option><option value="120" selected>5 seconds</option><option value="240">10 seconds</option></select></label></div></details>
+  <details class="settings"><summary>Generation settings</summary><div class="row"><label for="seed">Seed<input id="seed" type="number" min="0" max="2147483647" value="42"></label><label for="frames">Chunk duration<select id="frames"><option value="48">2 seconds</option><option value="72">3 seconds</option><option value="120" selected>5 seconds</option><option value="240">10 seconds</option></select></label></div></details>
 
  </aside>
  <section class="stage">
@@ -55,6 +55,8 @@ let client: Reactor | undefined;
 let ready = false, busy = false, active = false, paused = true, complete = false;
 let world = 0, emitted = 0;
 let activeCamera = "text_only";
+let receivedSnapshot = false;
+const editedInputs = new Set<string>();
 let media = new MediaStream();
 let showing = false;
 let frameCallback: number | undefined;
@@ -75,8 +77,9 @@ const controls = new CameraControls(el("camera-controller"), el("video-shell"), 
   const connection = client;
   if (!connection || !ready || world !== controlledWorld) return;
   error("");
+  if (stop) { await command("release_controls", {world_id:controlledWorld}); return; }
   await command("set_keyboard", {
-    world_id: controlledWorld, stop, latch,
+    world_id: controlledWorld, latch,
     ...Object.fromEntries(["w","s","a","d","up","down","left","right"].map(key => [key, keys.includes(key)])),
   });
 }, () => { camera.value = "keyboard"; }, reportError);
@@ -110,9 +113,9 @@ function refresh() {
   el("placeholder").hidden = showing;
   el("video-shell").classList.toggle("has-video", showing);
   el("connection").classList.toggle("live", ready);
-  el("placeholder-title").textContent = active ? "Creating your first segment" : ready ? "Ready when you are" : "Your world starts here";
-  el("placeholder-detail").textContent = active ? "The first segment can take longer while the model warms up." : ready ? "Write a prompt, choose a camera, then press Start world." : "Connect, describe your scene, then press Start world.";
-  el("playback-label").textContent = !ready ? "Waiting to connect" : !active ? "Connected · waiting for input" : complete ? "World complete · start or restart to continue" : paused ? "Generation paused · buffered video can still play" : showing ? "Live world" : "Generating first segment…";
+  el("placeholder-title").textContent = active ? "Creating your first chunk" : ready ? "Ready when you are" : "Your world starts here";
+  el("placeholder-detail").textContent = active ? "The first chunk can take longer while the model warms up." : ready ? "Write a prompt, choose a camera, then press Start world." : "Connect, describe your scene, then press Start world.";
+  el("playback-label").textContent = !ready ? "Waiting to connect" : !active ? "Connected · waiting for input" : complete ? "World complete · start or restart to continue" : paused ? "Generation paused · buffered video can still play" : showing ? "Live world" : "Generating first chunk…";
   el("start-hint").textContent = !ready ? "Connect to your Runtime to begin." : active ? "Start new world resets history. Update prompt continues the current world." : "Generation starts only when you press Start.";
 }
 function attachMedia() {
@@ -133,30 +136,43 @@ function attachMedia() {
   });
 }
 function readState(state: Record<string, unknown>) {
+  if (!receivedSnapshot) {
+    if (!editedInputs.has("prompt")) prompt.value = String(state.prompt || "");
+    if (!editedInputs.has("camera")) camera.value = String(state.camera);
+    if (!editedInputs.has("translation")) input("translation").value = String(state.translation_strength);
+    if (!editedInputs.has("rotation")) input("rotation").value = String(state.rotation_strength);
+    if (!editedInputs.has("seed") && state.seed !== null) input("seed").value = String(state.seed);
+    if (!editedInputs.has("frames") && state.chunk_frames !== null) {
+      const frames = el<HTMLSelectElement>("frames"), value = String(state.chunk_frames);
+      if (!Array.from(frames.options).some(option => option.value === value)) {
+        frames.add(new Option(`${Number(value) / 24} seconds`, value));
+      }
+      frames.value = value;
+    }
+    receivedSnapshot = true;
+  }
   const nextWorld = Number(state.world_id);
   if (nextWorld !== world) clearPlayer();
   world = nextWorld; active = Boolean(state.active); paused = Boolean(state.paused);
   activeCamera = String(state.camera);
-  complete = Boolean(state.complete); emitted = Number(state.emitted_frames);
+  complete = Boolean(state.limit_reached); emitted = Number(state.emitted_frames);
   uploadedCameraName = String(state.camera_path || "");
-  const queued = (state.queued_keyboard_keys || []) as string[];
-  const held = (state.keyboard_keys || []) as string[];
+  const held = (state.pressed_keys || []) as string[];
   const keyLabel = (key: string) => ({up:"↑",down:"↓",left:"←",right:"→"}[key] || key.toUpperCase());
-  el("keyboard-queue").textContent = queued.length ? `Queued for next segment: ${queued.map(keyLabel).join(" + ")}`
-    : held.length ? `Continuing: ${held.map(keyLabel).join(" + ")}` : "No camera movement queued.";
+  el("keyboard-queue").textContent = held.length ? `Continuing: ${held.map(keyLabel).join(" + ")}` : "No camera movement held.";
 
   el("held-camera").textContent = `Camera: ${modes[String(state.camera)] || state.camera}${state.camera === "trajectory" ? ` · ${Number(state.camera_frames_remaining)} path frames remaining` : ""}`;
-  const elapsed = Number(state.last_segment_seconds);
-  const requested = Number(state.segment_frames);
-  const lastFrames = Number(state.generated_frames) - Math.max(0, Number(state.completed_segments) - 1) * requested;
-  const seconds = elapsed > 0 ? ` · ${elapsed.toFixed(2)} s / segment · ${(lastFrames / elapsed).toFixed(1)} generation FPS` : "";
-  el("progress").textContent = active ? `World ${world} · ${Number(state.completed_segments)} segments · ${emitted} frames sent${seconds}` : "No world generated yet.";
+  const elapsed = Number(state.last_chunk_seconds);
+  const requested = Number(state.chunk_frames);
+  const seconds = elapsed > 0 ? ` · ${elapsed.toFixed(2)} s / chunk · ${(requested / elapsed).toFixed(1)} generation FPS` : "";
+  el("progress").textContent = active ? `World ${world} · ${Number(state.completed_chunks)} chunks · ${emitted} frames sent${seconds}` : "No world generated yet.";
   refresh(); attachMedia();
 }
 async function command(name: string, args: Record<string, unknown> = {}) {
   if (!client) throw new Error("Connect to your Runtime first.");
   const reply = await client.sendCommand(name, args);
   if (reply === undefined) throw new Refused(name);
+  if (reply.type === "state_update") readState(reply.data as Record<string, unknown>);
   return reply;
 }
 async function act(action: () => Promise<unknown>) {
@@ -168,7 +184,11 @@ async function act(action: () => Promise<unknown>) {
 function resetConnection() {
   clearPlayer(); ready = active = complete = false; paused = true; world = emitted = 0;
   activeCamera = "text_only";
+  receivedSnapshot = false;
   media = new MediaStream(); uploadedFile = undefined; uploadedCameraName = "";
+  el("progress").textContent = "No world generated yet.";
+  el("held-camera").textContent = "Camera: Follow the prompt";
+  el("keyboard-queue").textContent = "No camera movement held.";
   el("connection").textContent = "disconnected"; button("connect").textContent = "Connect";
   refresh();
 }
@@ -226,10 +246,7 @@ button("connect").onclick = () => void act(async () => {
   });
   try {
     await connection.connect(undefined, sessionId ? {sessionId} : undefined);
-    if (client === connection) {
-      const snapshot = await command("get_state");
-      readState(snapshot.data as Record<string, unknown>);
-    }
+
   }
   catch (cause) { if (client === connection) client = undefined; connection[Symbol.dispose](); resetConnection(); throw cause; }
 });
@@ -245,38 +262,30 @@ async function uploadPath() {
 async function applyCamera() {
   controls.release(true);
   if (camera.value === "trajectory") await uploadPath();
-  await command("set_camera", {camera:camera.value});
+  if (camera.value !== activeCamera) await command("set_camera", {camera:camera.value});
   await command("set_translation_strength", {translation_strength:Number(input("translation").value)});
   await command("set_rotation_strength", {rotation_strength:Number(input("rotation").value)});
 }
 button("start").onclick = () => void act(async () => {
-  controls.release(true);
-  const file = input("trajectory").files?.[0];
-  let trajectory: unknown;
-  if (camera.value === "trajectory") {
-    if (!file && !uploadedCameraName) throw new Error("Choose a camera NPZ first.");
-    if (file && file !== uploadedFile) {
-      if (file.size > 4 * 1024 * 1024) throw new Error("Camera NPZ must be at most 4 MiB.");
-      trajectory = await client!.uploadFile(file);
-    }
-  }
+  await applyCamera();
   await command("start", {prompt:prompt.value, seed:Number(input("seed").value),
-    segment_frames:Number(el<HTMLSelectElement>("frames").value), camera:camera.value,
-    translation_strength:Number(input("translation").value), rotation_strength:Number(input("rotation").value),
-    ...(trajectory ? {trajectory} : {})});
-  if (trajectory && file) uploadedFile = file;
+    chunk_frames:Number(el<HTMLSelectElement>("frames").value)});
 });
 button("update").onclick = () => void act(() => command("set_prompt", {prompt:prompt.value}));
 button("apply-camera").onclick = () => void act(applyCamera);
 button("pause").onclick = () => void act(() => command("set_paused", {paused:!paused}));
-button("reset").onclick = () => void act(() => { controls.release(true); return command("reset"); });
+button("reset").onclick = () => void act(() => { controls.release(true); return command("reset", {seed:Number(input("seed").value)}); });
 button("fullscreen").onclick = () => void el("video-shell").requestFullscreen();
 input("trajectory").onchange = () => {
   const file = input("trajectory").files?.[0];
   el("selection").textContent = file ? `${file.name} · waiting for Apply camera or Start` : "Choose a path, then press Apply camera or Start.";
-  if (file) camera.value = "trajectory";
+  if (file) { camera.value = "trajectory"; editedInputs.add("camera"); }
 };
-prompt.oninput = refresh;
+prompt.oninput = () => { editedInputs.add("prompt"); refresh(); };
+camera.onchange = () => editedInputs.add("camera");
+for (const id of ["seed", "frames", "translation", "rotation"]) {
+  el(id).oninput = () => editedInputs.add(id);
+}
 button("forget-session").onclick = () => {
   forgetSession(); error("");
 };

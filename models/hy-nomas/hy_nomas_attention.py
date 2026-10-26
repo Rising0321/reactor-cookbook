@@ -8,7 +8,6 @@ from collections import OrderedDict
 
 _metadata = OrderedDict()
 _identities = OrderedDict()
-_stats = {"calls": 0, "builds": 0}
 _decoder_installed = False
 _batched_ranges = OrderedDict()
 
@@ -57,7 +56,6 @@ def fa4_attention(
     if identity in _identities:
         _identities.move_to_end(identity)
         arg = _identities[identity][1]
-        _stats["calls"] += 1
         return fa4_fwd(
             q=q,
             k=k,
@@ -84,14 +82,12 @@ def fa4_attention(
             seqlen_q=q.shape[0],
             seqlen_k=k.shape[0],
         )
-        _stats["builds"] += 1
         if len(_metadata) > 32:
             _metadata.popitem(last=False)
     _metadata.move_to_end(key)
     _identities[identity] = (tensors, _metadata[key])
     if len(_identities) > 64:
         _identities.popitem(last=False)
-    _stats["calls"] += 1
     return fa4_fwd(
         q=q,
         k=k,
@@ -120,7 +116,6 @@ def install_fa4() -> None:
     def varlen(
         q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, **kwargs
     ):
-        _stats["dense_calls"] = _stats.get("dense_calls", 0) + 1
         return flash_attn_varlen_func(
             q, k, v, cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k, **kwargs
         )[0]

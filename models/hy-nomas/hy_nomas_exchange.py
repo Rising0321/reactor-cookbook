@@ -2,12 +2,11 @@
 
 
 class SequenceExchange:
-    def __init__(self, packed_qkv=False):
+    def __init__(self):
         import hymm.models.dit.nomas_cpt as native
 
         self.original = native.all_to_all_4D
         self.lengths = {}
-        self.packed_qkv = packed_qkv
         self.pending = []
         self.receive = None
         self.stats = {
@@ -51,22 +50,7 @@ class SequenceExchange:
             if len(set(lengths)) != 1:
                 self.stats["fallback_calls"] += 1
                 return self.original(input_, group, scatter_dim, gather_dim)
-            if self.packed_qkv:
-                return self._packed(input_, group, world)
-            shard_heads = heads // world
-            send = (
-                input_.reshape(batch, length, world, shard_heads, dim)
-                .transpose(0, 2)
-                .contiguous()
-            )
-            receive = torch.empty_like(send)
-            dist.all_to_all_single(receive, send, group=group)
-            self.stats["fast_calls"] += 1
-            return (
-                receive.reshape(length * world, batch, shard_heads, dim)
-                .transpose(0, 1)
-                .contiguous()
-            )
+            return self._packed(input_, group, world)
         if scatter_dim == 1 and gather_dim == 2 and key in self.lengths:
             local_length, lengths = self.lengths[key]
             if len(set(lengths)) == 1 and length == local_length * world:

@@ -25,28 +25,28 @@ class HyNomasState(InputState):
         default="",
         max_length=8192,
         moderate=True,
-        description="Description for the next segment. Live edits retain the world; buffered frames keep their original conditions.",
+        description="Scene/action text or a single-segment JSON prompt for the next chunk. Live edits continue the world; frames already generated keep the previous prompt.",
     )
     paused: bool = InputField(
         default=True,
-        description="Hold generation at a segment boundary. Buffered video can continue playing.",
+        description="Hold generation between chunks. Frames already generated can keep playing.",
     )
     camera: str = InputField(
         default="text_only",
         choices=CAMERAS,
-        description="Held camera motion for the next segment. text_only disables camera conditioning; stationary explicitly holds the view.",
+        description="Camera motion for the next chunk. text_only follows the prompt; stationary holds the view still.",
     )
     translation_strength: float = InputField(
         default=1.0,
         ge=0.1,
         le=3.0,
-        description="Camera translation gain, applied at the next segment boundary.",
+        description="Camera movement strength for the next chunk.",
     )
     rotation_strength: float = InputField(
         default=2.5,
         ge=0.1,
         le=3.0,
-        description="Camera rotation gain, applied at the next segment boundary.",
+        description="Camera look strength for the next chunk.",
     )
     _world_id: int = 0
     _applied_world_id: int | None = None
@@ -65,45 +65,39 @@ class HyNomasState(InputState):
 
 
 class StateUpdate(ModelMessage):
-    keyboard_keys: list[str] = MessageField(description="Held WASD/arrow keys.")
-    queued_keyboard_keys: list[str] = MessageField(
-        description="Latest camera key combination waiting for a generation segment."
-    )
+    """Emitted when the world changes and sent to each viewer on connection."""
+
+    pressed_keys: list[str] = MessageField(description="Held WASD/arrow keys.")
     world_id: int = MessageField(
         description="World identity; changes only on Start or Reset."
     )
-    prompt: str = MessageField(description="Accepted prompt for the next segment.")
+    prompt: str = MessageField(description="Accepted prompt for the next chunk.")
     paused: bool = MessageField(description="Whether generation is paused.")
-    camera: str = MessageField(
-        description="Accepted camera motion for the next segment."
-    )
+    camera: str = MessageField(description="Accepted camera motion for the next chunk.")
     translation_strength: float = MessageField(
         description="Accepted camera translation gain."
     )
     rotation_strength: float = MessageField(
         description="Accepted camera rotation gain."
     )
-    completed_segments: int = MessageField(
-        description="Successfully generated segments in this world."
-    )
-    generated_frames: int = MessageField(
-        description="Total newly generated frames in the world, including frames waiting to be sent."
+    completed_chunks: int = MessageField(
+        description="Successfully generated chunks in this world."
     )
     emitted_frames: int = MessageField(
         description="Total frames submitted for playback."
     )
-    last_segment_seconds: float | None = MessageField(
-        description="Runtime-measured generation time for the last segment."
+    last_chunk_seconds: float | None = MessageField(
+        description="Runtime-measured duration of the last chunk."
     )
     active: bool = MessageField(description="Whether Start has created a world.")
-    complete: bool = MessageField(
+    limit_reached: bool = MessageField(
         description="Whether the 120-second world duration has completed."
     )
     seed: int | None = MessageField(
         description="Seed for this world, or null before Start."
     )
-    segment_frames: int | None = MessageField(
-        description="Requested frames per native segment, or null before Start."
+    chunk_frames: int | None = MessageField(
+        description="Requested frames per chunk, or null before Start."
     )
     camera_path: str = MessageField(
         description="Uploaded camera trajectory filename, or empty if none is staged."
