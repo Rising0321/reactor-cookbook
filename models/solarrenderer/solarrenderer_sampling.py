@@ -26,10 +26,9 @@ from solarwm.backends.minimax_h3.omni_causal import (
 class SolarCausalRun:
     """One finite native rollout; each step samples and commits one latent block."""
 
-    def __init__(self, core, batch, generator, *, cache_structure=False):
+    def __init__(self, core, batch, generator):
         self.core = core
         self.generator = generator
-        self.cache_structure = cache_structure
         self.schedule = make_shifted_schedule(5, shift=12.0)
         self.window = int(core.causal.get("window", 6))
         (
@@ -101,16 +100,10 @@ class SolarCausalRun:
         c = self.index
         f0, f1 = self.rows.frames[c]
         history = tuple(
-            ("structure", j)
-            for j in _window(c, self.window)
-            if self.rows.structure and self.cache_structure
+            ("structure", j) for j in _window(c, self.window) if self.rows.structure
         ) + tuple(("clean", j) for j in _window(c, self.window) if j < c)
-        extra = (
-            [self.rows.structure[j] for j in _window(c, self.window)]
-            if self.rows.structure and not self.cache_structure
-            else []
-        )
-        if self.rows.structure and self.cache_structure:
+        extra = []
+        if self.rows.structure:
             # Native structure rows attend only to static rows and themselves.
             # Commit once without changing the six-block window or RNG draws.
             arrays, where, pick, mine, times = self._document(

@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import yaml
+
 from solarrenderer_model import SolarSettings
 
 SOURCE_REVISION = "a2371eaecff9a8ab378b5ec36199c5863d138074"
@@ -22,12 +23,9 @@ def read_settings(config_path: Path, weights_root: Path) -> SolarSettings:
             f"Expected upstream source {SOURCE_REVISION}; found {revision}."
         )
     root = weights_root.resolve()
-    scratch = root / "scratch"
-    scratch.mkdir(parents=True, exist_ok=True)
     return SolarSettings(
         source=source,
         h3=root / "MiniMax-H3",
         control=root / "solarrenderer_causal_control_lora.safetensors",
         fewstep=root / "solarrenderer_causal_4step_lora.safetensors",
-        scratch=scratch,
     )

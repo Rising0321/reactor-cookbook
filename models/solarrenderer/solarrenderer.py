@@ -21,10 +21,10 @@ from reactor_runtime import (
     session_ended,
 )
 from reactor_runtime.distributed import DistributedRunner
+
 from solarrenderer_assets import read_settings
-from solarrenderer_distributed import FourModel
 from solarrenderer_media import validate_reference, validate_structure
-from solarrenderer_model import SolarAnchor, SolarInput, SolarResult
+from solarrenderer_model import SolarAnchor, SolarInput, SolarModel, SolarResult
 from solarrenderer_types import SolarOutput, SolarState
 from solarrenderer_types import StateUpdate as SolarStatus
 
@@ -39,7 +39,7 @@ class SolarRenderer(ReactorApp):
             raise ValueError("SolarRenderer requires solarrenderer.yaml.")
         settings = read_settings(config_path, Path(get_weights_path()))
         self.engine = DistributedRunner(
-            FourModel,
+            SolarModel,
             world_size=4,
             load_kwargs={"settings": settings},
             init_process_group=True,
@@ -56,16 +56,16 @@ class SolarRenderer(ReactorApp):
             has_structure=s._structure is not None,
             has_reference=s._reference is not None,
             world_id=s._world_id,
-            chunks=s._chunks,
-            frames=s._frames,
+            completed_chunks=s._chunks,
+            output_frames=s._frames,
             active=s._active,
             complete=s._complete,
-            elapsed=elapsed,
+            last_chunk_seconds=elapsed,
         )
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
-        await self.send(self._status())
+        await client.send(self._status())
 
     @session_ended
     def on_session_ended(self) -> None:
@@ -74,7 +74,7 @@ class SolarRenderer(ReactorApp):
 
     @event(
         name="set_structure",
-        description="Select a structure video for the next Start. Fails with invalid_video for corrupt, oversized or too-short input.",
+        description="Select a structure video for the next Start. Fails with `invalid_video` for corrupt, oversized or too-short input.",
     )
     async def set_structure(
         self,
@@ -93,10 +93,10 @@ class SolarRenderer(ReactorApp):
         return status
 
     @event(
-        name="set_reference",
-        description="Select an optional aligned appearance image for the next Start. Fails with invalid_image for unsupported, oversized or corrupt images.",
+        name="set_image",
+        description="Select an optional aligned appearance image for the next Start. Fails with `invalid_image` for unsupported, oversized or corrupt images.",
     )
-    async def set_reference(
+    async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - Runtime schema declaration
             moderate=True,
@@ -113,10 +113,10 @@ class SolarRenderer(ReactorApp):
         return status
 
     @event(
-        name="clear_reference",
+        name="clear_image",
         description="Omit the optional appearance reference from the next video.",
     )
-    async def clear_reference(self) -> SolarStatus:
+    async def clear_image(self) -> SolarStatus:
         self.state._reference = None
         status = self._status()
         await self.send(status)
@@ -124,7 +124,7 @@ class SolarRenderer(ReactorApp):
 
     @event(
         name="set_prompt",
-        description="Stage the six-part rendering prompt for the next Start. The current video keeps its original prompt.",
+        description="Stage the rendering prompt for the next Start. The current video keeps its original prompt.",
     )
     async def set_prompt(
         self,
@@ -153,11 +153,15 @@ class SolarRenderer(ReactorApp):
 
     @event(
         name="set_paused",
-        description="Pause or resume generation. Already buffered video may still play.",
+        description="Pause or resume generation. Already buffered video may still play. Fails with `not_running` when no video is active.",
     )
     async def set_paused(
         self, paused: bool = InputField(description="Whether to pause generation.")
     ) -> SolarStatus:
+        if not self.state._active:
+            raise CommandError(
+                "not_running", "Start a video before pausing or resuming."
+            )
         self.state.paused = paused
         status = self._status()
         await self.send(status)
@@ -165,7 +169,7 @@ class SolarRenderer(ReactorApp):
 
     @event(
         name="start",
-        description="Begin a new finite video from selected inputs. Fails with missing_video or missing_prompt until both are supplied. Replaces the current video.",
+        description="Begin a new finite video from selected inputs. Fails with `missing_video` or `missing_prompt` until both are supplied. Replaces the current video.",
     )
     async def start(self) -> SolarStatus:
         s = self.state
@@ -179,6 +183,20 @@ class SolarRenderer(ReactorApp):
         s._world_id += 1
         s._chunks = s._frames = 0
         s._active, s._complete, s.paused = True, False, False
+        self.output.flush()
+        status = self._status()
+        await self.send(status)
+        return status
+
+    @event(
+        name="stop",
+        description="End the current video and clear buffered playback. Selected inputs remain available for Start.",
+    )
+    async def stop(self) -> SolarStatus:
+        s = self.state
+        s._active, s._complete, s.paused = False, False, False
+        s._anchor = None
+        self.engine.reset()
         self.output.flush()
         status = self._status()
         await self.send(status)
@@ -204,6 +222,8 @@ class SolarRenderer(ReactorApp):
             raise outcome.error
         result: SolarResult = outcome.result
         s = self.state
+        if result.world_id != s._world_id or not s._active:
+            return None
         s._applied_id, s._chunks = result.world_id, result.chunk_index
         s._frames += 0 if result.frames is None else len(result.frames)
         s._complete, s._active = result.complete, not result.complete

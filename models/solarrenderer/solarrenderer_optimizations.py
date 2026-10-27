@@ -132,7 +132,6 @@ def install_fa4():
     omni_causal.segment_attention = attention
 
 
-from solarrenderer_sampling import SolarCausalRun
 from solarwm.backends.minimax_h3.omni_causal import (
     CLEAN_LEVEL,
     STATIC_TIME,
@@ -142,13 +141,15 @@ from solarwm.backends.minimax_h3.omni_causal import (
     select_rows,
 )
 
+from solarrenderer_sampling import SolarCausalRun
+
 
 class StaticPrefixRun(SolarCausalRun):
     """Cache text/reference KV once; they attend only to each other in native plan."""
 
     @torch.no_grad()
-    def __init__(self, core, batch, generator, **kwargs):
-        super().__init__(core, batch, generator, **kwargs)
+    def __init__(self, core, batch, generator):
+        super().__init__(core, batch, generator)
         keep = np.concatenate([np.arange(a, b) for a, b in sorted(self.rows.static)])
         arrays = select_rows(self.layout, keep)
         cond_rows = self.layout.source.video_indices[

@@ -2,8 +2,8 @@ $schema: reactor/v2
 
 model:
   name: solarrenderer
-  version: v0.1.1
-  description: Render a structure video with an optional appearance reference and a six-part prompt.
+  version: v0.2.0
+  description: Render a structure video with an optional appearance reference and a rendering prompt.
   resources:
     gpu:
       type: NVIDIA_B200
@@ -21,7 +21,7 @@ runtime:
   weights_path: ~/.cache/reactor_registry/solarrenderer
 
 build:
-  runtime_version: "3.8.3"
+  runtime_version: "3.10.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
@@ -33,6 +33,9 @@ build:
   run:
     - git clone https://github.com/Enderfga/SolarRenderer.git /opt/solarrenderer && git -C /opt/solarrenderer checkout a2371eaecff9a8ab378b5ec36199c5863d138074
     - pip install --no-build-isolation flash-attn==2.8.3
+    # FA2 also ships flash_attn.cute; restore the selected FA4 files last.
+    - pip install --no-deps --force-reinstall flash-attn-4==4.0.0b34
+    - python -c "from flash_attn.cute.interface import flash_attn_func"
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
     PYTORCH_ALLOC_CONF: "expandable_segments:True"

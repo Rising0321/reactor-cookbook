@@ -8,23 +8,23 @@ and receive the rendered video in a small browser demo.
 ![SolarRenderer rendering the official synthwave example through Reactor](assets/demo.png)
 
 **Validation status:** this four-B200 integration is a development preview.
-The browser has completed ten generation blocks (158 frames) with and without
+The browser has completed ten chunks (158 frames) with and without
 an appearance reference, including a forced TURN/TCP media path.
-Observed steady blocks take about 1.8–2.1 seconds for 17 frames; preparing a new
-video can take over a minute. This is below the native 24 FPS timeline.
-Docker image execution remains unvalidated. FA4 and static-prefix caching change
+Observed steady chunks take about 2 seconds for 17 frames. With resident weights,
+input encoding and the first chunk took 31–33 seconds in the two tested modes. This is below the native 24 FPS timeline.
+FA4 and static-prefix caching change
 floating-point results; the accelerated version is not bitwise identical to native inference.
 
 ## What the integration adds
 
-- A Reactor service with explicit input selection, Start, Pause and Resume.
+- A Reactor service with explicit input selection, Start, Stop, Pause and Resume.
 - Streaming output as completed video segments become available.
 - A browser client using the official Reactor JavaScript SDK.
 - Four-GPU sequence parallelism, FA4, modulation/text/static-prefix caching and parallel VAE decoding.
 - Clickable example inputs and a side-by-side structure/render view.
 
 The service uses the released causal four-step model. Each video contains 158 frames
-and ends after ten generation blocks. Its native timeline is 24 FPS (about 6.58 seconds).
+and ends after ten chunks. Its native timeline is 24 FPS (about 6.58 seconds).
 Runtime adapts playback to generation time. The measured generation rate
 is substantially below the native 24 FPS timeline.
 
@@ -32,7 +32,7 @@ is substantially below the native 24 FPS timeline.
 
 - A license and deployment location permitted by the model's weight terms.
 - A Linux GPU machine with Docker and NVIDIA Container Toolkit. The recipe was
-  tested on four B200 GPUs on one host, with shared weights/scratch storage.
+  tested on four B200 GPUs on one host, with shared read-only weights and writable temporary storage.
 - The prepared MiniMax-H3 base and the two **causal** SolarRenderer LoRA files.
 - Node.js 22.12+ and npm for the demo.
 
@@ -76,10 +76,10 @@ reactor run --gpus device=0,1,2,3 --shm-size 8g --port 8080 --weights ./weights
 ```
 
 Select four available GPUs on a shared machine. In another terminal, check
-`curl http://localhost:8080/health`. The service validates asset paths at startup;
-the first **Start new video** performs encoding and loads the renderer. The original
-text encoder and renderer use the GPU in sequence, so starting a new video has a
-substantial preparation phase. Do not interpret HTTP readiness as first-frame readiness.
+`curl http://localhost:8080/health`. The service loads the encoder and renderer once at startup. Wait until health reports
+`available` before connecting. Both stay resident across videos; each Start encodes
+its selected inputs and prepares a fresh video. Scratch files use the container's
+temporary directory, separate from the read-only checkpoint mount.
 
 The manifest builds from YAML; no Dockerfile is needed. Rebuild after changing the
 adapter. `Ctrl+C` stops the service started by this command.
@@ -137,12 +137,14 @@ SSH tunnel and relay configuration before sharing the service.
 | Rendering prompt / Seed | Captured when Start is pressed. |
 | Start new video | Start a fresh finite video, replacing any current render. |
 | Pause / Resume | Stop or continue at a generation boundary; buffered video may still play. |
-| Disconnect | Close the demo's connection through the SDK. |
+| Stop video | End the current video, reset generation and clear buffered playback; keep selected inputs. |
+| Disconnect | End the shared session through the SDK. |
 
-Commands take effect after the current generation block. The demo allows up to
-180 seconds for their replies; a Pause during generation can take about 35 seconds,
-and initial preparation can take longer. This changes the client wait limit, not
-the model's generation speed.
+Commands take effect after the current chunk. Pause/Resume requires an active
+video and returns `not_running` otherwise. The demo waits up to 180 seconds for
+commands that include input preparation. `set_structure`, `set_image`,
+`clear_image`, `set_prompt` and `set_seed` stage the next Start. `state_update`
+reports `completed_chunks`, `output_frames` and `last_chunk_seconds`.
 
 Prompt edits apply to the **next video**. This first integration preserves the original
 fixed text conditioning throughout each render; it does not advertise live prompt changes.
@@ -159,19 +161,19 @@ the client contract with `python -m reactor_runtime.schema --path . --out schema
 the public state, and `solarrenderer_model.py` owns the Runtime-independent step contract.
 The backend reuses the pinned native encoder and LoRA loader. Sampling and decoder
 helpers retain per-video state between calls. The build uses upstream revision
-`a2371eaecff9a8ab378b5ec36199c5863d138074` and Reactor Runtime 3.8.3.
+`a2371eaecff9a8ab378b5ec36199c5863d138074` and Reactor Runtime 3.10.0. The YAML-built image has completed both input modes on four B200s
+with the checkpoint directory mounted read-only.
 
-The CPU comparison exercises the original causal loop with small substitute computation:
-four seed/reference combinations each run ten consecutive blocks with identical latent
-values, random-generator state and final KV contents. Decoder-window tests cover five
-lengths. The unaccelerated real-weight comparison uses the official example with a shared
-native-encoded input and seed 0: all ten blocks have zero latent and decoded-RGB
-difference before compression. This does not apply to the accelerated four-GPU
-configuration: FA4 and static-prefix reuse produce numerical and local appearance
-differences. Four denoising evaluations, the native history window and horizon
-remain unchanged. Both input modes completed 158-frame browser runs.
-The current file-based native encoder also re-reads validated uploads; moving preprocessing
-fully into the application requires its own native-input equivalence check.
+CPU tests exercise both halves, replaced-world results, Stop/reset, command
+refusals, joining-viewer snapshots, upload validation and loading weights once
+across repeated starts. Four denoising evaluations, the native history window
+and the finite horizon are preserved. FA4 and static-prefix reuse change
+floating-point results, so the four-GPU path has no bitwise-parity guarantee.
+
+The native encoder re-reads the validated uploads. Both appearance-reference
+and structure-only modes have completed ten-chunk / 158-frame browser runs;
+input encoding and first-use kernel compilation are separate from steady chunk
+timing. Detailed benchmark artifacts are kept outside the recipe.
 
 ## Credits and licence
 

@@ -14,7 +14,6 @@ class SolarSettings:
     h3: Path
     control: Path
     fewstep: Path
-    scratch: Path
 
 
 @dataclass(frozen=True)
@@ -59,9 +58,9 @@ class SolarModel:
         self._complete = False
 
     def load(self, settings: SolarSettings) -> None:
-        from solarrenderer_backend import SolarBackend
+        from solarrenderer_backend import FourBackend
 
-        self._backend = SolarBackend(settings)
+        self._backend = FourBackend(settings, self.device, self.rank, self.world_size)
 
     def generate(self, input: SolarInput) -> SolarResult:
         if self._backend is None:

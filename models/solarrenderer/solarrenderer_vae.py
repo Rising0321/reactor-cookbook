@@ -1,7 +1,6 @@
 """Shard independent native VAE spatial tiles across ranks and stitch in native order.
 
 The tested profile batches equally shaped tiles and leaves compilation disabled.
-Adapted from the Reactor H3 infrastructure tutorial implementation.
 """
 
 from __future__ import annotations
@@ -10,42 +9,10 @@ import torch
 import torch.distributed as dist
 
 
-def _undo_only(undo):
-    """Uninstall for the paths that never patched `_decode_clip` (single rank, or no distributed)."""
-
-    def uninstall():
-        for u in reversed(undo):
-            u()
-
-    return uninstall
-
-
-def install(
-    vae, group=None, batched: bool | None = None, compile_mode: str | None = None
-):
-    """Install spatial tile sharding and return its uninstall function."""
-    if batched is None:
-        batched = True
-
-    undo = []
-    if compile_mode:
-        eager_decoder = vae.decoder
-        vae.decoder = torch.compile(eager_decoder, mode=compile_mode, dynamic=False)
-
-        def _restore_decoder():
-            vae.decoder = eager_decoder
-            torch._dynamo.reset()
-
-        undo.append(_restore_decoder)
-
-    if not (dist.is_available() and dist.is_initialized()):
-        return _undo_only(undo)
-
-    group = group or dist.group.WORLD
-    world = dist.get_world_size(group)
-    rank = dist.get_rank(group)
-    if world == 1:
-        return _undo_only(undo)
+def install(vae):
+    """Shard spatial tiles over the Runtime worker group, batching each rank's tiles."""
+    world = dist.get_world_size()
+    rank = dist.get_rank()
 
     original = vae._decode_clip
 
@@ -85,15 +52,10 @@ def install(
             ]
             for y, y_len, x, x_len in mine
         ]
-        if batched:
-            local_stack = vae.decoder(vae.post_quant_conv(torch.cat(slices, dim=0)))
-        else:
-            local_stack = torch.stack(
-                [vae.decoder(vae.post_quant_conv(s)) for s in slices], dim=0
-            ).squeeze(1)
+        local_stack = vae.decoder(vae.post_quant_conv(torch.cat(slices, dim=0)))
 
         gathered = [torch.empty_like(local_stack) for _ in range(world)]
-        dist.all_gather(gathered, local_stack, group=group)
+        dist.all_gather(gathered, local_stack)
         flat = torch.cat(gathered, dim=0)[: len(coords)]
 
         # `_stitch_tiles` only touches dims -2/-1, so a missing batch axis would not raise — it
@@ -109,10 +71,3 @@ def install(
         return vae._stitch_tiles(rows, y_overlaps, x_overlaps)
 
     vae._decode_clip = sharded_decode_clip
-
-    def uninstall():
-        vae._decode_clip = original
-        for u in reversed(undo):
-            u()
-
-    return uninstall

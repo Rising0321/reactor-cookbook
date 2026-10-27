@@ -8,6 +8,7 @@ from reactor_runtime import (
     Output,
     Video,
 )
+
 from solarrenderer_model import SolarAnchor
 
 
@@ -16,14 +17,14 @@ class SolarState(InputState):
         default="",
         moderate=True,
         max_length=16000,
-        description="Six-part rendering prompt, captured when Start is pressed. Changes apply to the next video.",
+        description="Rendering prompt, captured when Start is pressed. Changes apply to the next video.",
     )
     seed: int = InputField(
         default=0, ge=0, le=2**32 - 1, description="Random seed captured at Start."
     )
     paused: bool = InputField(
         default=False,
-        description="Pause at the next block boundary; already buffered frames may still play.",
+        description="Pause at the next chunk boundary; already buffered frames may still play.",
     )
     _structure: bytes | None = None
     _reference: bytes | None = None
@@ -41,7 +42,7 @@ class SolarOutput(Output):
 
 
 class StateUpdate(ModelMessage):
-    """Full shared state after a command, connection or generated block."""
+    """Full shared state after a command, connection or rendered chunk."""
 
     prompt: str = MessageField(description="Prompt staged for the next Start.")
     seed: int = MessageField(description="Seed staged for the next Start.")
@@ -55,12 +56,12 @@ class StateUpdate(ModelMessage):
     world_id: int = MessageField(
         description="ID of the current video, zero before Start."
     )
-    chunks: int = MessageField(
-        description="Completed generation blocks in the current video."
+    completed_chunks: int = MessageField(
+        description="Number of rendered chunks in the current video."
     )
-    frames: int = MessageField(description="RGB frames emitted in the current video.")
+    output_frames: int = MessageField(description="Frames published on `main_video`.")
     active: bool = MessageField(description="Whether a video is being generated.")
     complete: bool = MessageField(description="Whether the finite video has completed.")
-    elapsed: float | None = MessageField(
-        description="Runtime-measured seconds for the last block; null on state transitions."
+    last_chunk_seconds: float | None = MessageField(
+        description="Runtime-measured seconds for the last chunk; null on state transitions."
     )
