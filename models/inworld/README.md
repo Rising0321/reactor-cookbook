@@ -50,7 +50,13 @@ reactor run --gpus '"device=0,1,2,3"' --port 8080 --shm-size 4g -e HF_TOKEN
 
 Select an available GPU on shared machines. Startup downloads the pinned Murea-Fast checkpoint and required LTX-2.5 components and prepares the trained text connectors. Cached downloads are reused. Use `--weights /path/to/model-cache` to choose a different storage location.
 
-`inworld.yaml` defaults to `num_gpus: 4`, `attention_backend: fa` and `cuda_graph: true`. FA4 and CUDA Graph preserve the eight sampling steps and continuation length. FA4 has floating-point differences from SDPA. The pinned upstream LTX25 pipeline requires an explicit Graph allowlist override; this integration enables the tested path, with lazy capture for new input shapes. First use includes compilation and capture. For single-GPU use, set `num_gpus: 1` and expose one GPU; rebuild after configuration changes. Set `cuda_graph: false` and `attention_backend: torch_sdpa` for the original attention path.
+`inworld.yaml` defaults to `num_gpus: 4`, `attention_backend: fa` and `cuda_graph: true`. FA4 and CUDA Graph preserve the eight sampling steps and 17-frame continuation.
+Startup runs first-segment and continuation warmups for each offered chunk length,
+including the default 120 frames, before reporting ready. Captured shapes replay
+during serving; uncaptured reference signatures use the upstream eager fallback.
+Expandable CUDA allocator segments keep the largest warmup within memory while
+all captured shapes remain resident.
+FA4 has floating-point differences from SDPA. For single-GPU use, set `num_gpus: 1` and expose one GPU; rebuild after configuration changes. Set `cuda_graph: false` and `attention_backend: torch_sdpa` for the original attention path.
 
 **Check:** `curl -fsS http://localhost:8080/health` reports `"state":"available"`. Initial downloads and loading take time. Leave the service running; `Ctrl+C` stops it. After changing code or dependencies, rebuild before restarting. A crashed model requires a service restart, not just a browser reconnect.
 
@@ -86,17 +92,31 @@ Open the URL printed by Vite, normally **http://localhost:5173**. Set **Runtime 
 
 The default resolution is 1280 × 704. Each call generates a complete native segment, then streams that segment while preparing the next. Prompt updates do not alter an in-flight segment or already-buffered output. Changes may be gradual; the model does not guarantee strict scene edits.
 
-Visual continuation follows the upstream 17-frame video-prefix mechanism. Audio is generated afresh for each segment, so uninterrupted speech or music across boundaries is not guaranteed. Generation, saved history and Runtime video playback use native 24 FPS timing with stereo 48 kHz audio. The application pins video playback to 24 FPS so generation speed does not stretch the video relative to audio. Generation below real time can still cause playback gaps; fixed FPS does not guarantee uninterrupted audio/video delivery.
+Visual continuation follows the upstream 17-frame video-prefix mechanism. Outbound audio has a five-millisecond fade at segment joins without changing the sample count. The native audio latent grid and causal decoder can leave up to 50 ms less audio than video; the transport pads that bounded tail with silence. Saved native clips retain their original audio. Audio is generated afresh for each segment, so uninterrupted speech or music across boundaries is not guaranteed. Generation, saved history and Runtime video playback use native 24 FPS timing with mono 48 kHz audio. The application pins video playback to 24 FPS so generation speed does not stretch the video relative to audio. Generation below real time can still cause playback gaps; fixed FPS does not guarantee uninterrupted audio/video delivery.
 
-## Validation
+## Validation and limits
 
-Four-B200 tests generated 10 consecutive segments (1,201 new frames) per configuration. Steady model-runner throughput was **20.62 FPS** for SDPA, **22.63 FPS** for FA4 and **23.57 FPS** for FA4 with CUDA Graph. These measurements include inference and media preparation, excluding browser transport; they do not establish end-to-end 24 FPS. The adapter caches decoded continuation tails, transfers uint8 output from the GPU and converts new RGB frames in parallel while preserving native output encoding and history.
+Four-B200 measurements reached **24.54 generation FPS** over ten
+consecutive default 120-frame calls (1,201 output frames including the opening
+frame), including inference and media preparation. The first call took 4.39 seconds;
+steady-call median was 4.93 seconds after startup warmup.
+Browser transport is additional work. Playback retains 24 FPS video and 48 kHz
+mono audio, with exactly 2,000 samples per video frame. Generation below that rate
+can cause gaps; uninterrupted speech, music and gap-free delivery are not guaranteed.
 
-All ten four-GPU SDPA segments matched the native reference's complete decoded RGB and audio hashes. FA4 with Graph matched FA4 without Graph for all ten segments; FA4 is not pixel-identical to SDPA. The CPU tests cover both halves, refused and failed steps, uploads, anchor acknowledgement, the actual Runtime step loop, media-conversion fidelity and multi-rank pre-inference failure notification.
+CPU tests cover both halves, command refusals, stale-world results, shared-viewer
+snapshots, upload validation, warmup coverage, audio sample counts and continuation
+prefixes. Run `PYTHONPATH=. python -m pytest tests/ -q`, render `/schema` with
+`python -m reactor_runtime.schema --path . --out /tmp/schema.json`, validate the
+manifest with `reactor validate`, and build the demo with `cd demo && npm ci && npm run build`.
 
-A four-GPU FA4/Graph `reactor run` browser session with fixed 24 FPS completed 11 segments, two prompt updates, pause/resume and reconnect through TURN/TCP. Before disconnect, the browser decoded 1,201 frames with zero reported drops and received audio; some video remained buffered. Connected-idle and reference-selection checks confirmed that playback and its clock wait for generation. Cold Graph capture delays the first segment; later segments took approximately 5.1 seconds. Runtime still inserted some silence, so this does not establish gap-free audio or perfect audio/video synchronization.
-
-The production-built frontend also passed one-reference, two-reference and uploaded-video tests with four-GPU Graph enabled, each completing two segments with 24 new frames per segment. Three-to-five-image combinations and longer-than-default segment lengths have not been GPU-validated. Saved frames were inspected; temporal and audio quality still benefit from human review.
+The current four-B200 browser run exercised text, one and five reference images,
+uploaded-video continuation, two live prompt updates, pause/resume and disconnect.
+The 50-second text rollout retained its scene but accumulated fine-detail and
+color noise. Complex edits and long-term visual quality are not guaranteed. Supported new-frame choices are 24, 48, 72, 120, 240 and 360. The native 464-frame option exceeded memory on a four-B200 continuation with resident graph caches and is not offered by this profile. Longer chunks increase response latency.
+Session clips use temporary storage separate from checkpoint files and are
+removed on reset. After startup warmup, a worker call times out after 60 seconds;
+a worker failure requires restarting the service.
 
 ## More
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import sys
+import tempfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
@@ -12,7 +12,17 @@ import av
 import numpy as np
 from PIL import Image
 
-from inworld_model import InWorldAnchor, InWorldSettings
+from inworld_model import (
+    CHUNK_FRAMES,
+    FPS,
+    HEIGHT,
+    PREFIX_FRAMES,
+    SAMPLE_RATE,
+    SAMPLES_PER_FRAME,
+    WIDTH,
+    InWorldAnchor,
+    InWorldSettings,
+)
 
 
 class InWorldBackend:
@@ -23,10 +33,6 @@ class InWorldBackend:
         self.world_size = world_size
         self._submitted = False
         self._cuda_graph = settings.cuda_graph
-        sys.path[:0] = [
-            str(settings.source / "inference/vendor/sglang/python"),
-            str(settings.source / "inference/src"),
-        ]
         from sglang.multimodal_gen.runtime.managers.gpu_worker import GPUWorker
         from sglang.multimodal_gen.runtime.server_args import (
             ServerArgs,
@@ -46,7 +52,7 @@ class InWorldBackend:
                 "enable_torch_compile": False,
                 "component_residency": {"vae": "resident"},
                 "master_port": settings.master_port,
-                "output_path": str(settings.scratch),
+                "output_path": tempfile.gettempdir(),
             }
         )
         if settings.cuda_graph:
@@ -63,6 +69,34 @@ class InWorldBackend:
             server_args=self.args,
         )
         install_output_processor(self.worker)
+
+    def warmup(self) -> None:
+        """Prepare first and continuation requests for every offered chunk length."""
+        for count in (120, *(n for n in CHUNK_FRAMES if n != 120)):
+            if self.rank != 0:
+                self.follow_step()
+                self.follow_step()
+                continue
+            with tempfile.TemporaryDirectory(prefix="inworld-warmup-") as directory:
+                root = Path(directory)
+                anchor = InWorldAnchor(seed=0, new_frames=count)
+                parent = None
+                for index in (1, 2):
+                    self.begin_step()
+                    try:
+                        parent, _, _ = self.generate_clip(
+                            root=root,
+                            index=index,
+                            prompt="A quiet garden with birds singing.",
+                            anchor=anchor,
+                            parent=parent,
+                            references=(),
+                            warmup=self._cuda_graph,
+                        )
+                    except Exception as exc:
+                        if self.world_size > 1:
+                            self.cancel_unsubmitted_step(str(exc))
+                        raise
 
     def begin_step(self) -> None:
         self._submitted = False
@@ -105,7 +139,7 @@ class InWorldBackend:
             path = root / f"reference-{i}.png"
             # The pinned upstream API takes file paths. PNG preserves the decoded pixels;
             # the original upstream image fitting still runs in its image-encoding stage.
-            Image.fromarray(rgb).save(path)
+            Image.fromarray(rgb).save(path, compress_level=1)
             paths.append(path)
         return tuple(paths)
 
@@ -118,6 +152,7 @@ class InWorldBackend:
         anchor: InWorldAnchor,
         parent: Path | None,
         references: tuple[Path, ...],
+        warmup: bool = False,
     ):
         from murea_fast.client import prepare_tail
         from sglang.multimodal_gen.runtime.entrypoints.openai.utils import (
@@ -125,7 +160,7 @@ class InWorldBackend:
         )
         from sglang.multimodal_gen.runtime.entrypoints.utils import prepare_request
 
-        prefix = 17 if parent is not None else 0
+        prefix = PREFIX_FRAMES if parent is not None else 0
         tail = root / f"prefix-{index}.mp4"
         if parent is not None:
             cached_tail = parent.with_suffix(".prefix.mp4")
@@ -137,10 +172,10 @@ class InWorldBackend:
             f"segment-{index}",
             prompt=prompt,
             seed=anchor.seed,
-            width=anchor.width,
-            height=anchor.height,
+            width=WIDTH,
+            height=HEIGHT,
             num_frames=anchor.new_frames + (prefix or 1),
-            fps=24,
+            fps=FPS,
             num_inference_steps=8,
             guidance_scale=1.0,
             generator_device="cuda",
@@ -155,9 +190,7 @@ class InWorldBackend:
             return_file_paths_only=True,
         )
         req = prepare_request(self.args, params)
-        # Native graph capture is lazy and signature-keyed; new input shapes
-        # capture on their first call, existing shapes replay with fresh tensors.
-        req.is_warmup = self._cuda_graph
+        req.is_warmup = warmup
         try:
             params.prepare_video_request_for_queue(req)
             output = self._execute([req])
@@ -170,7 +203,7 @@ class InWorldBackend:
                 path, prefix, tail_path=path.with_suffix(".prefix.mp4")
             )
             expected = anchor.new_frames if prefix else anchor.new_frames + 1
-            if frames.shape != (expected, anchor.height, anchor.width, 3):
+            if frames.shape != (expected, HEIGHT, WIDTH, 3):
                 raise RuntimeError(f"Unexpected native video shape: {frames.shape}")
             return path, frames, audio
         finally:
@@ -182,7 +215,7 @@ def decode_clip(
     path: Path, prefix: int, *, tail_path: Path | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """Keep native MP4 continuation semantics and emit only the new AV interval."""
-    tail_frames: deque[av.VideoFrame] = deque(maxlen=17)
+    tail_frames: deque[av.VideoFrame] = deque(maxlen=PREFIX_FRAMES)
     with av.open(str(path)) as container:
         # Frame threading changes scheduling, not H.264 reconstruction. Bound
         # the worker's CPU use independently of the shared host's core count.
@@ -212,7 +245,7 @@ def decode_clip(
     with av.open(str(path)) as container:
         if not container.streams.audio:
             raise RuntimeError("Native clip has no audio")
-        resampler = av.AudioResampler(format="fltp", layout="stereo", rate=48000)
+        resampler = av.AudioResampler(format="fltp", layout="mono", rate=SAMPLE_RATE)
         blocks = []
         for frame in container.decode(audio=0):
             blocks.extend(f.to_ndarray() for f in resampler.resample(frame))
@@ -220,19 +253,33 @@ def decode_clip(
     if not blocks:
         raise RuntimeError("Native clip has no decoded audio samples")
     audio = np.concatenate(blocks, axis=1)
-    start, end = prefix * 2000, total_frames * 2000
+    start, end = prefix * SAMPLES_PER_FRAME, total_frames * SAMPLES_PER_FRAME
+    valid_samples = min(audio.shape[1], end) - start
     if audio.shape[1] < end:
         missing = end - audio.shape[1]
-        # Native 8n+1 video has one endpoint frame beyond the audio interval.
-        # Preserve all generated samples and fill only its sub-frame trailing gap.
-        if missing > 2000:
+        # The pinned audio pipeline rounds to a 40ms latent grid; its causal
+        # decoder emits 4*n-3 mel frames at 10ms each. The resulting trailing
+        # deficit is at most 20ms rounding + 30ms causal trimming. Preserve all
+        # generated samples and fill only this bounded native gap for transport.
+        if missing > SAMPLE_RATE // 20:
             raise RuntimeError(
-                "Native audio is over one video frame shorter than the clip"
+                f"Native audio is over 50ms shorter than the clip: "
+                f"{audio.shape[1]} samples for {total_frames} frames "
+                f"({missing} samples missing)"
             )
         audio = np.pad(audio, ((0, 0), (0, missing)))
-    if tail_path is not None and len(tail_frames) == 17:
+    if tail_path is not None and len(tail_frames) == PREFIX_FRAMES:
         write_prefix(tail_path, tail_frames)
-    return frames, np.ascontiguousarray(audio[:, start:end])
+    audio = np.ascontiguousarray(audio[:, start:end])
+    # Five milliseconds smooth the transport seam; native saved audio and the
+    # continuation video stay unchanged, as does the exact sample count.
+    fade = min(SAMPLE_RATE // 200, valid_samples)
+    if prefix:
+        audio[:, :fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+    audio[:, valid_samples - fade : valid_samples] *= np.linspace(
+        1, 0, fade, dtype=np.float32
+    )
+    return frames, audio
 
 
 def install_output_processor(worker) -> None:
@@ -284,10 +331,10 @@ def write_prefix(path: Path, frames: deque[av.VideoFrame]) -> None:
     The upstream continuation client uses libx264 CRF 0 and yuv420p. Retaining
     the decoded YUV frames avoids decoding the same parent a second time.
     """
-    if len(frames) != 17:
+    if len(frames) != PREFIX_FRAMES:
         raise ValueError("A continuation prefix requires 17 frames")
     with av.open(str(path), "w") as output:
-        stream = output.add_stream("libx264", rate=24)
+        stream = output.add_stream("libx264", rate=FPS)
         stream.width, stream.height = frames[0].width, frames[0].height
         stream.pix_fmt = "yuv420p"
         # This is only the lossless continuation prefix, never the generated
@@ -298,7 +345,7 @@ def write_prefix(path: Path, frames: deque[av.VideoFrame]) -> None:
             if frame.format.name != "yuv420p":
                 raise ValueError("Native continuation frames must be yuv420p")
             frame.pts = index
-            frame.time_base = Fraction(1, 24)
+            frame.time_base = Fraction(1, FPS)
             for packet in stream.encode(frame):
                 output.mux(packet)
         for packet in stream.encode():

@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import av
-from PIL import Image
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -22,8 +20,15 @@ from reactor_runtime import (
 )
 from reactor_runtime.distributed import DistributedRunner
 
-from inworld_images import decode_reference, validate_video
-from inworld_model import InWorldAnchor, InWorldInput, InWorldModel, InWorldResult
+from inworld_images import InvalidUpload, decode_reference, validate_video
+from inworld_model import (
+    CHUNK_FRAMES,
+    FPS,
+    InWorldAnchor,
+    InWorldInput,
+    InWorldModel,
+    InWorldResult,
+)
 from inworld_types import InputAccepted, InWorldOutput, InWorldState, StateUpdate
 
 
@@ -35,7 +40,7 @@ class InWorld(ReactorApp):
     """
 
     # Preserve the native video clock alongside 48 kHz audio.
-    fps = 24
+    fps = FPS
     state: InWorldState
 
     def load(self, config_path: Path | None) -> None:
@@ -45,9 +50,10 @@ class InWorld(ReactorApp):
         self._engine = DistributedRunner(
             InWorldModel,
             world_size=settings.num_gpus,
+            # Upstream GPUWorker creates its own process groups on master_port.
             init_process_group=False,
             load_kwargs={"settings": settings},
-            call_timeout=1800,
+            call_timeout=60,
             start_timeout=1800,
         )
         self._engine.start()
@@ -70,12 +76,14 @@ class InWorld(ReactorApp):
             else None,
         )
 
-    async def process_output(self, outcome: StepOutcome) -> InWorldOutput:
+    async def process_output(self, outcome: StepOutcome) -> InWorldOutput | None:
         if outcome.error is not None:
             # Invalid client inputs are refused before this step. Unexpected
             # native or worker failures must stop the service, not reset history.
             raise outcome.error
         result: InWorldResult = outcome.result
+        if result.world_id != self.state._world_id:
+            return None
         self.state._applied_world_id = result.world_id
         self.state._completed = result.chunk_index
         self.state._last_seconds = outcome.elapsed
@@ -84,20 +92,21 @@ class InWorld(ReactorApp):
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
-        await self.send(self._status())
+        await client.send(self._status())
 
     @session_ended
     def on_session_ended(self) -> None:
-        self._engine.reset()
+        if self._engine.healthy:
+            self._engine.reset()
         self.output.flush()
 
     @event(
         name="set_reference",
-        description="Stage one ordered reference for the next Start. Slots must be consecutive from 1. Clears the staged parent video. Fails with invalid_image for an unreadable or oversized image.",
+        description="Stage one ordered reference for the next Start. Slots must be consecutive from 1. Clears the staged parent video. Fails with `invalid_image` for an unreadable or oversized image.",
     )
     async def set_reference(
         self,
-        image: UploadedFile = InputField(
+        image: UploadedFile = InputField(  # noqa: B008 - Runtime schema declaration
             moderate=True,
             description="Reference image, at most 25 MiB and 20 million pixels.",
         ),
@@ -110,7 +119,7 @@ class InWorld(ReactorApp):
     ) -> InputAccepted:
         try:
             rgb = await asyncio.to_thread(decode_reference, image.data)
-        except (ValueError, OSError, Image.DecompressionBombError) as exc:
+        except InvalidUpload as exc:
             raise CommandError("invalid_image", str(exc)) from exc
         self.state._references = {**self.state._references, slot: rgb}
         self.state._video = None
@@ -119,18 +128,18 @@ class InWorld(ReactorApp):
 
     @event(
         name="set_video",
-        description="Stage a 24 FPS parent video for the next Start, using its last 17 frames. Clears staged images. Fails with invalid_video for unreadable, oversized, too short or incorrectly timed media.",
+        description="Stage a 24 FPS parent video for the next Start, using its last 17 frames. Clears staged images. Fails with `invalid_video` for unreadable, oversized, too short or incorrectly timed media.",
     )
     async def set_video(
         self,
-        video: UploadedFile = InputField(
+        video: UploadedFile = InputField(  # noqa: B008 - Runtime schema declaration
             moderate=True,
             description="Parent video, at most 256 MiB and 60 seconds, at least 17 frames, exactly 24 FPS.",
         ),
     ) -> InputAccepted:
         try:
             await asyncio.to_thread(validate_video, video.data)
-        except (ValueError, av.FFmpegError) as exc:
+        except InvalidUpload as exc:
             raise CommandError("invalid_video", str(exc)) from exc
         self.state._video = video.data
         self.state._references = {}
@@ -149,7 +158,7 @@ class InWorld(ReactorApp):
 
     @event(
         name="set_prompt",
-        description="Change the next segment's prompt, preserving the 17-frame visual continuation. Leaves a paused video paused. Buffered media keeps playing. Fails with prompt_required when empty.",
+        description="Change the next segment's prompt, preserving the 17-frame visual continuation. Leaves a paused video paused. Buffered media keeps playing. Fails with `prompt_required` when empty.",
     )
     async def set_prompt(
         self,
@@ -181,7 +190,7 @@ class InWorld(ReactorApp):
 
     @event(
         name="start",
-        description="Start a fresh continuous video from staged media and the current prompt. Fails with prompt_required when empty or missing_reference_slot when image slots have gaps.",
+        description="Start a fresh continuous video from staged media and the current prompt. Fails with `prompt_required` when empty or `missing_reference_slot` when image slots have gaps.",
     )
     async def start(
         self,
@@ -189,11 +198,11 @@ class InWorld(ReactorApp):
             default=42,
             ge=0,
             le=2147483647,
-            description="Native random seed, reused per segment.",
+            description="Random seed for this video, reused for each segment.",
         ),
         new_frames: int = InputField(
             default=120,
-            choices=[24, 48, 72, 120, 240, 360, 464],
+            choices=list(CHUNK_FRAMES),
             description="New frames per continuation at 24 FPS; first segment adds one opening frame.",
         ),
     ) -> InputAccepted:

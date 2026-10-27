@@ -9,19 +9,30 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+FPS = 24
+SAMPLE_RATE = 48000
+SAMPLES_PER_FRAME = SAMPLE_RATE // FPS
+PREFIX_FRAMES = 17
+WIDTH, HEIGHT = 1280, 704
+CHUNK_FRAMES = (24, 48, 72, 120, 240, 360)
+
+
+class NoAnchor(ValueError):
+    """A fresh world was requested without its starting inputs."""
+
+
 if TYPE_CHECKING:
     from inworld_backend import InWorldBackend
 
 
 @dataclass(frozen=True)
 class InWorldSettings:
-    """Resolved source/weight paths, session scratch directory and worker port."""
+    """Resolved source/weight paths and worker port."""
 
     source: Path
     base: Path
     checkpoint: Path
     connectors: Path
-    scratch: Path
     master_port: int
     attention_backend: str = "fa"
     cuda_graph: bool = True
@@ -32,19 +43,17 @@ class InWorldSettings:
 class InWorldAnchor:
     """Start a video with ordered RGB uint8 HWC references or encoded parent video.
 
-    An empty media selection starts from text. Width/height are output pixels;
+    An empty media selection starts from text at WIDTH x HEIGHT;
     new_frames is a multiple of eight. The first text/image clip adds one opening
     frame. Seed follows upstream's per-request generator semantics.
     """
 
     # RGB uint8 HWC images in the author's reference order.
+    seed: int
+    new_frames: int
     references: tuple[np.ndarray, ...] = ()
     # A validated 24 FPS parent clip; mutually exclusive with references.
     video: bytes | None = None
-    seed: int = 42
-    width: int = 1280
-    height: int = 704
-    new_frames: int = 120
 
 
 @dataclass(frozen=True)
@@ -60,7 +69,7 @@ class InWorldInput:
 class InWorldResult:
     """Generated CPU media and the applied world ID / one-based segment count.
 
-    Frames are RGB uint8 (T, H, W, 3); audio is float32 (2, T * 2000) at
+    Frames are RGB uint8 (T, H, W, 3); audio is float32 (1, T * SAMPLES_PER_FRAME) at
     48 kHz. Only new frames/samples follow a continuation, excluding its prefix.
     """
 
@@ -93,6 +102,7 @@ class InWorldModel:
         self._backend = InWorldBackend(
             settings, rank=self.rank, world_size=self.world_size
         )
+        self._backend.warmup()
 
     def reset(self) -> None:
         """Discard session media and counters, retaining loaded model weights."""
@@ -132,26 +142,16 @@ class InWorldModel:
             raise ValueError("A non-empty prompt is required")
         if input.world_id != self._world_id:
             if input.anchor is None:
-                raise ValueError("A new world requires its anchor")
+                raise NoAnchor("A new world requires its anchor")
             anchor = input.anchor
             if anchor.video is not None and anchor.references:
                 raise ValueError("Video continuation cannot include reference images")
             if len(anchor.references) > 5:
                 raise ValueError("At most five ordered references are supported")
-            if not 8 <= anchor.new_frames <= 464 or anchor.new_frames % 8:
-                raise ValueError(
-                    "New frames must be a multiple of eight between 8 and 464"
-                )
-            if (
-                min(anchor.width, anchor.height) <= 0
-                or anchor.width % 32
-                or anchor.height % 32
-            ):
-                raise ValueError("Dimensions must be positive multiples of 32")
+            if anchor.new_frames not in CHUNK_FRAMES:
+                raise ValueError("Choose one of the offered chunk lengths")
             self.reset()
-            self._temporary = TemporaryDirectory(
-                prefix="inworld-", dir=self._settings.scratch
-            )
+            self._temporary = TemporaryDirectory(prefix="inworld-")
             root = Path(self._temporary.name)
             self._references = self._backend.store_references(root, anchor.references)
             if anchor.video is not None:

@@ -12,22 +12,30 @@ from reactor_runtime import ApplicationError, CommandError, StepOutcome, Uploade
 
 from inworld import InWorld
 from inworld_images import decode_reference, validate_video
-from inworld_model import InWorldAnchor, InWorldInput, InWorldModel, InWorldResult
-from inworld_types import InWorldState
+from inworld_model import (
+    FPS,
+    PREFIX_FRAMES,
+    SAMPLE_RATE,
+    SAMPLES_PER_FRAME,
+    InWorldAnchor,
+    InWorldInput,
+    InWorldModel,
+    InWorldResult,
+)
+from inworld_types import InWorldAudio, InWorldState
 
 
 def test_playout_preserves_native_audio_video_timing():
     assert InWorld.fps == 24
-    model, _ = app()
-    assert model.output.fps == 24
-    # The Runtime step loop omits compute_time for author-pinned FPS.
-    assert model._playout_rate(120, None) == 24.0
+    assert "fps" in vars(InWorld)
+    assert InWorldAudio.sample_rate == InWorld.fps * SAMPLES_PER_FRAME == SAMPLE_RATE
+    assert SAMPLE_RATE % FPS == 0 and PREFIX_FRAMES == 17
 
 
 def test_multirank_preparation_error_releases_followers(tmp_path):
     model = InWorldModel()
     model.world_size = 4
-    model._settings = SimpleNamespace(scratch=tmp_path)
+    model._settings = SimpleNamespace()
     model._backend = Mock()
     with pytest.raises(ValueError, match="anchor"):
         model.generate(InWorldInput(world_id=1, prompt="garden"))
@@ -95,7 +103,8 @@ def test_cached_prefix_rejects_incomplete_history(tmp_path):
 
 
 @pytest.mark.parametrize("prefix", [0, 17])
-def test_parallel_clip_decode_preserves_frames_and_audio(tmp_path, prefix):
+@pytest.mark.parametrize("missing", [1000, 2160, 2401])
+def test_parallel_clip_decode_preserves_frames_and_audio(tmp_path, prefix, missing):
     from fractions import Fraction
 
     from inworld_backend import decode_clip
@@ -117,7 +126,9 @@ def test_parallel_clip_decode_preserves_frames_and_audio(tmp_path, prefix):
                 output.mux(packet)
         for packet in video.encode():
             output.mux(packet)
-        samples = rng.uniform(-0.1, 0.1, (1, (21 * 2000 - 1000) * 2)).astype(np.float32)
+        samples = rng.uniform(-0.1, 0.1, (1, (21 * 2000 - missing) * 2)).astype(
+            np.float32
+        )
         audio = av.AudioFrame.from_ndarray(samples, format="flt", layout="stereo")
         audio.sample_rate, audio.pts = 48000, 0
         for packet in sound.encode(audio):
@@ -128,11 +139,32 @@ def test_parallel_clip_decode_preserves_frames_and_audio(tmp_path, prefix):
         expected = np.stack(
             [f.to_ndarray(format="rgb24") for f in media.decode(video=0)]
         )
+    if missing > SAMPLE_RATE // 20:
+        with pytest.raises(RuntimeError, match="over 50ms"):
+            decode_clip(path, prefix)
+        return
     frames, audio = decode_clip(path, prefix, tail_path=tmp_path / "tail.mp4")
     assert frames.flags.c_contiguous
     assert np.array_equal(frames, expected[prefix:])
-    expected_audio = np.pad(samples.reshape(-1, 2).T, ((0, 0), (0, 1000)))
-    assert np.array_equal(audio, expected_audio[:, prefix * 2000 :])
+    stereo = samples.reshape(-1, 2).T
+    expected_audio = np.pad(
+        (stereo.sum(axis=0, keepdims=True) * np.float32(2**-0.5)),
+        ((0, 0), (0, missing)),
+    )
+    assert audio.shape == (1, (21 - prefix) * SAMPLES_PER_FRAME)
+    assert audio.dtype == np.float32
+    expected_audio = expected_audio[:, prefix * SAMPLES_PER_FRAME :]
+    fade = SAMPLE_RATE // 200
+    np.testing.assert_allclose(
+        audio[:, fade : -missing - fade],
+        expected_audio[:, fade : -missing - fade],
+        atol=2e-8,
+    )
+    assert audio[0, -missing - 1] == 0 and np.all(audio[:, -missing:] == 0)
+    if prefix:
+        assert audio[0, 0] == 0
+    else:
+        assert np.isclose(audio[0, 0], expected_audio[0, 0], atol=2e-8)
     with pytest.raises(RuntimeError, match="no new video frames"):
         decode_clip(path, 21)
 
@@ -179,7 +211,7 @@ def result(world=1, index=1):
         world_id=world,
         chunk_index=index,
         frames=np.zeros((1, 32, 32, 3), np.uint8),
-        audio=np.zeros((2, 2000), np.float32),
+        audio=np.zeros((1, SAMPLES_PER_FRAME), np.float32),
     )
 
 
@@ -192,14 +224,17 @@ def test_refused_step_never_reaches_model():
 
 def test_refused_prompt_sends_nothing():
     model, messages = app()
-    with pytest.raises(CommandError):
+    with pytest.raises(CommandError) as exc:
         asyncio.run(model.set_prompt("  "))
+    assert exc.value.code == "prompt_required"
     assert not messages
 
 
 def test_generate_reads_only_its_snapshot():
     model, _ = app()
-    snapshot = InWorldInput(world_id=7, prompt="before", anchor=InWorldAnchor())
+    snapshot = InWorldInput(
+        world_id=7, prompt="before", anchor=InWorldAnchor(seed=42, new_frames=120)
+    )
     model.state = None
     model._engine.generate.return_value = result(7)
     assert model.generate(snapshot).world_id == 7
@@ -267,7 +302,7 @@ def test_invalid_media(payload):
 
 def test_model_owns_parent_and_failed_step_does_not_advance(tmp_path):
     model = InWorldModel()
-    model._settings = SimpleNamespace(scratch=tmp_path)
+    model._settings = SimpleNamespace()
 
     class Backend:
         def store_references(self, root, refs):
@@ -284,7 +319,9 @@ def test_model_owns_parent_and_failed_step_does_not_advance(tmp_path):
     with pytest.raises(ValueError, match="anchor"):
         model.generate(InWorldInput(world_id=1, prompt="garden"))
     first = model.generate(
-        InWorldInput(world_id=1, prompt="garden", anchor=InWorldAnchor())
+        InWorldInput(
+            world_id=1, prompt="garden", anchor=InWorldAnchor(seed=42, new_frames=120)
+        )
     )
     assert first.world_id == 1 and first.chunk_index == 1
     parent = model._parent
@@ -295,7 +332,9 @@ def test_model_owns_parent_and_failed_step_does_not_advance(tmp_path):
     assert not parent.exists()
     assert (
         model.generate(
-            InWorldInput(world_id=2, prompt="sun", anchor=InWorldAnchor())
+            InWorldInput(
+                world_id=2, prompt="sun", anchor=InWorldAnchor(seed=42, new_frames=120)
+            )
         ).chunk_index
         == 1
     )
@@ -328,33 +367,240 @@ def test_oversized_image_refused_before_decode():
         decode_reference(bytes(25 * 1024 * 1024 + 1))
 
 
-def test_real_step_loop_delivers_model_error_without_completion():
-    async def check():
-        model, _ = app()
-        model._on_loop_ready()
-        model._live.set()
-        model.state.prompt = "garden"
-        await model.start(seed=42, new_frames=120)
-        model._engine.generate.side_effect = RuntimeError("real loop failure")
-        with pytest.raises(RuntimeError, match="real loop failure"):
-            await asyncio.wait_for(model.run(), timeout=2)
-        assert model.state._completed == 0
-        assert model.state._applied_world_id is None
-        model._engine.generate.assert_called_once()
+@pytest.mark.parametrize(
+    "handler,code", [("set_reference", "invalid_image"), ("set_video", "invalid_video")]
+)
+def test_invalid_upload_refuses_through_handler_without_broadcast(handler, code):
+    model, messages = app()
+    upload = UploadedFile(
+        name="bad", mime_type="application/octet-stream", data=b"not media"
+    )
+    with pytest.raises(CommandError) as exc:
+        if handler == "set_reference":
+            asyncio.run(model.set_reference(upload, slot=1))
+        else:
+            asyncio.run(model.set_video(upload))
+    assert exc.value.code == code and not messages
+    assert "0x" not in str(exc.value) and "BytesIO" not in str(exc.value)
 
-    asyncio.run(check())
+
+def test_clear_media_pause_and_joiner_snapshot():
+    model, messages = app()
+    model.state._video = b"video"
+    model.state._references = {1: np.zeros((2, 2, 3), np.uint8)}
+    assert asyncio.run(model.clear_media()).kind == "clear"
+    assert model.state._video is None and not model.state._references
+    assert asyncio.run(model.set_paused(False)).kind == "paused"
+    assert not model.state.paused
+    before = len(messages)
+    received = []
+
+    async def send(value):
+        received.append(value)
+
+    asyncio.run(model.on_connected(SimpleNamespace(send=send)))
+    assert len(received) == 1 and len(messages) == before
 
 
-def test_real_step_loop_refuses_paused_input():
-    async def check():
-        model, _ = app()
-        model._on_loop_ready()
-        model._live.set()
-        task = asyncio.create_task(model.run())
-        await asyncio.sleep(0.025)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        model._engine.generate.assert_not_called()
+def test_unhealthy_runner_teardown_preserves_original_error():
+    model, _ = app()
+    model._engine.healthy = False
+    model._engine.reset.side_effect = RuntimeError("secondary")
+    model.on_session_ended()
+    model._engine.reset.assert_not_called()
 
-    asyncio.run(check())
+
+def test_replaced_world_result_is_ignored():
+    model, messages = app()
+    model.state.prompt = "garden"
+    asyncio.run(model.start(seed=42, new_frames=120))
+    asyncio.run(model.start(seed=77, new_frames=120))
+    count = len(messages)
+    assert (
+        asyncio.run(model.process_output(StepOutcome(result=result(), elapsed=1)))
+        is None
+    )
+    assert model.state._completed == 0 and model.state._applied_world_id is None
+    assert len(messages) == count
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+def test_load_warmup_covers_first_and_continuation_for_every_length(rank):
+    from inworld_backend import InWorldBackend
+    from inworld_model import CHUNK_FRAMES
+
+    backend = InWorldBackend.__new__(InWorldBackend)
+    backend.rank, backend._cuda_graph = rank, True
+    backend.follow_step = Mock()
+    calls = []
+
+    def generate_clip(**kwargs):
+        calls.append(kwargs)
+        assert kwargs["root"].is_dir()
+        assert kwargs["warmup"] is True
+        assert (kwargs["parent"] is None) == (kwargs["index"] == 1)
+        return kwargs["root"] / "clip.mp4", None, None
+
+    backend.generate_clip = generate_clip
+    backend.warmup()
+    if rank:
+        assert not calls and backend.follow_step.call_count == 2 * len(CHUNK_FRAMES)
+    else:
+        assert [v["anchor"].new_frames for v in calls] == [
+            n for n in (120, *(x for x in CHUNK_FRAMES if x != 120)) for _ in (1, 2)
+        ]
+        assert all(not v["root"].exists() for v in calls)
+
+
+def test_video_validation_seeks_last_gop_instead_of_decoding_whole_h264(monkeypatch):
+    import inworld_images
+
+    buffer = io.BytesIO()
+    with av.open(buffer, "w", format="mp4") as output:
+        stream = output.add_stream("libx264", rate=FPS)
+        stream.width = stream.height = 32
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"g": "12", "bf": "2"}
+        for i in range(240):
+            for packet in stream.encode(
+                av.VideoFrame.from_ndarray(
+                    np.full((32, 32, 3), i % 256, np.uint8), format="rgb24"
+                )
+            ):
+                output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
+    original = av.open
+    decoded = []
+
+    class Observed:
+        def __init__(self, *args, **kwargs):
+            self.container = original(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.container, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.container.close()
+
+        def decode(self, *args, **kwargs):
+            for frame in self.container.decode(*args, **kwargs):
+                decoded.append(frame.pts)
+                yield frame
+
+    monkeypatch.setattr(inworld_images.av, "open", Observed)
+    validate_video(buffer.getvalue())
+    assert PREFIX_FRAMES <= len(decoded) < 40
+
+
+def test_serving_request_is_not_marked_as_warmup(monkeypatch, tmp_path):
+    import sys
+
+    import inworld_backend
+    from inworld_backend import InWorldBackend
+    from inworld_model import HEIGHT, WIDTH
+
+    backend = InWorldBackend.__new__(InWorldBackend)
+    backend.args = object()
+    backend._cuda_graph = True
+    request = SimpleNamespace(is_warmup=True)
+    params = SimpleNamespace(
+        prepare_video_request_for_queue=Mock(), cleanup_video_request=Mock()
+    )
+    monkeypatch.setitem(
+        sys.modules, "murea_fast.client", SimpleNamespace(prepare_tail=Mock())
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sglang.multimodal_gen.runtime.entrypoints.openai.utils",
+        SimpleNamespace(build_sampling_params=lambda *args, **kwargs: params),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sglang.multimodal_gen.runtime.entrypoints.utils",
+        SimpleNamespace(prepare_request=lambda *args: request),
+    )
+
+    def execute(requests):
+        assert requests == [request] and request.is_warmup is False
+        return SimpleNamespace(
+            error=None, output_file_paths=[str(tmp_path / "clip.mp4")]
+        )
+
+    backend._execute = execute
+    frames = np.broadcast_to(np.zeros((1, 1, 1, 3), np.uint8), (25, HEIGHT, WIDTH, 3))
+    monkeypatch.setattr(
+        inworld_backend,
+        "decode_clip",
+        lambda *args, **kwargs: (
+            frames,
+            np.zeros((1, 25 * SAMPLES_PER_FRAME), np.float32),
+        ),
+    )
+    backend.generate_clip(
+        root=tmp_path,
+        index=1,
+        prompt="garden",
+        anchor=InWorldAnchor(seed=42, new_frames=24),
+        parent=None,
+        references=(),
+    )
+    params.cleanup_video_request.assert_called_once_with(request)
+
+
+def test_prepared_connectors_are_verified_without_materialization_lock(tmp_path):
+    from inworld_assets import prepare_connectors
+
+    source = tmp_path / "source"
+    script = source / "inference/scripts/materialize_connectors.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("""
+CHECKPOINT_SHA256 = "known"
+def valid_existing(*args, **kwargs):
+    assert not args[1].is_symlink()
+    assert kwargs["verify_hashes"] is True
+    return True
+def sha256(path): return "known"
+def fingerprint(path): return {}
+def load_json(path): return {"checkpoint_fingerprint": {}}
+if __name__ == "__main__":
+    raise RuntimeError("Prepared connectors must not take the write lock")
+""")
+    checkpoint, base, output = (
+        tmp_path / "checkpoint",
+        tmp_path / "base",
+        tmp_path / "overlay",
+    )
+    target = tmp_path / "checkpoint-blob"
+    target.touch()
+    checkpoint.symlink_to(target)
+    base.mkdir()
+    output.mkdir()
+    before = {p: p.stat().st_mtime_ns for p in tmp_path.rglob("*")}
+    prepare_connectors(source, checkpoint, base, output)
+    after = {p: p.stat().st_mtime_ns for p in tmp_path.rglob("*")}
+    # Importing the source can create __pycache__, outside the weight directory.
+    assert all(
+        after[p] == t
+        for p, t in before.items()
+        if p not in (source / "inference/scripts",)
+    )
+    assert not list(output.iterdir())
+
+
+def test_model_refuses_frame_count_outside_served_profile():
+    model = InWorldModel()
+    model._backend = Mock()
+    model._settings = SimpleNamespace()
+    with pytest.raises(ValueError, match="offered chunk lengths"):
+        model.generate(
+            InWorldInput(
+                world_id=1,
+                prompt="garden",
+                anchor=InWorldAnchor(seed=42, new_frames=464),
+            )
+        )
+    model._backend.generate_clip.assert_not_called()

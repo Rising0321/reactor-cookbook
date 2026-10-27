@@ -1,6 +1,7 @@
 """Client state and audio-video tracks for InWorld."""
 
 from dataclasses import field
+from typing import Literal
 
 import numpy as np
 from reactor_runtime import (
@@ -13,11 +14,11 @@ from reactor_runtime import (
     Video,
 )
 
-from inworld_model import InWorldAnchor
+from inworld_model import SAMPLE_RATE, InWorldAnchor
 
 
 class InWorldAudio(Audio):
-    sample_rate = 48000
+    sample_rate = SAMPLE_RATE
 
 
 class InWorldOutput(Output):
@@ -46,6 +47,8 @@ class InWorldState(InputState):
 
 
 class StateUpdate(ModelMessage):
+    """Emitted when shared video settings or generation progress changes."""
+
     world_id: int = MessageField(
         description="Current video identity; changes only on Start."
     )
@@ -66,6 +69,10 @@ class StateUpdate(ModelMessage):
 
 
 class InputAccepted(ModelMessage):
-    kind: str = MessageField(
-        description="Accepted operation: reference, video, clear, prompt, paused, or start."
+    """Returned to the caller after the requested input or control is accepted."""
+
+    kind: Literal["reference", "video", "clear", "prompt", "paused", "start"] = (
+        MessageField(
+            description="Accepted operation: reference, video, clear, prompt, paused, or start."
+        )
     )

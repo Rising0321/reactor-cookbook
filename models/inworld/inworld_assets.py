@@ -14,6 +14,58 @@ BASE_SHA = "a6de4b5354f078db24d9cf4778c14846788aea3d"
 CHECKPOINT_SHA = "6f432abdd9fc0c2927122edf7c305c9e0e15c2a5"
 
 
+def prepare_connectors(
+    source: Path, checkpoint: Path, base: Path, output: Path
+) -> None:
+    """Reuse the pinned validator without taking its materialization write lock."""
+    script = source / "inference/scripts/materialize_connectors.py"
+    verify = """
+import importlib.util, sys
+from pathlib import Path
+script, checkpoint, base, output = (Path(value).resolve() for value in sys.argv[1:])
+spec = importlib.util.spec_from_file_location("connector_assets", script)
+native = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(native)
+valid = native.valid_existing(output, checkpoint, native.CHECKPOINT_SHA256, base,
+    native.sha256(base / "diffusion_pytorch_model.safetensors.index.json"), verify_hashes=True)
+if valid:
+    manifest = native.load_json(output / "connector-overlay-manifest.json")
+    if manifest.get("checkpoint_fingerprint") != native.fingerprint(checkpoint):
+        valid = native.sha256(checkpoint) == native.CHECKPOINT_SHA256
+sys.exit(0 if valid else 1)
+"""
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            verify,
+            str(script),
+            str(checkpoint),
+            str(base),
+            str(output),
+        ],
+        check=False,
+    )
+    if verified.returncode == 0:
+        return
+    if verified.returncode != 1:
+        verified.check_returncode()
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--checkpoint",
+            str(checkpoint),
+            "--base-dir",
+            str(base),
+            "--output-dir",
+            str(output),
+            "--verify-existing-hashes",
+        ],
+        check=True,
+    )
+
+
 def prepare_assets(weights_root: Path, config_path: Path | None) -> InWorldSettings:
     config_path = config_path or Path(__file__).with_name("inworld.yaml")
     config = yaml.safe_load(config_path.read_text()) or {}
@@ -75,22 +127,7 @@ def prepare_assets(weights_root: Path, config_path: Path | None) -> InWorldSetti
         )
     )
     connectors = weights_root / "connectors-murea-fast"
-    subprocess.run(
-        [
-            sys.executable,
-            str(source / "inference/scripts/materialize_connectors.py"),
-            "--checkpoint",
-            str(checkpoint),
-            "--base-dir",
-            str(base / "connectors"),
-            "--output-dir",
-            str(connectors),
-            "--verify-existing-hashes",
-        ],
-        check=True,
-    )
-    scratch = weights_root / "sessions"
-    scratch.mkdir(exist_ok=True)
+    prepare_connectors(source, checkpoint, base / "connectors", connectors)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -99,7 +136,6 @@ def prepare_assets(weights_root: Path, config_path: Path | None) -> InWorldSetti
         base=base,
         checkpoint=checkpoint,
         connectors=connectors,
-        scratch=scratch,
         master_port=port,
         attention_backend=attention_backend,
         num_gpus=num_gpus,

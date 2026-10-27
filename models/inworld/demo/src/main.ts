@@ -16,7 +16,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <label class="upload-card" for="parent"><span class="upload-icon" aria-hidden="true">↗</span><span><strong>Continue a video</strong><small>A 24 FPS video · continues its last 17 frames</small></span><input id="parent" class="file-input" type="file" accept="video/*"></label>
     <div id="selection" hidden><div id="previews"></div><button id="clear-inputs" class="text-button">Clear visual input</button></div>
     <p class="hint">No image required for text-to-video. Selecting files does not start generation.</p>
-    <details class="settings"><summary>Generation settings</summary><div class="row"><label for="seed">Seed<input id="seed" type="number" min="0" max="2147483647" value="42"></label><label for="frames">Frames per segment<select id="frames"><option>24</option><option>48</option><option>72</option><option selected>120</option><option>240</option><option>360</option><option>464</option></select></label></div></details>
+    <details class="settings"><summary>Generation settings</summary><div class="row"><label for="seed">Seed<input id="seed" type="number" min="0" max="2147483647" value="42"></label><label for="frames">Frames per segment<select id="frames"><option>24</option><option>48</option><option>72</option><option selected>120</option><option>240</option><option>360</option></select></label></div></details>
     <button id="start" class="primary" disabled>Start video <span aria-hidden="true">↗</span></button><p id="start-hint" class="hint">Connect to your Runtime to begin.</p>
     <p id="error" role="alert" hidden></p>
   </aside>

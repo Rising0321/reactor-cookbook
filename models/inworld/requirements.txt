@@ -31,12 +31,12 @@ moviepy
 # Vendored SGLang's inference import surface.
 addict
 aiohttp
-anthropic
 apache-tvm-ffi==0.1.11
 blobfile==3.0.0
 cloudpickle
+# SGLang sampling imports dill independently of its training datasets.
+dill
 compressed-tensors
-datasets
 gguf
 interegular
 ipython
@@ -46,6 +46,7 @@ mistral-common>=1.11.5
 modelscope
 msgpack
 msgspec
+# Build tool for native inference extensions.
 ninja
 numba==0.65.1
 nvidia-ml-py
