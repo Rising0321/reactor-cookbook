@@ -390,12 +390,13 @@ class LingBotBackend:
                     )
                 )
             video = torch.cat(decoded, dim=2).float().clamp_(-1, 1).squeeze(0)
+        # Match upstream save_video: normalize [-1, 1], scale, then truncate to uint8.
         return (
-            ((video + 1.0) * 127.5)
-            .round()
-            .clamp_(0, 255)
-            .to(torch.uint8)
+            video.sub_(-1.0)
+            .div_(2.0)
             .permute(1, 2, 3, 0)
+            .mul(255.0)
+            .to(torch.uint8)
             .contiguous()
             .cpu()
             .numpy()
