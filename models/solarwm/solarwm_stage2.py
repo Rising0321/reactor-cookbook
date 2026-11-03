@@ -416,6 +416,9 @@ class SolarWM(ReactorApp):
                 image=self.state._selected_image,
                 prompt=self.state.prompt,
                 seed=self.state._seed,
+                chunks=self._camera_path.chunks
+                if self._camera_path is not None
+                else self._require_config().max_chunks,
             )
             self.state._planner.reset()
         poses = (

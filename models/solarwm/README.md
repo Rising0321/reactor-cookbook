@@ -36,7 +36,9 @@ weights directory. Use `--weights /path/to/weights` to select storage and
 Generation waits for an uploaded image; there is no default image.
 
 - `set_image(image, prompt)`: select a JPEG, PNG, WebP or BMP image up to
-  25 MiB and 100 million pixels. It is resized and center-cropped to 864×480.
+  25 MiB and 100 million pixels. It is resized and center-cropped to 864×480
+  exactly as upstream `decode_video` prepares a first frame (torch bilinear
+  resize without antialiasing, bfloat16 pixels).
   A blank prompt retains the active prompt or uses the configured neutral
   description when starting the first world.
 - `set_prompt(prompt)`: restart from the selected image with a new nonempty
@@ -55,6 +57,12 @@ Changing the image or prompt starts a new world with neutral controls.
 
 The first chunk contains 9 RGB frames, followed by 12 frames per chunk on
 `main_video`. Playback follows measured generation time. No audio is produced.
+
+Generation follows the upstream Stage2 sampler: the seed's generator first
+draws the initial noise of the whole rollout (the camera path's chunks, or the
+rollout limit for held controls), then each chunk's re-noising. A camera path
+therefore reproduces upstream's output for the same image, prompt, seed and
+poses. Frames are rounded to uint8 as upstream does before encoding.
 
 Command replies are `image_selected`, `prompt_queued`,
 `camera_motion_changed` and `rollout_reset_queued`. Shared `state_update`
