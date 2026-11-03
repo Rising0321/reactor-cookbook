@@ -159,4 +159,12 @@ does not emit audio.
 - The released Matrix-Game-2.0 checkpoint accepts image and action
   conditioning. The command schema exposes those native inputs.
 - The image uses Matrix-Game-2.0's native Flash Attention 2.8.3 dependency.
+- Holding full pitch for several seconds can drive the universal checkpoint
+  into near-black frames that later chunks do not recover from. Upstream
+  `inference_streaming.py` produces the same frames for the same image, seed,
+  and controls; upstream's own benchmark actions exercise only yaw.
+- The adapter leaves the causal VAE decoder uncompiled. Upstream compiles it
+  with `max-autotune-no-cudagraphs`, whose kernel choice varies from run to
+  run by at most a few 8-bit levels; with that compile disabled, upstream and
+  this adapter produce bit-identical frames.
 - Stop `reactor run` to remove the container and release its GPU memory.
