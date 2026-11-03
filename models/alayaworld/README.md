@@ -191,9 +191,12 @@ images ready for manual upload. These convenience copies are independent of
 checkout prepared at startup.
 
 Uploads are limited to 25 MiB and 100 million decoded pixels. EXIF orientation
-is applied before the image is resized and center-cropped to 960x544. The
-configured `inputs.upload_template` supplies camera calibration and a trajectory
-horizon; its pixels are not used. Uploaded bytes remain session-scoped and are
+is applied, then the image is resized and center-cropped to 960x544 by
+AlayaWorld's own case-image fit, so an upload matches the same image passed to
+the official `inference.run`. The configured `inputs.upload_template` supplies
+camera calibration, the history camera prefix and a trajectory horizon; its
+pixels are not used. The spatial memory is built when the first chunk's camera
+poses arrive, so its depth is aligned to the requested path. Uploaded bytes remain session-scoped and are
 released when the session ends.
 
 `inputs.random_images` in `alayaworld.yaml` lists the known image triplets used

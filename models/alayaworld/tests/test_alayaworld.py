@@ -233,7 +233,10 @@ def test_cap_preserves_world_until_explicit_reset_and_session_cleanup(app, monke
 def native_model(monkeypatch):
     model = AlayaWorldModel()
     model._config = SimpleNamespace(max_chunks_per_rollout=512)
-    model._engine = SimpleNamespace(encode_caption=lambda prompt: prompt)
+    model._engine = SimpleNamespace(
+        encode_caption=lambda prompt: prompt,
+        spatial=SimpleNamespace(init_bank=lambda **_: "bank"),
+    )
     model._alaya_pipeline = SimpleNamespace(
         cfg=SimpleNamespace(sample=SimpleNamespace(temporal_stride=8)),
         generate=lambda *_: object(),
@@ -243,6 +246,10 @@ def native_model(monkeypatch):
         history=object(),
         K=4,
         target_start=lambda index: 20 + index * 4,
+        target_base_start=20,
+        video_pixels=object(),
+        metadata={},
+        spatial_bank=None,
     )
     monkeypatch.setattr(model, "_write_camera_trajectory", lambda *_: None)
     monkeypatch.setattr(
@@ -275,6 +282,58 @@ def test_native_world_setup_and_ten_chunks(native_model, monkeypatch):
     assert len(starts) == 2 and model._ar_index == 0
     model.reset()
     assert model._world_id is None and model._cache is None and model._ar_index == 0
+
+
+def test_spatial_bank_uses_first_chunk_cameras(native_model, monkeypatch):
+    model = native_model
+    events = []
+    monkeypatch.setattr(
+        model,
+        "_write_camera_trajectory",
+        lambda cache, trajectory: events.append(("write", float(trajectory[0, 0, 3]))),
+    )
+
+    def init_bank(*, video_pixels, metadata, target_start):
+        assert video_pixels is model._cache.video_pixels
+        assert metadata is model._cache.metadata and target_start == 20
+        events.append(("bank", None))
+        return "bank"
+
+    monkeypatch.setattr(model._engine.spatial, "init_bank", init_bank)
+    for value in (1.0, 2.0):
+        trajectory = np.zeros((32, 4, 4))
+        trajectory[0, 0, 3] = value
+        model._generate_chunk("Scene", trajectory)
+    assert events == [("write", 1.0), ("bank", None), ("write", 2.0)]
+    assert model._cache.spatial_bank == "bank"
+
+
+def test_upload_is_fitted_from_the_decoded_float_frame():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    from alayaworld_utils import uploaded_image_video
+
+    pixels = np.arange(6 * 4 * 3, dtype=np.uint8).reshape(6, 4, 3)
+    stream = io.BytesIO()
+    Image.fromarray(pixels).save(stream, format="PNG")
+    seen = []
+
+    def fit(frame, target_hw):
+        seen.append((frame.clone(), target_hw))
+        return frame[:, :2, :3]
+
+    camera = torch.eye(4).repeat(5, 1, 1)
+    video = uploaded_image_video(
+        stream.getvalue(),
+        {"cam_c2w": camera},
+        target_hw=(2, 3),
+        torch_module=torch,
+        fit_image=fit,
+    )
+    expected = torch.from_numpy(pixels).permute(2, 0, 1).float() / 127.5 - 1.0
+    assert torch.equal(seen[0][0], expected) and seen[0][1] == (2, 3)
+    assert tuple(video.shape) == (5, 3, 2, 3)
+    assert torch.equal(video[4], expected[:, :2, :3])
 
 
 @pytest.mark.parametrize("failure", ["generate", "decode", "shape"])
