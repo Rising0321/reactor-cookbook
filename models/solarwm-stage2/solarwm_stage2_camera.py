@@ -47,18 +47,32 @@ def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
     ) or not np.allclose(np.linalg.det(rotation), 1, atol=1e-4):
         raise ValueError("Camera rotations must be right-handed and orthonormal")
 
-    # Match upstream relative_c2w: invert(relative_w2c), with analytic SE3 inversion.
-    def inverse(matrices):
-        result = np.zeros_like(matrices)
-        rt = matrices[:, :3, :3].transpose(0, 2, 1)
-        result[:, :3, :3] = rt
-        result[:, :3, 3] = -np.einsum("tij,tj->ti", rt, matrices[:, :3, 3])
-        result[:, 3, 3] = 1
-        return result
+    # Upstream build_camera_tokens selects the latent-aligned poses first, then
+    # rebases them with _relative_c2w_fp32 (data.py), not the shared relative_c2w.
+    selected = np.ascontiguousarray(poses[[0, *range(1, frames, 4)]])
+    return CameraPath(relative_c2w_fp32(selected), frames)
 
-    relative = inverse(inverse(poses) @ poses[0])
-    indices = [0, *range(1, frames, 4)]
-    return CameraPath(np.ascontiguousarray(relative[indices]), frames)
+
+def relative_c2w_fp32(c2w: np.ndarray) -> np.ndarray:
+    """Rebase absolute C2W poses on the first with upstream's FP32 operation order."""
+    w2c = _invert_se3(c2w)
+    target_c2w = np.eye(4, dtype=np.float32)
+    absolute_to_relative = target_c2w @ w2c[0]
+    relative = np.empty_like(c2w)
+    relative[0] = target_c2w
+    for index in range(1, c2w.shape[0]):
+        relative[index] = absolute_to_relative @ c2w[index]
+    return relative
+
+
+def _invert_se3(matrices: np.ndarray) -> np.ndarray:
+    """Invert SE3 matrices exactly as upstream solarwm.data.camera.invert_se3."""
+    result = np.zeros_like(matrices)
+    rotation_t = np.swapaxes(matrices[:, :3, :3], -1, -2)
+    result[:, :3, :3] = rotation_t
+    result[:, :3, 3] = -np.einsum("tij,tj->ti", rotation_t, matrices[:, :3, 3])
+    result[:, 3, 3] = 1
+    return result
 
 
 @dataclass(frozen=True)
