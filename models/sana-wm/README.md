@@ -125,6 +125,18 @@ changes start a fresh rollout because upstream encodes text when the caches are
 initialized. The distilled release uses classifier-free guidance scale 1 with
 its fixed empty negative prompt.
 
+The adapter reproduces `inference_video_scripts/wm/inference_sana_wm_streaming.py`
+frame for frame. Upstream draws the Stage-1 noise for the whole clip at once,
+so a rollout driven by `set_camera_trajectory` spans the trajectory's whole
+24-frame chunks, exactly as `--camera <file> --num_frames <F>` does; live
+controls keep the 512-chunk bound. The session seed is upstream's `--seed`;
+the refiner keeps upstream's separate `--refiner_seed` (`inference.refiner_seed`,
+42). Startup applies upstream's backend settings (TF32 matmuls, SDPA selection,
+cuDNN benchmark) and compiles the refiner transformer as upstream does
+(`inference.torch_compile`; `SANA_WM_TORCH_COMPILE_*` override it), so the first
+chunk after startup includes the compile warmup. Frames are quantized with
+upstream's bfloat16 `(x + 1) * 127.5` truncation.
+
 Each rollout is bounded at 512 chunks. Reaching the bound broadcasts a reset,
 reinitializes the caches from the selected image, prompt, and seed, and
 continues without reloading model weights. This bounds trajectory and latent
