@@ -66,6 +66,16 @@ scene, controls, completed count and `limit_reached`. Each generated chunk
 emits `chunk_completed`; the final one is followed by
 `rollout_limit_reached`. Reset or select a new scene to continue.
 
+## Reference numerics
+
+Generation follows the pinned `fastvideo/sample/sample_5b.py` path: the
+control caption is followed directly by the scene text, the DiT runs under
+single-rank FSDP with float32 compute parameters and TF32 matmuls as in its
+`main()`, and frames are rounded to uint8 as its `save_video` does. With the
+same image, prompt, controls and seed, the frames match that script exactly.
+The script itself never seeds; here the seed drives the first chunk's
+`generate(seed=...)` noise and one CUDA generator for later chunks.
+
 ## Assets and recording
 
 The build pins the public upstream source, and `yume.yaml` pins the
