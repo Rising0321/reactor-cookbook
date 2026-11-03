@@ -52,6 +52,8 @@ def test_twelve_chunks_match_all_conditions_and_finite_stop():
             await app.process_output(StepOutcome(result=result, elapsed=0.1))
             assert len(result.frames) == (13 if index == 0 else 16)
         assert len(backend.resets) == 1
+        # Upstream draws the whole path's noise at once; the backend needs its length.
+        assert backend.latent_frames == 48
         with pytest.raises(ApplicationError):
             await app.process_input()
         await app.reset(seed=3)
@@ -115,3 +117,23 @@ def test_native_reflected_third_person_basis_is_preserved():
     data["viewmats"][-1][0][0] = 1
     with pytest.raises(ValueError):
         load_camera_path(json.dumps(data).encode(), 512)
+
+
+def test_path_keeps_float64_values_for_memory_selection():
+    data = payload(8)
+    data["viewmats"][1][0][3] = 0.1 + 1e-12
+    path = load_camera_path(json.dumps(data).encode(), 512)
+    assert path[0].viewmats.dtype == np.float64
+    assert path[0].intrinsics.dtype == np.float64
+    assert path[0].viewmats[1, 0, 3] == 0.1 + 1e-12
+
+
+def test_live_controls_draw_noise_per_chunk():
+    async def run():
+        app, backend = _ready_model()
+        await app.set_image(_image_upload(), prompt="world")
+        result = app.generate(await app.process_input())
+        await app.process_output(StepOutcome(result=result, elapsed=0.1))
+        assert backend.latent_frames is None
+
+    asyncio.run(run())

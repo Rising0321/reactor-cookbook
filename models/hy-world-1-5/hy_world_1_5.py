@@ -394,6 +394,9 @@ class HYWorld15(ReactorApp):
             anchor = HYWorld15Anchor(
                 image=image.data if isinstance(image, UploadedFile) else image,
                 seed=self._seed,
+                latent_frames=None
+                if self._camera_path is None
+                else 4 * len(self._camera_path),
             )
         if self._camera_path is not None and self._chunk_index >= len(
             self._camera_path

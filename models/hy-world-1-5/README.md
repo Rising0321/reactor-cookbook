@@ -194,6 +194,15 @@ and produces N / 4 chunks: 13 frames initially, then 16 per chunk.
 `reset` replays the path; selecting an image restores live camera controls.
 The `camera_path_selected` response reports the exact chunk and frame budget.
 
+A camera path is sampled the way upstream's offline `pipe(...)` call (and
+WBench's `examples/hy_worldplay/generate_navigation.py`) samples the same
+video: path values stay float64 for memory selection, the noise for all N
+latents is drawn in one call from the seeded CUDA generator, and frames are
+truncated to uint8 like upstream `save_video`. Live controls draw noise one
+chunk at a time because their length is unknown. Like upstream, the
+geometric-memory point cloud comes from the unseeded global CPU generator, so
+memory selection after the first 20 latents can vary between processes.
+
 ## Autoregressive memory and long sessions
 
 After the initial image-conditioned chunk, the backend selects the official

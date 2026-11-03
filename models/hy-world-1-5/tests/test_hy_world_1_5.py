@@ -43,8 +43,16 @@ class _Backend:
         self.index = 0
         self.ended = 0
 
-    def reset(self, *, image: Image.Image, prompt: str, seed: int) -> None:
+    def reset(
+        self,
+        *,
+        image: Image.Image,
+        prompt: str,
+        seed: int,
+        latent_frames: int | None = None,
+    ) -> None:
         self.resets.append((prompt, seed))
+        self.latent_frames = latent_frames
         self.index = 0
 
     def generate_chunk(self, camera: Any, prompt: str) -> np.ndarray:

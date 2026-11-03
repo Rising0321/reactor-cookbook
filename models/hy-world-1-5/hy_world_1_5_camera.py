@@ -53,8 +53,10 @@ def load_camera_path(data: bytes, max_chunks: int) -> tuple[CameraChunk, ...]:
         "actions",
     }:
         raise ValueError("Expected viewmats, intrinsics and actions")
-    views = np.asarray(payload["viewmats"], dtype=np.float32)
-    intrinsics = np.asarray(payload["intrinsics"], dtype=np.float32)
+    # Keep the uploaded float64 values: upstream selects geometric memory from
+    # float64 view matrices, and narrowing them here can change that choice.
+    views = np.asarray(payload["viewmats"], dtype=np.float64)
+    intrinsics = np.asarray(payload["intrinsics"], dtype=np.float64)
     actions = np.asarray(payload["actions"])
     count = len(views)
     if count < 4 or count % 4 or count > max_chunks * 4:
