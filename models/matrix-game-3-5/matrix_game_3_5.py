@@ -476,7 +476,12 @@ class MatrixGame35(ReactorApp):
                 image = selected.data
             else:
                 image, suffix = selected, selected.suffix
-            anchor = MatrixGame35Anchor(image=image, suffix=suffix, seed=self._seed)
+            anchor = MatrixGame35Anchor(
+                image=image,
+                suffix=suffix,
+                seed=self._seed,
+                camera=self._camera_path.poses if self._camera_path else None,
+            )
             planner.reset()
         if self._camera_path is not None:
             index = 0 if anchor is not None else self._chunk_index

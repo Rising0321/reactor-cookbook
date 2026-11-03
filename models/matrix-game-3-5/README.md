@@ -10,6 +10,11 @@ chunk; `reset` rewinds it and `set_image` restores held-axis control. The
 includes `camera_path_chunks`. This deployment uses the distilled first-person
 checkpoint; upstream third-person generation uses a separate checkpoint.
 
+A camera-path rollout reproduces the official `infer_distilled.py` run with the
+same image, prompt, seed and path as `--camera`: the worker builds the session
+from the whole path, and the emitted frames equal `result.mp4`'s raw RGB frames
+after its first frame, which reconstructs the input image.
+
 The adapter uses Reactor Runtime 3.10's native step loop. `process_input()` plans
 camera poses, `generate()` forwards one chunk to `MatrixGame35Model`, and
 `process_output()` publishes video and state updates. The model owns the
@@ -115,10 +120,15 @@ On first load the adapter performs the complete public setup:
 - download the pinned distilled checkpoint, Wan2.2 TI2V 5B model and UMT5
   tokenizer, and Depth-Anything-3 model.
 
-The patch adds the resumable chunk boundary used by the worker. The upstream
+The patch adds the resumable chunk boundary used by the worker. Each chunk is
+decoded by continuing one causal VAE decode of the whole rollout, so streamed
+frames match the official single decode of the finished video. Every session
+also restores the global random state the official runner has after building
+the model; Depth-Anything-3 registration draws from it. The upstream
 model forward pass, scheduler, cache policy, memory queries, and registration
 logic remain in Matrix. Later starts verify and reuse the checkout, environment,
-and completed snapshots. Interrupted Hugging Face downloads resume on the next
+and completed snapshots, and replace an earlier version of the patch when it is
+the checkout's only change. Interrupted Hugging Face downloads resume on the next
 start. Startup reports a clear revision mismatch for any other checkout.
 
 Allow roughly 48 GB for checkpoints, plus the worker environment and download

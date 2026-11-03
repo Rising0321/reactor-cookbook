@@ -20,9 +20,15 @@ class MotionConfig:
 
 @dataclass(frozen=True)
 class CameraPath:
-    """Finite native-calibrated camera blocks, each with its shared anchor."""
+    """Finite native-calibrated camera path and its blocks with shared anchors.
+
+    ``poses`` is the whole calibrated path. A rollout started from it gives
+    the worker the full trajectory up front, as the official ``--camera``
+    input does, so every pose the rollout reads matches that run.
+    """
 
     chunks: tuple[np.ndarray, ...]
+    poses: np.ndarray
 
 
 def load_camera_path(data: bytes, max_chunks: int, anchor: np.ndarray) -> CameraPath:
@@ -49,7 +55,8 @@ def load_camera_path(data: bytes, max_chunks: int, anchor: np.ndarray) -> Camera
     calibrated = _validate_pose(anchor) @ np.linalg.inv(poses[0]) @ poses
     calibrated = np.ascontiguousarray(calibrated, dtype=np.float32)
     return CameraPath(
-        tuple(calibrated[i : i + 13].copy() for i in range(0, len(poses) - 1, 12))
+        tuple(calibrated[i : i + 13].copy() for i in range(0, len(poses) - 1, 12)),
+        calibrated,
     )
 
 
