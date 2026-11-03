@@ -147,6 +147,18 @@ def test_conditioning_explicitly_distinguishes_stationary_and_motion() -> None:
     assert "View rotation speed:4" in moving
 
 
+def test_conditioning_appends_scene_text_like_sample_5b() -> None:
+    # caption_re.txt line 1 at the pinned revision, followed directly by the
+    # refined prompt (sample_5b.py: `line.rstrip("\n") + response`).
+    line = (
+        "First-person perspective. The camera pushes forward (W). The rotation "
+        "direction of the camera remains stationary (\u00b7). Actual distance "
+        "moved:4 at 100 meters per second. Angular change rate (turn speed):0. "
+        "View rotation speed:0."
+    )
+    assert conditioned_prompt(" A city street ", "forward", "none") == line + "A city street"
+
+
 def test_upload_is_decodable() -> None:
     prepare_image(uploaded_image())
 

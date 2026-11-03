@@ -29,10 +29,10 @@ class YumeBackend:
             checkpoint_dir=str(config.checkpoint_path),
             device_id=torch.cuda.current_device(),
         )
-        self.transformer = (
-            self.wan.model.to(self.device, dtype=self.dtype)
-            .eval()
-            .requires_grad_(False)
+        # sample_5b.py main() enables TF32 matmuls for its float32 regions.
+        torch.backends.cuda.matmul.allow_tf32 = True
+        self.transformer = _wrap_like_sample_5b(
+            self.wan.model.eval().requires_grad_(False).to(self.dtype)
         )
         self.wan.vae.model.to(self.device)
         self.model_input_latent: torch.Tensor | None = None
@@ -84,13 +84,13 @@ class YumeBackend:
         model_pixels = torch.cat(
             [visible[:, :1].repeat(1, 16, 1, 1), visible[:, :33]], dim=1
         )
-        with torch.autocast("cuda", dtype=self.dtype):
-            first = self.wan.vae.encode(
-                [model_pixels[:, : -self.config.frames_per_chunk]]
-            )[0]
-            second = self.wan.vae.encode(
-                [model_pixels[:, -self.config.frames_per_chunk :]]
-            )[0]
+        # sample_one encodes outside its bf16 autocast block.
+        first = self.wan.vae.encode(
+            [model_pixels[:, : -self.config.frames_per_chunk]]
+        )[0]
+        second = self.wan.vae.encode(
+            [model_pixels[:, -self.config.frames_per_chunk :]]
+        )[0]
         self.model_input_pixels = model_pixels
         self.model_input_latent = torch.cat([first, second], dim=1)
 
@@ -217,16 +217,7 @@ class YumeBackend:
         # Pixel conditioning is read only while preparing the first chunk.
         self.model_input_pixels = None
         self.chunk_index += 1
-        frames = (
-            video.clamp(-1, 1)
-            .add(1)
-            .mul(127.5)
-            .byte()
-            .permute(1, 2, 3, 0)
-            .cpu()
-            .numpy()
-        )
-        return frames
+        return _to_uint8(video)
 
     def end_session(self) -> None:
         self.model_input_latent = None
@@ -234,6 +225,44 @@ class YumeBackend:
         self.mode = None
         self.chunk_index = 0
         torch.cuda.empty_cache()
+
+
+def _wrap_like_sample_5b(transformer: torch.nn.Module) -> torch.nn.Module:
+    """Wrap the bf16 DiT in single-rank FSDP exactly as sample_5b.py main() does.
+
+    get_dit_fsdp_kwargs(master_weight_type="fp32") computes on float32 copies of
+    the bf16 weights; the FSDP-managed parameters also change kernel numerics,
+    so a plain float32 module is not bit-identical. One local rank needs no
+    collectives; an in-memory store avoids opening a port.
+    """
+    import functools
+
+    import torch.distributed as dist
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+    from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
+    from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+    from wan23.modules.model import WanAttentionBlock
+
+    if dist.is_initialized():
+        raise RuntimeError("YUME expects to own a single-rank process group")
+    dist.init_process_group("nccl", store=dist.HashStore(), rank=0, world_size=1)
+    wrapped = FSDP(
+        transformer,
+        auto_wrap_policy=functools.partial(
+            transformer_auto_wrap_policy, transformer_layer_cls=(WanAttentionBlock,)
+        ),
+        mixed_precision=MixedPrecision(
+            param_dtype=torch.float32,
+            reduce_dtype=torch.float32,
+            buffer_dtype=torch.float32,
+            cast_forward_inputs=False,
+        ),
+        sharding_strategy=ShardingStrategy.FULL_SHARD,
+        device_id=torch.cuda.current_device(),
+        limit_all_gathers=True,
+        use_orig_params=True,
+    )
+    return wrapped.eval().requires_grad_(False)
 
 
 def _resize_conditioning(
@@ -251,6 +280,16 @@ def _resize_conditioning(
         tensor, size=(height, width), mode="bilinear", align_corners=False
     )
     return tensor.sub(0.5).mul(2)
+
+
+def _to_uint8(video: torch.Tensor) -> np.ndarray:
+    """Quantize like sample_5b's save_video (diffusers VideoProcessor, PIL output).
+
+    VaeImageProcessor denormalizes on the tensor's device, moves to NumPy and
+    rounds `images * 255` half-to-even; truncation would bias every value down.
+    """
+    frames = (video.float() * 0.5 + 0.5).clamp(0, 1).permute(1, 2, 3, 0).cpu().numpy()
+    return (frames * 255).round().astype(np.uint8)
 
 
 def _sampling_sigmas(steps: int, shift: float) -> np.ndarray:
