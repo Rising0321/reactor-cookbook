@@ -29,8 +29,14 @@ class CameraChunk:
 
 @dataclass(frozen=True)
 class CameraPath:
-    """Finite RGB-rate camera-to-world path, sampled in native temporal units."""
+    """Finite RGB-rate camera-to-world path, sampled in native temporal units.
 
+    ``poses`` keeps the uploaded per-frame float32 matrices so the backend can
+    anchor and calibrate them with upstream's own CUDA arithmetic; ``chunks``
+    holds the anchored latent-rate poses of each native step.
+    """
+
+    poses: np.ndarray
     chunks: np.ndarray
 
     @property
@@ -61,7 +67,10 @@ def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
         raise ValueError("Camera poses require proper rotations")
     # Calibration remains in the backend, shared with native interactive controls.
     anchored = np.linalg.inv(poses[0]) @ poses[::8]
-    return CameraPath(np.ascontiguousarray(anchored[1:].reshape(-1, 3, 4, 4)))
+    return CameraPath(
+        poses=np.ascontiguousarray(poses),
+        chunks=np.ascontiguousarray(anchored[1:].reshape(-1, 3, 4, 4)),
+    )
 
 
 def _rotation_x(angle: float) -> np.ndarray:
