@@ -70,3 +70,8 @@ The adapter uses a pinned upstream checkout and calls its prompt encoder,
 first-frame encoder, eight-channel action encoder, denoising loop, rolling KV
 cache update, and cached VAE decoder directly. Inference uses the released
 distilled checkpoint with bfloat16 execution and FlashAttention 2.8.1.
+Upstream's Gradio demo enables FP8 per-token GEMM by default
+(`use_fp8_gemm: true` in `configs/default_config.yaml`); the adapter turns it
+off, which matches upstream `scripts/inference.py --quant-type none`. Driven
+with the same image, prompt, seed 42 and per-chunk keys, that upstream script
+and this adapter produce the same uint8 RGB frames, bit for bit.
