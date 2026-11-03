@@ -367,7 +367,7 @@ class Evoke(ReactorApp):
         self,
         trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
             moderate=True,
-            description="JSON poses [36 * chunks, 4, 4] at 24 FPS, up to 16 MiB. Pose zero anchors the selected conditioning.",
+            description="JSON poses [36 * chunks, 4, 4] at 24 FPS, up to 16 MiB. Pose zero is the selected conditioning's camera. Like the released launcher, EVOKE smooths the path over five frames and limits each chunk to 10 degrees and 3 units.",
         ),
     ) -> CameraPathSelected:
         if self._mode == "t2v" or self._media is None:
@@ -382,7 +382,7 @@ class Evoke(ReactorApp):
         self._camera_path = path
         self._request_restart()
         await self._send_state_update()
-        return CameraPathSelected(chunks=len(path.chunks), frames=len(path.chunks) * 36)
+        return CameraPathSelected(chunks=path.chunk_count, frames=path.chunk_count * 36)
 
     async def _set_axis(self, name: str, value: float) -> CommandApplied:
         if self._camera_path is not None:
@@ -587,14 +587,17 @@ class Evoke(ReactorApp):
                 source_fps=self._source_fps,
                 source_height=self._source_height,
                 source_width=self._source_width,
+                camera_path=self._camera_path.poses
+                if self._camera_path is not None
+                else None,
             )
         trajectory = None
         if self._camera_path is not None:
-            if self._chunk_index >= len(self._camera_path.chunks):
+            # The worker received the whole path with the anchor and conditions it as one track.
+            if self._chunk_index >= self._camera_path.chunk_count:
                 raise ApplicationError(
                     "Camera path is complete. Reset or upload another path."
                 )
-            trajectory = self._camera_path.chunks[self._chunk_index].copy()
         elif self._mode != "t2v":
             trajectory = planner.plan_chunk(
                 strafe=self.state.strafe,
@@ -652,12 +655,12 @@ class Evoke(ReactorApp):
                 if self._chunk_index >= config.max_chunks
                 or (
                     self._camera_path is not None
-                    and self._chunk_index >= len(self._camera_path.chunks)
+                    and self._chunk_index >= self._camera_path.chunk_count
                 )
                 else self._chunk_index + 1
             ),
             max_chunks=config.max_chunks,
-            camera_path_chunks=len(self._camera_path.chunks)
+            camera_path_chunks=self._camera_path.chunk_count
             if self._camera_path is not None
             else None,
             forward=self.state.forward,

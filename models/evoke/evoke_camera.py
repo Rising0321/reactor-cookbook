@@ -11,13 +11,24 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CameraPath:
-    """Finite absolute camera trajectory in the native OpenCV convention."""
+    """Finite absolute camera trajectory in the native OpenCV convention.
 
-    chunks: np.ndarray
+    ``poses`` keeps the uploaded camera-to-world matrices verbatim, 36 per
+    native chunk. The worker conditions them with EVOKE's released pose-track
+    recipe before the rollout starts, as the official launcher does for a
+    pose file.
+    """
+
+    poses: np.ndarray
+
+    @property
+    def chunk_count(self) -> int:
+        """Return the native 36-frame chunks the path spans."""
+        return len(self.poses) // 36
 
 
 def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
-    """Anchor a pixel-rate pose sequence and partition native 36-pose windows."""
+    """Validate a pixel-rate pose sequence spanning whole native 36-pose windows."""
     if len(data) > 16 * 1024 * 1024:
         raise ValueError("Camera path exceeds 16 MiB")
     payload = json.loads(data)
@@ -37,8 +48,7 @@ def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
         rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
     ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
         raise ValueError("Camera poses require proper rotations")
-    normalized = np.linalg.inv(poses[0]) @ poses
-    return CameraPath(np.ascontiguousarray(normalized.reshape(-1, 36, 4, 4)))
+    return CameraPath(np.ascontiguousarray(poses))
 
 
 @dataclass(frozen=True)

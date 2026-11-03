@@ -3,12 +3,19 @@
 ## Finite camera paths
 
 After image or video selection, `set_camera_path(trajectory)` accepts a JSON
-upload containing `poses` with shape `[36 * chunks, 4, 4]` at 24 FPS.
-Camera-to-world matrices are anchored to the first supplied pose and continue
-from the selected conditioning. Each chunk emits 36 frames; generation stops
-at the path end. `reset` replays it. Selecting new conditioning restores held
-camera controls. Uploads are limited to 16 MiB; text-only worlds do not accept
-camera paths.
+upload containing `poses` with shape `[36 * chunks, 4, 4]` at 24 FPS. The
+first pose is the camera of the selected conditioning. The worker treats the
+upload as EVOKE's released launcher treats a pose file
+(`scripts/inference/infer_post_distill.sh` with its `infer_batch.py` defaults).
+It reads the `36 * chunks - 3` poses the rollout uses and smooths them over
+five frames. It then limits each native chunk to 10 degrees and 3 units, on the
+engine's 33-then-36 frame layout. An image world uses the poses in their own
+frame, as the official i2v path does. A video world continues the reference
+track relative to the first pose. Each chunk emits 36 frames, and generation
+stops at the path end. The official script trims the last three frames of a
+finished rollout; a streamed chunk keeps them. `reset` replays the path, and
+selecting new conditioning restores held camera controls. Uploads are limited
+to 16 MiB, and text-only worlds do not accept camera paths.
 
 The adapter uses Reactor Runtime 3.10's native step loop. `evoke.py` owns commands
 and camera planning; `evoke_model.py` owns the persistent inference worker and
