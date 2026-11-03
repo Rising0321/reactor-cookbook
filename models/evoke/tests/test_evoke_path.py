@@ -1,4 +1,4 @@
-"""Native 36-pose windows preserve finite uploaded trajectories."""
+"""Finite uploaded trajectories reach the worker verbatim with their anchor."""
 
 import asyncio
 import json
@@ -20,13 +20,13 @@ def upload(chunks=10):
     )
 
 
-def test_native_pose_windows():
+def test_path_keeps_uploaded_poses():
     file = upload()
     poses = np.asarray(json.loads(file.data)["poses"], dtype=np.float32)
     path = load_camera_path(file.data, 10)
-    np.testing.assert_array_equal(
-        path.chunks.reshape(-1, 4, 4), np.linalg.inv(poses[0]) @ poses
-    )
+    # The released launcher uses a pose track in its own frame; no re-anchoring here.
+    np.testing.assert_array_equal(path.poses, poses)
+    assert path.chunk_count == 10
 
 
 def test_ten_chunks_stop_reset_and_controls():
@@ -36,13 +36,15 @@ def test_ten_chunks_stop_reset_and_controls():
         assert (reply.chunks, reply.frames) == (10, 360)
         with pytest.raises(CommandError):
             await app.set_yaw(1)
-        expected = load_camera_path(upload().data, 10).chunks
+        expected = load_camera_path(upload().data, 10).poses
         for index in range(10):
             value = await app.process_input()
-            np.testing.assert_array_equal(value.trajectory, expected[index])
-            np.testing.assert_array_equal(
-                (await app.process_input()).trajectory, value.trajectory
-            )
+            # The whole path travels with the anchor; chunks carry no per-step poses.
+            assert value.trajectory is None
+            if index == 0:
+                np.testing.assert_array_equal(value.anchor.camera_path, expected)
+            else:
+                assert value.anchor is None
             result = app.generate(value)
             out = await app.process_output(StepOutcome(result=result))
             assert len(out.main_video) == 36
@@ -50,9 +52,9 @@ def test_ten_chunks_stop_reset_and_controls():
         with pytest.raises(ApplicationError, match="complete"):
             await app.process_input()
         await app.reset(42)
-        np.testing.assert_array_equal(
-            (await app.process_input()).trajectory, expected[0]
-        )
+        restarted = await app.process_input()
+        np.testing.assert_array_equal(restarted.anchor.camera_path, expected)
+        assert restarted.trajectory is None
         await app.start_text(prompt="Scene", seed=42)
         assert app._camera_path is None
         with pytest.raises(CommandError):
