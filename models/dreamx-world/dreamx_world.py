@@ -360,7 +360,11 @@ class DreamXWorld(ReactorApp):
             self._camera.reset()
             image = self._selected_input
             anchor = DreamXAnchor(
-                image.data if isinstance(image, UploadedFile) else image, self._seed
+                image.data if isinstance(image, UploadedFile) else image,
+                self._seed,
+                len(self._camera_path.chunks)
+                if self._camera_path is not None
+                else self._require_config().max_chunks_per_rollout,
             )
         if self._camera_path is not None:
             index = 0 if new_world else self._chunk_index

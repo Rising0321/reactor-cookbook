@@ -69,6 +69,8 @@ def test_finite_path_retry_reset_and_key_rejection():
             b = await model.process_input()
             np.testing.assert_array_equal(a.poses, b.poses)
             assert (a.anchor is not None) == (index == 0)
+            if a.anchor is not None:
+                assert a.anchor.chunks == 10
             result = DreamXResult(
                 np.zeros((9 if index == 0 else 12, 2, 2, 3), np.uint8),
                 a.world_id,
@@ -86,6 +88,7 @@ def test_finite_path_retry_reset_and_key_rejection():
             restarted.poses, model._camera_path.chunks[0].poses
         )
         assert restarted.anchor is not None
+        assert restarted.anchor.chunks == 10
         model._select_image(Path("new.jpg"), "uploaded", "new")
         assert model._camera_path is None
 
@@ -169,3 +172,36 @@ def test_keyboard_limit_preserves_world_without_automatic_restart():
         type(call.args[0]).__name__ == "RolloutResetQueued"
         for call in app.send.call_args_list
     )
+
+
+def test_color_correction_matches_upstream_whole_video_postprocess():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("cv2")
+    import os
+    import sys
+
+    from dreamx_backend import DreamXBackend
+
+    source = os.environ.get("DREAMX_WORLD_PATH")
+    if not source or not (Path(source) / "utils" / "postprocess.py").is_file():
+        pytest.skip("set DREAMX_WORLD_PATH to the pinned upstream checkout")
+    sys.path.insert(0, source)
+    from utils.postprocess import postprocess_video_frames
+
+    rng = np.random.default_rng(0)
+    video = (rng.random((33, 6, 8, 3), dtype=np.float32) * 255.0).astype(np.float32)
+    expected = postprocess_video_frames(
+        torch.from_numpy(video)[None],
+        reference_frame=torch.from_numpy(video[0]),
+        color_correction_strength=1.0,
+    )[0]
+    expected = torch.as_tensor(expected, dtype=torch.uint8).numpy()
+    backend = DreamXBackend.__new__(DreamXBackend)
+    backend._config = SimpleNamespace(color_correction_strength=1.0)
+    backend._color_reference = None
+    actual = [
+        backend._color_correct_chunk(video[start:end].copy())
+        for start, end in ((0, 9), (9, 21), (21, 33))
+    ]
+    actual = np.concatenate(actual).clip(0, 255).astype(np.uint8)
+    np.testing.assert_array_equal(actual, expected)

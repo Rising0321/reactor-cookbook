@@ -183,6 +183,13 @@ rolling visual KV window, three-latent sink, four-step denoising schedule,
 context-cache commit, chunk-relative PRoPE camera condition, and cached VAE
 decode.
 
+A fresh rollout draws its noise the way `inference_ar_forcing.py` does: one
+seeded draw for every latent frame of the rollout, before the first denoising
+step. A camera path sizes that draw to its own chunks, so a path with the same
+image, prompt and seed reproduces the upstream script's RGB frames, including
+its chunk-relative Lab color correction and truncating `uint8` conversion.
+Keyboard rollouts size it to `max_chunks_per_rollout`.
+
 Prompt changes invalidate only the prompt-specific cross-attention cache. Past
 visual tokens stay in the rolling causal cache, so a new event prompt affects
 the next chunk without replacing the current world.
