@@ -49,7 +49,7 @@ precedes video playback.
 
 | Command | Effect |
 | --- | --- |
-| `set_image(image, prompt, seed)` | Start a new world from JPEG, PNG, WebP or BMP, up to 25 MiB and 100 million pixels. The image is resized to 768×448. Blank text uses the default continuation prompt; seed -1 keeps the current seed. |
+| `set_image(image, prompt, seed)` | Start a new world from JPEG, PNG, WebP or BMP, up to 25 MiB and 100 million pixels. OpenCV decodes the image and resizes it bilinearly to 768×448, as Lyra's custom-trajectory script does. Blank text uses the default continuation prompt; seed -1 keeps the current seed. |
 | `random_image()` | Select an upstream sample image and its paired description. |
 | `set_prompt(prompt)` | Change the description for the next video segment. Requires a selected image. |
 | `set_camera_motion(forward, strafe, vertical, pitch, yaw, roll)` | Set all six held camera axes together, after selecting an image. |
@@ -61,6 +61,13 @@ Axis values range from -1 to 1; zero stops movement. Forward/strafe/vertical
 control translation, and pitch/yaw/roll control rotation. Changes take effect
 on the next video segment. Selecting an image or resetting clears all axes.
 A viewer disconnect releases camera controls and preserves the shared world.
+
+Each new world seeds every random draw, including the DMD re-noising between
+the four steps, as the upstream inference scripts do per sample. The same
+image, prompt, seed and camera path therefore reproduce the same video, and
+match `lyra_2._src.inference.lyra2_custom_traj_inference --use_dmd` run with
+this recipe's settings (768×448, no MoGe rescale, pose scale 1, DA3 interval 4,
+40 history frames, chunk-end frames and predicted pose).
 
 ## Output and messages
 

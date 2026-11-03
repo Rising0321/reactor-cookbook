@@ -329,3 +329,28 @@ def test_model_import_graph_is_runtime_free():
                 assert all(
                     not item.name.startswith("reactor_runtime") for item in node.names
                 )
+
+
+def test_image_preparation_matches_official_custom_trajectory_script():
+    import io
+
+    import cv2
+    from lyra2_images import prepare_image
+    from PIL import Image
+    from reactor_runtime import UploadedFile
+
+    pixels = np.random.default_rng(0).integers(0, 256, (300, 500, 3), np.uint8)
+    for kind, extra in (("PNG", {}), ("JPEG", {"exif": Image.Exif()})):
+        if kind == "JPEG":
+            extra["exif"][0x0112] = 6  # rotated: OpenCV applies EXIF orientation
+        data = io.BytesIO()
+        Image.fromarray(pixels).save(data, kind, **extra)
+        raw = data.getvalue()
+        # lyra2_custom_traj_inference: cv2.imread -> RGB -> INTER_LINEAR resize.
+        bgr = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        expected = cv2.resize(
+            cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), (768, 448), interpolation=cv2.INTER_LINEAR
+        )
+        upload = UploadedFile(name="seed", mime_type=f"image/{kind.lower()}", data=raw)
+        np.testing.assert_array_equal(prepare_image(upload), expected)
+    assert bgr.shape[:2] == (500, 300)

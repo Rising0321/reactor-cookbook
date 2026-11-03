@@ -54,6 +54,12 @@ class Lyra2Backend:
             )
 
         self.model._embed_prompt = MethodType(_embed_prompt_resident, self.model)
+        # The GUI wrapper re-enables cuDNN; the released inference scripts run
+        # every convolution outside VAE decode on PyTorch's native path.
+        import torch
+
+        torch.backends.cudnn.enabled = False
+        torch.backends.cudnn.benchmark = False
         self.model.da3_model.to(self.model.device)
         self.model.manual_t5 = self.model._embed_prompt(config["default_prompt"])
         self._prompt = config["default_prompt"]
@@ -61,7 +67,12 @@ class Lyra2Backend:
     def reset(
         self, image: np.ndarray, *, prompt: str, seed: int
     ) -> tuple[np.ndarray, np.ndarray]:
+        from lyra_2._ext.imaginaire.utils import misc
+
         self.model.args.seed = seed
+        # DMD re-noises steps 2-4 from the global RNG; seed it per world as
+        # lyra2_custom_traj_inference does before each sample.
+        misc.set_random_seed(seed=seed, by_rank=True)
         self.model.manual_prompt = prompt
         self._set_prompt(prompt)
         identity = np.eye(4, dtype=np.float32)[None]
@@ -78,9 +89,9 @@ class Lyra2Backend:
         # seed_model_from_values() unconditionally parks DA3 on CPU for the GUI;
         # restore it immediately for subsequent spatial-memory updates.
         self.model.da3_model.to(self.model.device)
-        fx, fy = result["focal_lengths"][0]
-        cx, cy = result["principal_points"][0] * result["resolutions"][0]
-        intrinsics = np.array(((fx, 0, cx), (0, fy, cy), (0, 0, 1)), dtype=np.float32)
+        # Reuse the exact seed matrix; the GUI's relative principal point does
+        # not round-trip through float32.
+        intrinsics = self.model.seed_intrinsics[0].float().cpu().numpy()
         c2w = np.eye(4, dtype=np.float32)
         c2w[:3] = result["cameras_to_world"][0]
         return c2w, intrinsics
