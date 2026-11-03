@@ -361,9 +361,10 @@ class EchoWM(ReactorApp):
         name="set_fov",
         description=(
             "Set the horizontal camera field of view for forthcoming chunks. The value is "
-            "sampled at the next chunk boundary and remains active. Emits "
-            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
-            "`image_required` before image selection."
+            "sampled at the next chunk boundary and remains active; a camera path samples it "
+            "once when its rollout starts. Emits `camera_motion_changed` and broadcasts "
+            "`state_update`. Fails with `image_required` before image selection, or "
+            "`camera_path_active` while a camera path rollout is running."
         ),
     )
     async def set_fov(
@@ -377,6 +378,14 @@ class EchoWM(ReactorApp):
     ) -> CameraMotionChanged:
         """Set and report the held camera field of view."""
         self._require_selected()
+        if (
+            self._camera_path is not None
+            and self.state._world_id == self.state._applied_world_id
+        ):
+            raise CommandError(
+                "camera_path_active",
+                "A camera path keeps its field of view; reset or upload a path to change it.",
+            )
         self.state._fov_degrees = fov_degrees
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -462,6 +471,9 @@ class EchoWM(ReactorApp):
             ),
             fov_degrees=self.state._fov_degrees,
             rollout_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else None,
+            camera_path=self._camera_path.poses
             if self._camera_path is not None
             else None,
         )

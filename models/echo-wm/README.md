@@ -13,8 +13,17 @@ The `poses` array contains camera-to-world matrices at 24 FPS with shape
 `[24 * chunks + 1, 4, 4]`. The first pose anchors the selected image.
 The reply reports the chunk count and total frames: 25 frames in the first
 chunk, then 24 per chunk. Generation stops at the path end; `reset` replays it.
-Selecting another image restores held camera controls. Field of view remains
-controlled by `set_fov`.
+Selecting another image restores held camera controls. `set_fov` before the
+path's first chunk sets its field of view, which then stays fixed until `reset`.
+
+A camera path is the same input as upstream `inference_wm_causal.py` with an
+Action DSL: the model anchors and calibrates the per-frame poses with
+upstream's own CUDA arithmetic, and decodes the video exactly as upstream
+decodes a finished clip (one tiled VAE decode with `TilingConfig.default()`).
+Each tile is decoded once every latent it reads exists, so a step generates up
+to about five native blocks ahead of the frames it returns; later steps return
+frames already generated. Held camera controls cannot know their future poses
+and keep decoding each visible window directly.
 
 The adapter keeps one Echo-WM rollout alive across interactive turns. An image
 anchors the first frame, a prompt conditions the world, and four pure-camera
@@ -152,17 +161,20 @@ final state. Use `reset` or select another image to start another rollout.
 
 ## Inference performance
 
-Unmasked transformer attention uses FlashAttention 4 on Hopper and Blackwell
-GPUs. Masked text attention and UCPE camera attention use the upstream PyTorch
-SDPA path. Startup compares both backends on a representative attention shape
-and rejects non-finite or numerically inconsistent output.
+Transformer attention uses upstream's PyTorch SDPA path by default, which
+reproduces upstream inference in an environment without xformers. Set
+`inference.attention_backend` to `flash_attention_4` for faster unmasked
+attention on Hopper and Blackwell GPUs; output then differs numerically from
+upstream. Masked text attention and UCPE camera attention always use SDPA.
+With FlashAttention 4, startup compares both backends on a representative
+attention shape and rejects non-finite or numerically inconsistent output.
 
 `inference.warmup_chunks` controls full throwaway audio-video turns during model
 load. The default single turn initializes the first-chunk path without adding a
 long multi-chunk startup. `inference.profile_cuda` controls per-stage CUDA
 timings, and `inference.attention_benchmark` controls the startup backend check.
-The B200 configuration decodes each visible video window directly to avoid
-spatial tile overhead. Set `inference.video_decode_tiling` to `true` when serving
+For held controls, the B200 configuration decodes each visible video window
+directly to avoid spatial tile overhead. Set `inference.video_decode_tiling` to `true` when serving
 on a GPU that cannot hold the full VAE decode.
 
 The `main_video` track advertises a 24-frame buffer so Runtime applies

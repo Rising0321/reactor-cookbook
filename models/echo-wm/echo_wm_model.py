@@ -47,7 +47,12 @@ class EchoAnchor:
 
 @dataclass(frozen=True)
 class EchoInput:
-    """One world's anchor, text, and three latent-aligned camera poses."""
+    """One world's anchor, text, and three latent-aligned camera poses.
+
+    ``camera_path`` carries a finite rollout's complete per-frame poses. The
+    model reads it when the world starts and then follows it, decoding the
+    video as upstream decodes a finished clip.
+    """
 
     world_id: int
     anchor: EchoAnchor | None
@@ -55,6 +60,7 @@ class EchoInput:
     poses: np.ndarray
     fov_degrees: float
     rollout_chunks: int | None = None
+    camera_path: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +94,7 @@ class EchoModel:
         self._chunk_index = 0
         self._rollout_limit = 0
         self._prompt = ""
+        self._follows_path = False
 
     def load(self, config: EchoWMConfig) -> None:
         """Load the configured backend and warm it without selecting a client image."""
@@ -124,8 +131,10 @@ class EchoModel:
                     seed=input.anchor.seed,
                     fov_degrees=input.fov_degrees,
                     chunks=input.rollout_chunks,
+                    camera_path=input.camera_path,
                 )
             self._world_id = input.world_id
+            self._follows_path = input.camera_path is not None
             self._chunk_index = 0
             self._rollout_limit = (
                 config.max_chunks
@@ -136,7 +145,8 @@ class EchoModel:
         if self._chunk_index >= self._rollout_limit:
             raise RolloutExhausted(input.world_id)
         video, audio = backend.generate_chunk(
-            CameraChunk(latent_poses=input.poses), fov_degrees=input.fov_degrees
+            None if self._follows_path else CameraChunk(latent_poses=input.poses),
+            fov_degrees=input.fov_degrees,
         )
         self._chunk_index += 1
         return EchoResult(
@@ -156,6 +166,7 @@ class EchoModel:
         self._world_id = None
         self._chunk_index = 0
         self._prompt = ""
+        self._follows_path = False
 
     def _warmup(self) -> None:
         """Run configured throwaway blocks with neutral poses before serving."""
