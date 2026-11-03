@@ -107,7 +107,8 @@ def test_inference_emits_one_complete_frame_batch(monkeypatch: MonkeyPatch) -> N
             self.resets = 0
             self.prompts: list[str] = []
 
-        def reset(self, _seed: int, _image: Path) -> None:
+        def reset(self, _seed: int, _image: Path, chunks: int) -> None:
+            assert chunks == 512
             self.resets += 1
 
         def generate_chunk(
@@ -350,8 +351,8 @@ def test_model_bookkeeping_guards_and_native_camera_forwarding():
             self.calls = []
             self.ends = 0
 
-        def reset(self, seed, image):
-            self.resets.append((seed, image))
+        def reset(self, seed, image, chunks):
+            self.resets.append((seed, image, chunks))
 
         def generate_chunk(self, prompt, camera):
             self.calls.append((prompt, camera))
@@ -370,18 +371,18 @@ def test_model_bookkeeping_guards_and_native_camera_forwarding():
         model.generate(input)
     from dataclasses import replace
 
-    first = model.generate(replace(input, anchor=DreamXAnchor(b"image", 42)))
+    first = model.generate(replace(input, anchor=DreamXAnchor(b"image", 42, 2)))
     second = model.generate(replace(input, prompt="Changed prompt"))
     assert first.chunk_index == 1 and not first.complete
     assert second.chunk_index == 2 and second.complete
-    assert backend.resets == [(42, b"image")]
+    assert backend.resets == [(42, b"image", 2)]
     assert backend.calls[-1][0] == "Changed prompt"
     assert backend.calls[-1][1].poses is poses
     with pytest.raises(RolloutExhausted):
         model.generate(input)
     assert (
         model.generate(
-            replace(input, world_id=2, anchor=DreamXAnchor(Path("image.png"), 77))
+            replace(input, world_id=2, anchor=DreamXAnchor(Path("image.png"), 77, 2))
         ).chunk_index
         == 1
     )
