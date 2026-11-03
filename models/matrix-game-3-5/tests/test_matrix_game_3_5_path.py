@@ -30,6 +30,8 @@ def test_calibration_shared_anchor_and_exact_rgb_slices():
     np.testing.assert_allclose(full[:, 2, 3], 5 + np.arange(1, 121) * 0.1, atol=1e-6)
     for prev, current in zip(path.chunks, path.chunks[1:]):
         np.testing.assert_array_equal(prev[-1], current[0])
+    np.testing.assert_array_equal(path.poses[1:], full)
+    np.testing.assert_array_equal(path.poses[0], anchor)
 
 
 @pytest.mark.parametrize("frames", [0, 1, 12, 14, 120, 122, 133])
@@ -66,6 +68,8 @@ def test_path_finite_retry_reset_and_axis_refusal():
             b = await app.process_input()
             np.testing.assert_array_equal(a.trajectory, b.trajectory)
             assert (a.anchor is not None) == (index == 0)
+            if a.anchor is not None:
+                assert a.anchor.camera is app._camera_path.poses
             out = MatrixGame35Result(
                 np.zeros((12, 2, 2, 3), np.uint8), a.world_id, index + 1, False
             )
