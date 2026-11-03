@@ -24,20 +24,35 @@ def uploaded_image_video(
     *,
     target_hw: tuple[int, int],
     torch_module: Any,
+    fit_image: Any,
 ) -> Any:
-    """Decode, center-crop, and repeat an upload over the camera template."""
-    target_height, target_width = target_hw
-    with Image.open(io.BytesIO(image)) as decoded:
-        oriented = ImageOps.exif_transpose(decoded).convert("RGB")
-        fitted = ImageOps.fit(
-            oriented,
-            (target_width, target_height),
-            method=Image.Resampling.LANCZOS,
-        )
-        pixels = np.array(fitted, dtype=np.uint8, copy=True)
-    frame = torch_module.from_numpy(pixels).permute(2, 0, 1).float() / 127.5 - 1.0
+    """Fit an upload as upstream fits a case image, then repeat it over the template.
+
+    ``fit_image`` is upstream's resize-and-center-crop, applied to the same
+    ``[-1, 1]`` float frame that upstream builds from its decoded image.
+    """
+    frame = decode_image_rgb(image, torch_module).float() / 127.5 - 1.0
+    frame = fit_image(frame, target_hw)
     frame_count = int(camera_frames(metadata["cam_c2w"]).shape[0])
     return frame.unsqueeze(0).expand(frame_count, -1, -1, -1).contiguous()
+
+
+def decode_image_rgb(image: bytes, torch_module: Any) -> Any:
+    """Decode image bytes to a ``[3, H, W]`` uint8 tensor with EXIF orientation.
+
+    Upstream reads case images with torchvision; the same decoder keeps uploads
+    byte-identical. Formats torchvision cannot decode, such as BMP, use Pillow.
+    """
+    from torchvision.io import ImageReadMode, decode_image
+
+    data = torch_module.frombuffer(bytearray(image), dtype=torch_module.uint8)
+    try:
+        return decode_image(data, mode=ImageReadMode.RGB, apply_exif_orientation=True)
+    except RuntimeError:
+        with Image.open(io.BytesIO(image)) as decoded:
+            oriented = ImageOps.exif_transpose(decoded).convert("RGB")
+            pixels = np.array(oriented, dtype=np.uint8, copy=True)
+        return torch_module.from_numpy(pixels).permute(2, 0, 1).contiguous()
 
 
 def load_upstream_modules(source_path: Path) -> dict[str, Any]:
@@ -55,6 +70,7 @@ def load_upstream_modules(source_path: Path) -> dict[str, Any]:
             "flash_alaya.utils.pipeline"
         ).FlashAlayaPipeline,
         "load_input_sample": rollout.load_input_sample,
+        "fit_image": rollout._fit_image_to,
         "check_input_resolution": rollout.check_input_resolution,
         "plan_rollout": rollout.plan_rollout,
         "build_engine": rollout.build_engine,
