@@ -8,7 +8,12 @@ from pathlib import Path
 
 import numpy as np
 from lyra2_assets import prepare_config
-from lyra2_camera import Lyra2CameraPlanner, camera_path_chunk, load_camera_path
+from lyra2_camera import (
+    CameraPath,
+    Lyra2CameraPlanner,
+    camera_path_chunk,
+    load_camera_path,
+)
 from lyra2_images import prepare_image
 from lyra2_model import Lyra2Input, Lyra2Model, Lyra2Result
 from lyra2_types import (
@@ -50,7 +55,7 @@ class Lyra2(ReactorApp):
         super().__init__()
         self.config: dict | None = None
         self.engine: DistributedRunner | None = None
-        self._camera_path: np.ndarray | None = None
+        self._camera_path: CameraPath | None = None
         self._path_calibration: np.ndarray | None = None
 
     def load(self, config_path: Path | None) -> None:
@@ -109,7 +114,7 @@ class Lyra2(ReactorApp):
             moderate=True,
             description=(
                 "Anchor image uploaded through Reactor. JPEG, PNG, WebP, or BMP up to 25 MiB; it is "
-                "resized to 768x448 and becomes active when the fresh rollout begins."
+                "resized to 832x480 and becomes active when the fresh rollout begins."
             ),
         ),
         prompt: str = InputField(
@@ -332,66 +337,65 @@ class Lyra2(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Queue a finite camera-to-world path from the selected image. The first pose aligns once to native seed calibration; future poses retain their authored trajectory. Reset rewinds the path; image selection restores held controls. Returns camera_path_selected and broadcasts state_update.",
+        description="Queue a finite camera-to-world path from the selected image. The first pose is the seed camera; future poses retain their authored trajectory. Reset rewinds the path; image selection restores held controls. Returns camera_path_selected and broadcasts state_update.",
     )
     async def set_camera_path(
         self,
         trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
             moderate=True,
-            description="JSON poses[N,4,4], N=80*chunks+1 including the image anchor, at most 2 MiB. Native predicted intrinsics are preserved.",
+            description="JSON poses[N,4,4], N=80*chunks+1 including the image anchor, at most 2 MiB, and optional intrinsics[3,3] or [N,3,3] in pixels at 832x480. Without intrinsics, the seed's DA3-predicted intrinsics are used.",
         ),
     ) -> CameraPathSelected:
         self._require_image()
         try:
-            poses = load_camera_path(trajectory.data)
+            path = load_camera_path(trajectory.data)
         except (ValueError, TypeError, OverflowError) as error:
             raise CommandError("invalid_camera_path", str(error)) from error
-        self._camera_path = poses
+        self._camera_path = path
         self._request_reset()
+        # The seed camera is the identity, so the path's first pose maps to it.
+        self._path_calibration = np.linalg.inv(path.poses[0])
         await self.send(self._state())
-        return CameraPathSelected(chunks=(len(poses) - 1) // 80, frames=len(poses) - 1)
+        frames = len(path.poses) - 1
+        return CameraPathSelected(chunks=frames // 80, frames=frames)
 
     async def process_input(self) -> Lyra2Input:
         if self.state._anchor is None:
             raise ApplicationError("No image selected")
         fresh = self.state._world_id != self.state._applied_world_id
-        camera = None
-        if not fresh:
-            if self._camera_path is not None:
-                if self.state._chunk >= (len(self._camera_path) - 1) // 80:
-                    raise ApplicationError(
-                        "Camera path complete; reset or select an image."
-                    )
-                if self._path_calibration is None:
-                    raise ApplicationError("Camera path awaits seed calibration")
-                camera = camera_path_chunk(
-                    self._camera_path,
-                    self._path_calibration,
-                    self.state._chunk,
-                    self.state._intrinsics,
-                )
-            else:
-                controls = {
-                    name: getattr(self.state, name)
-                    for name in (
-                        "forward",
-                        "strafe",
-                        "vertical",
-                        "pitch",
-                        "yaw",
-                        "roll",
-                    )
-                }
-                camera = self.state._planner.plan_chunk(
-                    **controls, frame_count=80, intrinsics=self.state._intrinsics
-                )
+        # A fresh world is seeded and generates its first chunk in one step;
+        # intrinsics None there means the seed's (DA3's or the path's first K).
+        if self._camera_path is not None:
+            if self.state._chunk >= (len(self._camera_path.poses) - 1) // 80:
+                raise ApplicationError("Camera path complete; reset or select an image.")
+            camera = camera_path_chunk(
+                self._camera_path,
+                self._path_calibration,
+                self.state._chunk,
+                self.state._intrinsics,
+            )
+        else:
+            controls = {
+                name: getattr(self.state, name)
+                for name in ("forward", "strafe", "vertical", "pitch", "yaw", "roll")
+            }
+            camera = self.state._planner.plan_chunk(
+                **controls, frame_count=80, intrinsics=self.state._intrinsics
+            )
         return Lyra2Input(
             world_id=self.state._world_id,
             anchor=self.state._anchor if fresh else None,
             prompt=self.state.prompt,
             seed=self.state._seed,
-            w2c=None if camera is None else camera.w2c,
-            intrinsics=None if camera is None else camera.intrinsics,
+            w2c=camera.w2c,
+            intrinsics=camera.intrinsics,
+            seed_intrinsics=(
+                self._camera_path.intrinsics[0]
+                if fresh
+                and self._camera_path is not None
+                and self._camera_path.intrinsics is not None
+                else None
+            ),
         )
 
     def generate(self, input: Lyra2Input) -> Lyra2Result:
@@ -408,18 +412,6 @@ class Lyra2(ReactorApp):
         if result.intrinsics is not None:
             self.state._intrinsics = result.intrinsics
         self.state._chunk = result.chunk
-        if result.frames is None:
-            if self._camera_path is not None:
-                if result.corrected_c2w is None:
-                    raise RuntimeError(
-                        "Seed calibration did not return its camera pose"
-                    )
-                self._path_calibration = np.asarray(
-                    result.corrected_c2w, dtype=np.float64
-                ) @ np.linalg.inv(self._camera_path[0])
-            self.state._active_prompt = None
-            await self.send(self._state())
-            return None
         self.state._active_prompt = self.state.prompt
         await self.send(
             ChunkCompleted(
@@ -433,8 +425,9 @@ class Lyra2(ReactorApp):
         return Lyra2Output(main_video=result.frames)
 
     def _request_reset(self) -> None:
-        self._path_calibration = None
         self.output.flush()
+        if self.state._planner is not None:
+            self.state._planner.reset()
         self.state._chunk = 0
         self.state._active_prompt = None
         self.state._intrinsics = None
@@ -469,12 +462,12 @@ class Lyra2(ReactorApp):
             active_prompt=self.state._active_prompt,
             seed=self.state._seed,
             completed_chunks=self.state._chunk,
-            camera_path_chunks=(len(self._camera_path) - 1) // 80
+            camera_path_chunks=(len(self._camera_path.poses) - 1) // 80
             if self._camera_path is not None
             else 0,
             camera_path_complete=bool(
                 self._camera_path is not None
-                and self.state._chunk >= (len(self._camera_path) - 1) // 80
+                and self.state._chunk >= (len(self._camera_path.poses) - 1) // 80
             ),
             **values,
         )

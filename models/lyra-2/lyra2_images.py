@@ -1,8 +1,9 @@
-"""Prepare Lyra's native 768x448 seed pixels on the CPU."""
+"""Prepare the official script's 832x480 seed pixels on the CPU."""
 
 import io
 
 import numpy as np
+from lyra2_backend import HEIGHT, WIDTH
 from PIL import Image
 from reactor_runtime import CommandError, UploadedFile
 
@@ -31,7 +32,7 @@ def prepare_image(upload: UploadedFile) -> np.ndarray:
             raise ValueError("OpenCV cannot decode the image")
         return cv2.resize(
             cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB),
-            (768, 448),
+            (WIDTH, HEIGHT),
             interpolation=cv2.INTER_LINEAR,
         )
     except (Image.DecompressionBombError, OSError, ValueError) as error:
