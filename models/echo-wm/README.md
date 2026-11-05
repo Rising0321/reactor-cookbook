@@ -53,7 +53,7 @@ Reactor Runtime dependency. A world identifier associates each output with its
 selected image and prompt; the anchor travels only until that world is confirmed.
 
 This directory is a Reactor workspace. Its `reactor.yaml` manifest defines the
-Python 3.12 serving image, Reactor Runtime 3.10.0, CUDA and system dependencies,
+Python 3.12 serving image, Reactor Runtime 3.11.3, CUDA and system dependencies,
 the model entry point, GPU resource, recording tracks, and persistent weights
 directory. See the [Reactor CLI installation
 guide](https://docs.reactor.inc/deploy/platform/installation) and [build

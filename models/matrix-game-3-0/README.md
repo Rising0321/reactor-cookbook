@@ -30,7 +30,7 @@ cache and calls the upstream interactive pipeline directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.10.0, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.11.3, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
