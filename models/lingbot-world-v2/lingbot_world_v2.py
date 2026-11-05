@@ -313,7 +313,10 @@ class LingBotWorldV2(ReactorApp):
             "intrinsics [fx,fy,cx,cy] calibrated for 832x480. Maximum upload 2 MiB. "
             "Native resampling rounds down to complete chunks: first emits 13 frames, "
             "later chunks 16. Generation stops at path end. Reset replays the path; "
-            "image selection clears it. Returns camera_path_selected and broadcasts state_update."
+            "image selection clears it. Emits `camera_path_selected` and broadcasts `state_update`. "
+            "Fails with `image_required` before image selection, `invalid_camera_path` for a "
+            "malformed path, or `invalid_noise_chunks` for a noise horizon that does not "
+            "cover the path within the rollout limit."
         ),
     )
     async def set_camera_path(

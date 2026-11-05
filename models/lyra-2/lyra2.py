@@ -337,7 +337,7 @@ class Lyra2(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Queue a finite camera-to-world path from the selected image. The first pose is the seed camera; future poses retain their authored trajectory. Reset rewinds the path; image selection restores held controls. Returns camera_path_selected and broadcasts state_update.",
+        description="Queue a finite camera-to-world path from the selected image. The first pose is the seed camera; future poses retain their authored trajectory. Reset rewinds the path; image selection restores held controls. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
     )
     async def set_camera_path(
         self,

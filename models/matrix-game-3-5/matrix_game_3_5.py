@@ -430,7 +430,7 @@ class MatrixGame35(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Queue a finite camera-to-world path from the selected image. The first pose is rigidly aligned to the native image camera. Reset rewinds it; selecting an image restores held-axis controls. Returns camera_path_selected and broadcasts state_update.",
+        description="Queue a finite camera-to-world path from the selected image. The first pose is rigidly aligned to the native image camera. Reset rewinds it; selecting an image restores held-axis controls. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
     )
     async def set_camera_path(
         self,

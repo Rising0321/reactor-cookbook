@@ -477,7 +477,7 @@ class AlayaWorld(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Upload a finite camera-to-world path and queue a fresh world from the selected image. Returns camera_path_selected and broadcasts state_update; invalid paths produce command_error. Generation stops at the path end.",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
     )
     async def set_camera_path(
         self,

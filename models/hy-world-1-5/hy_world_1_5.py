@@ -359,7 +359,7 @@ class HYWorld15(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Upload a finite native camera path after selecting an image and queue a fresh world. Emits `camera_path_selected` and broadcasts `state_update`; invalid paths return `command_error`. Select another image to restore live controls; `reset` replays the path.",
+        description="Upload a finite native camera path after selecting an image and queue a fresh world. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path. Select another image to restore live controls; `reset` replays the path.",
     )
     async def set_camera_path(
         self,

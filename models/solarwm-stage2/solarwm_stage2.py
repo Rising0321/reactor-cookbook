@@ -391,7 +391,7 @@ class SolarWM(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Select a finite uploaded camera path and restart from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Invalid paths return `command_error` without changing the world. Reset replays the path; selecting an image clears it.",
+        description="Select a finite uploaded camera path and restart from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before an image is uploaded, or `invalid_camera_path` for a malformed path, without changing the world. Reset replays the path; selecting an image clears it.",
     )
     async def set_camera_path(
         self,

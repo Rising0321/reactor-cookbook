@@ -479,7 +479,7 @@ class LingBotWorldV1(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Select a finite OpenCV camera trajectory for the current image and restart generation. Reset replays the path; selecting an image restores interactive axes. Returns camera_path_selected and broadcasts state_update.",
+        description="Select a finite OpenCV camera trajectory for the current image and restart generation. Reset replays the path; selecting an image restores interactive axes. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
     )
     async def set_camera_path(
         self,

@@ -361,7 +361,7 @@ class Evoke(ReactorApp):
 
     @event(
         name="set_camera_path",
-        description="Upload a finite camera-to-world path and queue a fresh world from the selected image or video. Emits `camera_path_selected` and broadcasts `state_update`; invalid paths or missing camera conditioning produce `command_error`. Generation stops at the path end.",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image or video. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `conditioning_required` without image or video conditioning, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
     )
     async def set_camera_path(
         self,
